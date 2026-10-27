@@ -113,7 +113,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     event: {
       id: evNow.id, name: evNow.name, showAt: evNow.showAt.toISOString(), vipInstalled: evNow.vipInstalled, saleOpen: evNow.saleOpen,
       saleStart: evNow.saleStart?.toISOString() ?? null, saleEnd: evNow.saleEnd?.toISOString() ?? null,
-      maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours, payFirst: evNow.payFirst,
+      maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours, payFirst: evNow.payFirst, preorderOpen: evNow.preorderOpen,
       bankName: evNow.bankName, bankAccount: evNow.bankAccount, accountName: evNow.accountName,
       publicSaleStart: evNow.publicSaleStart?.toISOString() ?? null, publicPerPhone: evNow.publicPerPhone,
     },
@@ -144,7 +144,7 @@ function draftOf(ev: typeof t.event.$inferSelect, zones: { id: number; open: boo
 
 export async function updateEventSettings(db: Db, actor: string, v: Partial<{
   name: string; showAt: Date; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
-  payHours: number; payFirst: boolean; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
+  payHours: number; payFirst: boolean; preorderOpen: boolean; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
   publicSaleStart: Date | null; publicPerPhone: number;
 }>) {
   const ev = await currentEvent(db);

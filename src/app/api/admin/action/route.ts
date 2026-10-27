@@ -4,11 +4,12 @@ import { requireAdmin } from '@/lib/adminApi';
 import { BookingError } from '@/lib/booking';
 import * as A from '@/lib/admin';
 import { normalizePhone } from '@/lib/validation';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
+import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ const action = z.discriminatedUnion('action', [
     showAt: z.string().min(1, '請填寫演出時間').transform((s) => new Date(s)).refine((d) => !Number.isNaN(d.getTime()), '演出時間格式不正確'),
     saleOpen: z.boolean(), saleStart: date, saleEnd: date,
     maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
-    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), payFirst: z.boolean(),
+    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), payFirst: z.boolean(), preorderOpen: z.boolean(),
     publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(200),
   }).partial() }),
   z.object({ action: z.literal('link.createPublic') }),
@@ -58,6 +59,9 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
+  z.object({ action: z.literal('preorder.confirm'), id }),
+  z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
+  z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('bundle.create'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int() }),
   z.object({ action: z.literal('bundle.auto'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int(),
     shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600) }),
@@ -73,11 +77,12 @@ const action = z.discriminatedUnion('action', [
 ]);
 
 /** 寄出待寄通知，並回報這筆訂單或連結剛產生的通知結果 */
-async function deliver(db: Db, by: { orderId?: number; linkId?: number }) {
+async function deliver(db: Db, by: { orderId?: number; linkId?: number; templates?: string[] }) {
   await dispatchQueued(db);
   const rows = await db.select({ channel: t.notification.channel, status: t.notification.status, error: t.notification.error })
     .from(t.notification)
-    .where(by.orderId ? eq(t.notification.orderId, by.orderId) : and(eq(t.notification.linkId, by.linkId!), eq(t.notification.template, 'invite')))
+    .where(by.orderId ? eq(t.notification.orderId, by.orderId)
+      : and(eq(t.notification.linkId, by.linkId!), inArray(t.notification.template, by.templates ?? ['invite'])))
     .orderBy(desc(t.notification.id)).limit(3);
   return rows;
 }
@@ -121,6 +126,12 @@ export async function POST(req: Request) {
       case 'notify.save': return saveNotifyConfig(db, who, a.values);
       case 'notify.test': return sendTest(db, a.channel, a.to);
       case 'notify.resend': return resendNotification(db, who, a.id);
+      case 'preorder.confirm': {
+        const r = await confirmPreorder(db, who, a.id, originOf(req));
+        return { ...r, delivery: await deliver(db, { linkId: r.linkId, templates: ['invite', 'preorder_link'] }) };
+      }
+      case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
+      case 'preorder.seen': return markPreorderSeen(db, a.id);
       case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);
       case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
       case 'bundle.auto': return A.bundleAuto(db, who, { rows: a.rows, blocks: a.blocks, size: a.size, shape: a.shape, crossAisle: a.crossAisle, skip: a.skip });

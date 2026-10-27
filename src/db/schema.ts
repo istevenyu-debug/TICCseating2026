@@ -40,6 +40,7 @@ export const event = pgTable('event', {
   maxPerOrder: integer('max_per_order').notNull().default(21),
   holdMinutes: integer('hold_minutes').notNull().default(20),
   payHours: integer('pay_hours').notNull().default(48),
+  preorderOpen: boolean('preorder_open').notNull().default(false), // 公開預購頁是否開放
   payFirst: boolean('pay_first').notNull().default(true), // 先匯款再給連結：購票頁不填匯款資料、不逾期取消
   bankName: text('bank_name').notNull().default(''),
   bankAccount: text('bank_account').notNull().default(''),
@@ -183,6 +184,28 @@ export const notification = pgTable('notification', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp('sent_at', { withTimezone: true }),
 });
+
+/** 預購單：公開預購頁送出（選購內容＋匯款資料），後台確認收訖後自動建立專屬劃位連結並寄 Email */
+export interface PreorderItem { kind: 'combo' | 'zone'; id: number; name: string; price: number; qty: number }
+export const preorder = pgTable('preorder', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  no: text('no').notNull(),
+  items: jsonb('items').$type<PreorderItem[]>().notNull(),
+  amount: integer('amount').notNull(),
+  name: text('name').notNull(),
+  phone: text('phone').notNull(),
+  email: text('email').notNull(),
+  paidAmount: integer('paid_amount').notNull(),
+  last5: text('last5').notNull(),
+  status: text('status').notNull().default('submitted'), // submitted 待確認 / confirmed 已收訖 / cancelled 已取消
+  linkId: integer('link_id').references(() => inviteLink.id),
+  note: text('note').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+  confirmedBy: text('confirmed_by'),
+  seenAt: timestamp('seen_at', { withTimezone: true }),
+}, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no) }));
 
 /** 手機推播訂閱：消費者在購票頁按「開啟通知」後建立 */
 export const pushSub = pgTable('push_sub', {
