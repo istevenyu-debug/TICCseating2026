@@ -43,6 +43,13 @@
       "when": 1793102433335,
       "tag": "0005_notify_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793103237083,
+      "tag": "0006_push_sub",
+      "breakpoints": true
     }
   ]
 }

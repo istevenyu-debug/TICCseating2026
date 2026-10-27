@@ -8,6 +8,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
+import { rememberOrigin } from '@/lib/push';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +64,7 @@ async function deliver(db: Db, by: { orderId?: number; linkId?: number }) {
   const rows = await db.select({ channel: t.notification.channel, status: t.notification.status, error: t.notification.error })
     .from(t.notification)
     .where(by.orderId ? eq(t.notification.orderId, by.orderId) : and(eq(t.notification.linkId, by.linkId!), eq(t.notification.template, 'invite')))
-    .orderBy(desc(t.notification.id)).limit(2);
+    .orderBy(desc(t.notification.id)).limit(3);
   return rows;
 }
 
@@ -76,6 +77,7 @@ const endOfDay = (s: string) => {
 export async function POST(req: Request) {
   return handle(async () => {
     const { db, user } = await requireAdmin();
+    await rememberOrigin(db, originOf(req));
     const p = action.safeParse(await readJson(req));
     if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
     const a = p.data;

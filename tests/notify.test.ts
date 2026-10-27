@@ -5,6 +5,7 @@ import { createEvent, createLink, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { holdSeats, submitOrder } from '@/lib/booking';
+import { saveSubscription } from '@/lib/push';
 import { dispatchQueued, mitakeSend, publicNotifyConfig, resendNotification, saveNotifyConfig, sendTest, type Senders } from '@/lib/notify';
 
 const T0 = new Date('2026-11-15T10:00:00+08:00');
@@ -61,7 +62,8 @@ describe('通知寄送', () => {
     const last = sent.slice(1);
     expect(last.map((x) => x.ch).sort()).toEqual(['email', 'sms']);
     expect(last[0].text).toContain('https://abc-def.trycloudflare.com/t/AAA111');
-    expect((await db.select().from(t.notification)).every((r) => r.status === 'sent')).toBe(true);
+    const st = Object.fromEntries((await db.select().from(t.notification)).map((r) => [`${r.template}/${r.channel}`, r.status]));
+    expect(st).toEqual({ 'order_received/email': 'sent', 'order_confirmed/sms': 'sent', 'order_confirmed/email': 'sent', 'order_confirmed/push': 'simulated' });
   });
 
   it('寄送失敗重試 3 次後標為失敗並記錄原因；修好後可重寄', async () => {
@@ -120,5 +122,45 @@ describe('三竹回應判讀', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[1]\r\nstatuscode=s\r\n')));
     await expect(mitakeSend(cfg, '0912345678', 'x')).rejects.toThrow('點數不足');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('App 推播', () => {
+  it('訂購人開啟通知後，確認到帳直接推到他的手機，點開回到他的購票頁；別條連結收不到', async () => {
+    const [aaa] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, 'AAA111'));
+    await createLink(db, { eventId: aaa.eventId, code: 'BBB222', name: '乙', phone: '0922222222', quota: 6, expiresAt: EXP });
+    const [bbb] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, 'BBB222'));
+    await saveSubscription(db, aaa.id, null, { endpoint: 'https://push.example/aaa', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } });
+    await saveSubscription(db, bbb.id, null, { endpoint: 'https://push.example/bbb', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } });
+    await db.insert(t.appSetting).values({ key: 'site.origin', value: 'https://abc.trycloudflare.com' });
+    const id = await order();
+    const got: { endpoint: string; title: string; url: string }[] = [];
+    const s: Senders = { ...fake().s, push: async (sub, p) => { got.push({ endpoint: sub.endpoint, title: p.title, url: p.url }); } };
+    await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0);
+    await dispatchQueued(db, s);
+    expect(got).toEqual([{ endpoint: 'https://push.example/aaa', title: '🎉 劃位成功', url: 'https://abc.trycloudflare.com/t/AAA111' }]);
+    const [p] = await db.select().from(t.notification).where(eq(t.notification.channel, 'push'));
+    expect(p).toMatchObject({ status: 'sent', recipient: '1 支手機' });
+  });
+
+  it('手機已取消訂閱（410）會自動移除，該則標為僅顯示在購票頁', async () => {
+    const [aaa] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, 'AAA111'));
+    await saveSubscription(db, aaa.id, null, { endpoint: 'https://push.example/old', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } });
+    const id = await order();
+    await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0);
+    await dispatchQueued(db, { ...fake().s, push: async () => { throw new Error('GONE'); } });
+    expect(await db.select().from(t.pushSub)).toHaveLength(0);
+    const [p] = await db.select().from(t.notification).where(eq(t.notification.channel, 'push'));
+    expect(p.status).toBe('simulated');
+  });
+
+  it('購票頁收到劃位成功訊息（含通知編號與類型，供頁面最上方提示）', async () => {
+    const { getBookingState } = await import('@/lib/booking');
+    const id = await order();
+    await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0);
+    const st = await getBookingState(db, 'AAA111', T0);
+    expect(st.inbox[0]).toMatchObject({ template: 'order_confirmed' });
+    expect(st.inbox[0].id).toBeGreaterThan(0);
+    expect(st.inbox.filter((n) => n.template === 'order_confirmed')).toHaveLength(1); // 簡訊、Email、推播只顯示一次
   });
 });

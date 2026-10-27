@@ -24,6 +24,7 @@
     "qrcode": "1.5.4",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "web-push": "^3.6.7",
     "zod": "3.23.8"
   },
   "devDependencies": {
@@ -33,6 +34,7 @@
     "@types/qrcode": "1.5.5",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
+    "@types/web-push": "^3.6.4",
     "cloudflared": "0.7.1",
     "drizzle-kit": "0.28.1",
     "tsx": "4.19.2",

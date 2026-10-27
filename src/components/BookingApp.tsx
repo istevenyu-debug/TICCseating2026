@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookingState } from '@/lib/booking';
 import { calcAmount, comboDesc, comboProblem, comboSets } from '@/lib/pricing';
 import { autoHolders, phoneProblem } from '@/lib/validation';
+import PushCard from './PushCard';
 import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
 
@@ -39,6 +40,12 @@ async function api<T>(url: string, body?: unknown): Promise<ApiOk<T> | ApiErr> {
 }
 
 const money = (n: number) => `NT$${n.toLocaleString('en-US')}`;
+/** 會在頁面最上方跳出的訊息 */
+const ALERT: Record<string, { title: string; kind: 'ok' | 'err' }> = {
+  order_confirmed: { title: '🎉 劃位成功！', kind: 'ok' },
+  order_cancelled: { title: '訂單已取消', kind: 'err' },
+  order_expired: { title: '訂單已逾期取消', kind: 'err' },
+};
 const STATUS_LABEL: Record<string, string> = { pending: '待確認到帳', paid: '劃位成功', cancelled: '已取消', expired: '逾時取消' };
 const SALE_LABEL: Record<string, string> = { closed: '目前未開放訂購。', not_started: '尚未開始訂購。', ended: '訂購已截止。' };
 
@@ -68,6 +75,9 @@ export default function BookingApp({ code }: { code: string }) {
   const [lastOrder, setLastOrder] = useState<string | null>(null);
   const [, tick] = useState(0);
   const offset = useRef(0); // 伺服器時間 − 本機時間
+  // 主辦方發來的重要訊息（劃位成功、取消）：看過的最大通知編號存在這支手機，未看過的顯示在頁面最上方
+  const seenKey = `ticc-seen-${code}`;
+  const [seen, setSeen] = useState<number>(() => { try { return Number(localStorage.getItem(seenKey)) || 0; } catch { return 0; } });
 
   const load = useCallback(async () => {
     const r = await api<BookingState>(`/api/t/${encodeURIComponent(code)}/state`);
@@ -122,6 +132,17 @@ export default function BookingApp({ code }: { code: string }) {
       load();
     }
   }, [held, remain <= 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const alerts = (st?.inbox ?? []).filter((n) => n.id > seen && ALERT[n.template]);
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\) /, '');
+    document.title = alerts.length ? `(${alerts.length}) ${base}` : base;
+  }, [alerts.length]);
+  const markSeen = () => {
+    const max = Math.max(seen, ...(st?.inbox ?? []).map((n) => n.id));
+    setSeen(max);
+    try { localStorage.setItem(seenKey, String(max)); } catch { /* 無痕模式 */ }
+  };
 
   const seatById = useMemo(() => Object.fromEntries((st?.seats ?? []).map((s) => [s.id, s])), [st]);
   const zoneBy = useMemo(() => Object.fromEntries((st?.zones ?? []).map((z) => [z.id, z])), [st]);
@@ -219,6 +240,22 @@ export default function BookingApp({ code }: { code: string }) {
             : <>{st.link.name} 您好，{st.link.quota ? <>此專屬連結可訂購 <b>{st.link.quota}</b> 張（已訂 {st.link.used} 張）</> : <>此專屬連結張數不限（每筆最多 {st.event.maxPerOrder} 張）</>}，有效至 {fmtDate(st.link.expiresAt)}。</>}
         </div>
       </div>
+      {alerts.length > 0 && (() => {
+        const n = alerts[0];
+        const a = ALERT[n.template];
+        return (
+          <div className={`alertbox ${a.kind}`} role="alert">
+            <div className="alertbox-title">{a.title}</div>
+            <div className="small">{n.content}</div>
+            {alerts.length > 1 && <div className="small muted">另有 {alerts.length - 1} 則新訊息，見下方「我收到的通知」。</div>}
+            <div className="row" style={{ marginTop: 10 }}>
+              {a.kind === 'ok' && <button className="btn pri" onClick={() => { markSeen(); document.getElementById('my-orders')?.scrollIntoView({ behavior: 'smooth' }); }}>查看入場 QR code</button>}
+              <button className="btn" onClick={markSeen}>知道了</button>
+            </div>
+          </div>
+        );
+      })()}
+      {(st.orders.some((o) => o.status === 'pending') || !!held) && <PushCard code={code} api={api} compact={false} />}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
       <div className="grid2">
@@ -347,7 +384,7 @@ export default function BookingApp({ code }: { code: string }) {
             </div>
           )}
 
-          <div className="card">
+          <div className="card" id="my-orders">
             <h2>我的訂單</h2>
             {st.orders.length ? st.orders.map((o) => (
               <div key={o.orderNo} className="note" style={{ marginBottom: 6, outline: o.orderNo === lastOrder ? '1px solid var(--ok)' : undefined }}>

@@ -181,6 +181,17 @@ export const notification = pgTable('notification', {
   sentAt: timestamp('sent_at', { withTimezone: true }),
 });
 
+/** 手機推播訂閱：消費者在購票頁按「開啟通知」後建立 */
+export const pushSub = pgTable('push_sub', {
+  id: serial('id').primaryKey(),
+  linkId: integer('link_id').notNull().references(() => inviteLink.id, { onDelete: 'cascade' }),
+  visitorId: text('visitor_id'), // 公開連結：哪一位訪客
+  endpoint: text('endpoint').notNull(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ endpoint: uniqueIndex('push_sub_endpoint_idx').on(t.endpoint) }));
+
 /** 系統設定（通知寄送帳號等）。密碼類只寫不讀，不回傳到後台畫面 */
 export const appSetting = pgTable('app_setting', {
   key: text('key').primaryKey(),

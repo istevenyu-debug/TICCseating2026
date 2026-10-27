@@ -138,7 +138,7 @@ describe('購票端', () => {
     s = await getBookingState(db, 'BBB222', min(10 + 48 * 60 + 1));
     expect(s.seats.find((x) => x.id === '7-1')!.status).toBe('free');
     const n = await db.select().from(t.notification).where(eq(t.notification.template, 'order_expired'));
-    expect(n).toHaveLength(2);
+    expect(n.map((x) => x.channel).sort()).toEqual(["email", "push", "sms"]); // 簡訊、Email、App 推播
   });
 
   it('暫存逾時後不可送出；欄位驗證', async () => {

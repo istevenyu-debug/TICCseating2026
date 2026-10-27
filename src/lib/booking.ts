@@ -38,6 +38,12 @@ async function loadLink(db: Exec, code: string, now: Date) {
   return { link, ev };
 }
 
+/** 推播訂閱用：確認連結有效並取得訪客代碼 */
+export async function linkForPush(db: Db, code: string, visitorIdIn?: string, now = new Date()) {
+  const { link } = await loadLink(db, code, now);
+  return { link, visitorId: checkVisitor(link, visitorIdIn) };
+}
+
 type LinkRow = typeof t.inviteLink.$inferSelect;
 type EventRow = typeof t.event.$inferSelect;
 
@@ -143,6 +149,7 @@ export async function sweepExpired(db: Db, eventId: number, now: Date) {
         await tx.insert(t.notification).values([
           { orderId: o.id, linkId: o.linkId, channel: 'sms', template: 'order_expired', recipient: o.phone ?? '', content },
           { orderId: o.id, linkId: o.linkId, channel: 'email', template: 'order_expired', recipient: o.email ?? '', content },
+          { orderId: o.id, linkId: o.linkId, channel: 'push', template: 'order_expired', recipient: '訂購人手機', content },
         ]);
         await tx.insert(t.auditLog).values({ actor: 'system', action: 'order_expired', target: `order:${o.id}` });
       }
@@ -212,7 +219,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).reverse().map((n) => ({ at: n.createdAt.toISOString(), content: n.content }));
+  }).reverse().map((n) => ({ id: n.id, at: n.createdAt.toISOString(), template: n.template, content: n.content }));
 
   const sf = saleStateFor(ev, link, now);
   return {

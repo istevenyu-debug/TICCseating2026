@@ -164,3 +164,11 @@ input.need { border-color: var(--red); }
 .etk-seat { font-family: var(--f-mono); font-size: 16px; color: var(--accent); }
 .qrbox { background: #fff; border-radius: 4px; flex: none; }
 .qrbox svg { width: 100%; height: 100%; display: block; }
+
+/* 購票頁最上方的主辦方訊息（劃位成功、取消） */
+.alertbox { position: sticky; top: 8px; z-index: 30; margin: 0 0 12px; padding: 14px 16px; border-radius: 10px; background: var(--surface);
+  border: 2px solid var(--ok); box-shadow: 0 8px 28px rgba(0,0,0,.16); animation: alertin .35s ease-out; }
+.alertbox.err { border-color: var(--red); }
+.alertbox-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; color: var(--ok); }
+.alertbox.err .alertbox-title { color: var(--red); }
+@keyframes alertin { from { transform: translateY(-12px); opacity: 0; } to { transform: none; opacity: 1; } }

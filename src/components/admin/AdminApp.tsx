@@ -15,13 +15,16 @@ type Notice = { id: number; orderId: number | null; channel: string; template: s
 type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; notifications: Notice[] };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
+const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
+const nStatus = (ch: string, st: string) => (ch === 'push' ? ({ sent: '已送達手機', simulated: '僅顯示在購票頁' } as Record<string, string>)[st] : undefined) ?? N_STATUS[st] ?? st;
 const N_TEMPLATE: Record<string, string> = { invite: '專屬連結', order_received: '收到訂購資料', order_confirmed: '劃位成功', order_cancelled: '訂單取消', order_expired: '逾期取消' };
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };
-  const parts = [...d].sort((a, b) => a.channel.localeCompare(b.channel)).reverse().map((x) =>
-    `${x.channel === 'sms' ? '簡訊' : 'Email'}${N_STATUS[x.status] ?? x.status}${x.error && x.status !== 'sent' ? `（${x.error}）` : ''}`);
-  return { text: parts.join('、'), bad: d.some((x) => x.status !== 'sent') };
+  const order = ['push', 'sms', 'email'];
+  const parts = [...d].sort((a, b) => order.indexOf(a.channel) - order.indexOf(b.channel)).map((x) =>
+    `${CH[x.channel] ?? x.channel}${nStatus(x.channel, x.status)}${x.error && x.status === 'failed' ? `（${x.error}）` : ''}`);
+  return { text: `訊息已顯示在訂購人的購票頁；${parts.join('、')}`, bad: d.some((x) => x.status === 'failed') };
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
@@ -648,9 +651,9 @@ function OrderDetail({ o }: { o: Order }) {
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
             const r = await act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }) as { delivery?: Delivery } | null;
-            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。通知消費者：${d.text || '無'}。${d.bad ? '可到「五、通知設定」查看原因或重寄。' : ''}` }); }
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。${d.text || '訊息已顯示在訂購人的購票頁'}。${d.bad ? '可到「五、通知設定」查看原因或重寄。' : ''}` }); }
           }}>確認到帳，通知消費者劃位成功</button>
-          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。通知消費者：${d.text || '無'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
+          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。${d.text || '訊息已顯示在訂購人的購票頁'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
         </div>
       </>}
 
@@ -785,13 +788,13 @@ function Notify() {
               <tr key={x.id}>
                 <td className="small">{tw(x.createdAt)}</td>
                 <td><span title={x.content}>{N_TEMPLATE[x.template] ?? x.template}</span></td>
-                <td>{x.channel === 'sms' ? '簡訊' : 'Email'}</td>
+                <td>{CH[x.channel] ?? x.channel}</td>
                 <td className="mono small">{x.recipient || '—'}</td>
                 <td>
-                  <span className={`pill ${x.status === 'sent' ? 'p-paid' : x.status === 'queued' ? 'p-pending' : 'p-cancelled'}`}>{N_STATUS[x.status] ?? x.status}</span>
+                  <span className={`pill ${x.status === 'sent' ? 'p-paid' : x.status === 'queued' ? 'p-pending' : 'p-cancelled'}`}>{nStatus(x.channel, x.status)}</span>
                   {x.error && x.status !== 'sent' && <div className="small" style={{ color: 'var(--red)' }}>{x.error}</div>}
                 </td>
-                <td>{(x.status === 'failed' || x.status === 'simulated') && x.recipient &&
+                <td>{(x.status === 'failed' || (x.status === 'simulated' && x.channel !== 'push')) && x.recipient &&
                   <button className="btn small" disabled={busy} onClick={async () => {
                     const r = await act({ action: 'notify.resend', id: x.id }) as { status: string; error: string | null } | null;
                     if (r) setMsg({ kind: r.status === 'sent' ? 'ok' : 'err', text: r.status === 'sent' ? '已重寄成功' : `重寄結果：${N_STATUS[r.status] ?? r.status}${r.error ? `（${r.error}）` : ''}` });

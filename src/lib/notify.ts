@@ -13,6 +13,7 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
+import { getVapid, removeSubs, siteOrigin, targetsOf, webPushSend, type PushSender } from './push';
 
 export interface EmailConfig { host: string; port: number; user: string; pass: string; fromName: string }
 export interface SmsConfig { url: string; user: string; pass: string }
@@ -82,6 +83,7 @@ const SUBJECT: Record<string, string> = {
 export interface Senders {
   email: (cfg: EmailConfig, to: string, subject: string, text: string) => Promise<void>;
   sms: (cfg: SmsConfig, phone: string, text: string) => Promise<void>;
+  push?: PushSender;
 }
 
 async function smtpSend(cfg: EmailConfig, to: string, subject: string, text: string) {
@@ -127,7 +129,7 @@ export async function mitakeSend(cfg: SmsConfig, phone: string, text: string) {
   if (!['0', '1', '2', '3', '4'].includes(code)) throw new Error(`${MITAKE_ERR[code] ?? '簡訊發送失敗'}（代碼 ${code}）`);
 }
 
-const realSenders: Senders = { email: smtpSend, sms: mitakeSend };
+const realSenders: Senders = { email: smtpSend, sms: mitakeSend, push: webPushSend };
 
 let running: Promise<void> | null = null;
 
@@ -152,6 +154,7 @@ export function dispatchQueued(db: Db, senders: Senders = realSenders, now = () 
 async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: NotifyConfig, senders: Senders, now: Date) {
   const set = (v: Partial<typeof t.notification.$inferInsert>) =>
     db.update(t.notification).set(v).where(and(eq(t.notification.id, n.id), eq(t.notification.status, 'queued')));
+  if (n.channel === 'push') return deliverPush(db, n, senders, now, set);
   if (!n.recipient.trim()) return set({ status: 'failed', error: '沒有收件人' });
   const isSms = n.channel === 'sms';
   const c = isSms ? cfg.sms : cfg.email;
@@ -165,6 +168,34 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
     const msg = String((e as Error).message ?? e).slice(0, 300);
     await set(attempts >= MAX_ATTEMPTS ? { status: 'failed', error: msg, attempts } : { error: msg, attempts });
   }
+}
+
+const PUSH_TITLE: Record<string, string> = {
+  order_confirmed: '🎉 劃位成功', order_cancelled: '訂單已取消', order_expired: '訂單已逾期取消', order_received: '已收到訂購資料',
+};
+
+/** App 推播：推到訂購人手機（購票頁按過「開啟通知」的那支） */
+async function deliverPush(db: Db, n: typeof t.notification.$inferSelect, senders: Senders, now: Date,
+  set: (v: Partial<typeof t.notification.$inferInsert>) => Promise<unknown>) {
+  const { subs, code } = await targetsOf(db, n.orderId, n.linkId);
+  if (!subs.length) return set({ status: 'simulated', error: '訂購人未開啟手機通知；訊息已顯示在他的購票頁' });
+  const send = senders.push ?? webPushSend;
+  const vapid = await getVapid(db);
+  const origin = await siteOrigin(db);
+  const payload = { title: PUSH_TITLE[n.template] ?? '主辦方通知', body: n.content, url: `${origin}/t/${code}` };
+  const gone: number[] = [];
+  let ok = 0; let lastErr = '';
+  for (const s of subs) {
+    try { await send(s, payload, vapid); ok++; } catch (e) {
+      const m = String((e as Error).message ?? e);
+      if (m === 'GONE') gone.push(s.id); else lastErr = m;
+    }
+  }
+  await removeSubs(db, gone);
+  if (ok) return set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1, recipient: `${ok} 支手機` });
+  if (!lastErr) return set({ status: 'simulated', error: '訂購人已關閉手機通知；訊息已顯示在他的購票頁' });
+  const attempts = n.attempts + 1;
+  return set(attempts >= MAX_ATTEMPTS ? { status: 'failed', error: lastErr, attempts } : { error: lastErr, attempts });
 }
 
 /** 重寄：失敗或未設定時只存紀錄的通知，改回待寄並立即寄送 */

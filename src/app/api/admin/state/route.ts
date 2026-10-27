@@ -1,13 +1,15 @@
-import { handle } from '@/lib/api';
+import { handle, originOf } from '@/lib/api';
+import { rememberOrigin } from '@/lib/push';
 import { requireAdmin } from '@/lib/adminApi';
 import { getAdminState } from '@/lib/admin';
 import { listNotifications, publicNotifyConfig } from '@/lib/notify';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: Request) {
   return handle(async () => {
     const { db, user } = await requireAdmin();
+    await rememberOrigin(db, originOf(req));
     return { user, ...(await getAdminState(db)), notify: await publicNotifyConfig(db), notifications: await listNotifications(db) };
   });
 }

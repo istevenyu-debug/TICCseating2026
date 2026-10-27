@@ -358,6 +358,7 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
     await tx.insert(t.notification).values([
       { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_confirmed', recipient: o.buyerPhone ?? '', content },
       { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_confirmed', recipient: o.buyerEmail ?? '', content },
+      { orderId: id, linkId: o.linkId, channel: 'push', template: 'order_confirmed', recipient: '訂購人手機', content },
     ]);
     await tx.insert(t.auditLog).values({ actor, action: 'confirm_payment', target: `order:${id}`, detail: JSON.stringify(v) });
     return { content };
@@ -378,6 +379,7 @@ export async function cancelOrder(db: Db, actor: string, id: number) {
       await tx.insert(t.notification).values([
         { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_cancelled', recipient: o.buyerPhone ?? '', content },
         { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_cancelled', recipient: o.buyerEmail ?? '', content },
+        { orderId: id, linkId: o.linkId, channel: 'push', template: 'order_cancelled', recipient: '訂購人手機', content },
       ]);
     }
     await tx.insert(t.auditLog).values({ actor, action: 'cancel_order', target: `order:${id}` });
