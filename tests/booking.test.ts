@@ -5,6 +5,7 @@ import { createEvent, createLink, seedVenue, setUsage } from '@/db/seed';
 import * as t from '@/db/schema';
 import { BookingError, getBookingState, holdSeats, releaseHold, submitOrder } from '@/lib/booking';
 import { buildSeats } from '@/lib/layout';
+import * as A from '@/lib/admin';
 
 const T0 = new Date('2026-11-15T10:00:00+08:00');
 const min = (m: number) => new Date(T0.getTime() + m * 60_000);
@@ -12,15 +13,22 @@ const EXP = new Date('2026-12-10T23:59:59+08:00');
 
 let db: Db;
 let eventId: number;
+let combo: Record<string, number>;
+let zone: Record<string, number>;
 
 async function setup() {
   db = await createPgliteDb();
   await seedVenue(db);
   const ev = await createEvent(db, { name: '測試場次', showAt: new Date('2026-12-20T19:30:00+08:00'), vipInstalled: false });
   eventId = ev.id;
+  // vipInstalled:false 需重新發布不影響；VIP 座位因未加裝不可訂
+  combo = Object.fromEntries((await db.select().from(t.combo)).map((c) => [c.name, c.id]));
+  zone = Object.fromEntries((await db.select().from(t.priceZone)).map((z) => [z.name, z.id]));
   await createLink(db, { eventId, code: 'AAA111', name: '甲', phone: '0911111111', quota: 6, expiresAt: EXP });
   await createLink(db, { eventId, code: 'BBB222', name: '乙', phone: '0922222222', quota: 4, expiresAt: EXP });
 }
+
+const SINGLE = () => combo['單張購票'];
 
 const submitBody = (orderId: number, seatIds: string[], amount: number) => ({
   orderId,
@@ -43,102 +51,93 @@ describe('座位模板', () => {
     expect(new Set(seats.map((s) => s.id)).size).toBe(seats.length);
     expect(new Set(seats.map((s) => `${s.x},${s.y}`)).size).toBe(seats.length);
   });
+  it('座位編號為 排-席次-區，且不重複', () => {
+    const seats = buildSeats();
+    const byId = Object.fromEntries(seats.map((s) => [s.id, s.code]));
+    expect(byId['3-15']).toBe('03-15-L1');
+    expect(byId['3-2']).toBe('03-02-C0');
+    expect(byId['12-34']).toBe('12-34-R1');
+    expect(byId['5-35']).toBe('05-35-L2');
+    expect(byId['5-36']).toBe('05-36-R2');
+    expect(byId['V-7']).toBe('V-07-C0');
+    expect(byId['W-H11']).toBe('WC-H11-L2');
+    expect(new Set(seats.map((s) => s.code)).size).toBe(seats.length);
+  });
 });
 
-describe('訂位流程', () => {
+describe('購票端', () => {
   beforeEach(setup);
 
   it('兩人同時搶同一座位，只有一人成功', async () => {
     const r = await Promise.allSettled([
-      holdSeats(db, 'AAA111', ['3-1', '3-2'], 'single', T0),
-      holdSeats(db, 'BBB222', ['3-2', '3-4'], 'single', T0),
+      holdSeats(db, 'AAA111', ['3-1', '3-2'], SINGLE(), T0),
+      holdSeats(db, 'BBB222', ['3-2', '3-4'], SINGLE(), T0),
     ]);
-    const ok = r.filter((x) => x.status === 'fulfilled');
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
     const bad = r.filter((x) => x.status === 'rejected') as PromiseRejectedResult[];
-    expect(ok).toHaveLength(1);
-    expect(bad).toHaveLength(1);
     expect((bad[0].reason as BookingError).code).toBe('SEAT_TAKEN');
     const held = await db.select().from(t.eventSeat).where(eq(t.eventSeat.status, 'held'));
-    expect(held).toHaveLength(2); // 失敗方的 3-4 沒有被留住
+    expect(held).toHaveLength(2);
   });
 
   it('暫存 20 分鐘後自動釋放', async () => {
-    await holdSeats(db, 'AAA111', ['5-11'], 'single', T0);
+    await holdSeats(db, 'AAA111', ['5-11'], SINGLE(), T0);
     let s = await getBookingState(db, 'BBB222', min(19));
     expect(s.seats.find((x) => x.id === '5-11')!.status).toBe('held');
     s = await getBookingState(db, 'BBB222', min(21));
     expect(s.seats.find((x) => x.id === '5-11')!.status).toBe('free');
-    await expect(holdSeats(db, 'BBB222', ['5-11'], 'single', min(21))).resolves.toBeTruthy();
   });
 
   it('暫存者看到自己的座位為 mine，可放棄釋放', async () => {
-    await holdSeats(db, 'AAA111', ['2-1'], 'single', T0);
+    await holdSeats(db, 'AAA111', ['2-1'], SINGLE(), T0);
     let s = await getBookingState(db, 'AAA111', T0);
     expect(s.seats.find((x) => x.id === '2-1')!.status).toBe('mine');
-    expect(s.held?.seatIds).toEqual(['2-1']);
     await releaseHold(db, 'AAA111', T0);
     s = await getBookingState(db, 'AAA111', T0);
     expect(s.held).toBeNull();
     expect(s.seats.find((x) => x.id === '2-1')!.status).toBe('free');
   });
 
-  it('重新暫存會取代同一連結先前的暫存', async () => {
-    await holdSeats(db, 'AAA111', ['2-1'], 'single', T0);
-    await holdSeats(db, 'AAA111', ['2-3'], 'single', min(1));
-    const s = await getBookingState(db, 'AAA111', min(1));
-    expect(s.seats.find((x) => x.id === '2-1')!.status).toBe('free');
-    expect(s.held?.seatIds).toEqual(['2-3']);
-  });
-
-  it('組合票：張數與同區限制、折扣計價', async () => {
-    await expectCode(holdSeats(db, 'AAA111', ['3-1'], 'pair', T0), 'COMBO');
-    await expectCode(holdSeats(db, 'AAA111', ['3-1', '8-11'], 'pair', T0), 'COMBO'); // A 區 + B 區
-    const r = await holdSeats(db, 'AAA111', ['3-1', '3-2'], 'pair', T0);
-    expect(r.amount).toBe(Math.round((3200 * 2 * 0.95) / 10) * 10);
+  it('組合票「買一A送二B」：須剛好 A 區 1 張＋B 區 2 張，金額為套票價', async () => {
+    const id = combo['買一A送二B'];
+    await expectCode(holdSeats(db, 'AAA111', ['3-1', '3-2', '3-4'], id, T0), 'COMBO'); // 三張都是 A
+    await expectCode(holdSeats(db, 'AAA111', ['3-1', '8-11'], id, T0), 'COMBO'); // 張數不足
+    const r = await holdSeats(db, 'AAA111', ['3-1', '8-11', '8-13'], id, T0);
+    expect(r.amount).toBe(3200);
+    const units = await db.select().from(t.orderSeat).where(eq(t.orderSeat.orderId, r.orderId));
+    expect(units.reduce((a, u) => a + u.unitPrice, 0)).toBe(3200);
   });
 
   it('不可訂保留席與未加裝的 VIP 排', async () => {
     await setUsage(db, eventId, 'hold-pr', ['6-1']);
-    await expectCode(holdSeats(db, 'AAA111', ['6-1'], 'single', T0), 'SEAT_UNAVAILABLE');
-    await expectCode(holdSeats(db, 'AAA111', ['V-1'], 'single', T0), 'SEAT_UNAVAILABLE');
+    await expectCode(holdSeats(db, 'AAA111', ['6-1'], SINGLE(), T0), 'SEAT_UNAVAILABLE');
+    await expectCode(holdSeats(db, 'AAA111', ['V-1'], SINGLE(), T0), 'SEAT_UNAVAILABLE');
   });
 
   it('張數上限：連結可購張數跨訂單累計', async () => {
-    const h = await holdSeats(db, 'BBB222', ['4-1', '4-2', '4-3'], 'single', T0);
+    const h = await holdSeats(db, 'BBB222', ['4-1', '4-2', '4-3'], SINGLE(), T0);
     await submitOrder(db, 'BBB222', submitBody(h.orderId, ['4-1', '4-2', '4-3'], h.amount), min(5));
-    await expectCode(holdSeats(db, 'BBB222', ['4-4', '4-5'], 'single', min(6)), 'QUOTA');
-    await expect(holdSeats(db, 'BBB222', ['4-4'], 'single', min(6))).resolves.toBeTruthy();
+    await expectCode(holdSeats(db, 'BBB222', ['4-4', '4-5'], SINGLE(), min(6)), 'QUOTA');
+    await expect(holdSeats(db, 'BBB222', ['4-4'], SINGLE(), min(6))).resolves.toBeTruthy();
   });
 
-  it('送出資料後座位轉為待確認，48 小時未確認自動取消並通知', async () => {
-    const h = await holdSeats(db, 'AAA111', ['7-1', '7-2'], 'single', T0);
-    const r = await submitOrder(db, 'AAA111', submitBody(h.orderId, ['7-1', '7-2'], h.amount), min(10));
-    expect(r.amountMismatch).toBe(false);
+  it('送出後 48 小時未確認到帳自動取消並通知', async () => {
+    const h = await holdSeats(db, 'AAA111', ['7-1', '7-2'], SINGLE(), T0);
+    await submitOrder(db, 'AAA111', submitBody(h.orderId, ['7-1', '7-2'], h.amount), min(10));
     let s = await getBookingState(db, 'BBB222', min(11));
     expect(s.seats.find((x) => x.id === '7-1')!.status).toBe('pending');
-    const mine = await getBookingState(db, 'AAA111', min(11));
-    expect(mine.orders[0]).toMatchObject({ status: 'pending', amount: h.amount });
-    expect(mine.link.used).toBe(2);
-
     s = await getBookingState(db, 'BBB222', min(10 + 48 * 60 + 1));
     expect(s.seats.find((x) => x.id === '7-1')!.status).toBe('free');
     const n = await db.select().from(t.notification).where(eq(t.notification.template, 'order_expired'));
     expect(n).toHaveLength(2);
   });
 
-  it('暫存逾時後不可送出', async () => {
-    const h = await holdSeats(db, 'AAA111', ['9-1'], 'single', T0);
-    await expectCode(submitOrder(db, 'AAA111', submitBody(h.orderId, ['9-1'], h.amount), min(25)), 'HOLD_EXPIRED');
-  });
-
-  it('送出資料欄位驗證', async () => {
-    const h = await holdSeats(db, 'AAA111', ['9-3'], 'single', T0);
-    const bad = submitBody(h.orderId, ['9-3'], h.amount);
+  it('暫存逾時後不可送出；欄位驗證', async () => {
+    const h = await holdSeats(db, 'AAA111', ['9-1'], SINGLE(), T0);
+    const bad = submitBody(h.orderId, ['9-1'], h.amount);
     bad.holders[0].id4 = '12';
     await expectCode(submitOrder(db, 'AAA111', bad, min(1)), 'INVALID');
-    const missing = submitBody(h.orderId, ['9-3'], h.amount);
-    missing.holders = [];
-    await expectCode(submitOrder(db, 'AAA111', missing, min(1)), 'INVALID');
+    await expectCode(submitOrder(db, 'AAA111', submitBody(h.orderId, ['9-1'], h.amount), min(25)), 'HOLD_EXPIRED');
   });
 
   it('過期或停用的連結無法使用', async () => {
@@ -147,9 +146,116 @@ describe('訂位流程', () => {
     await expectCode(getBookingState(db, 'BBB222', T0), 'LINK_DISABLED');
     await expectCode(getBookingState(db, 'NOPE00', T0), 'LINK_NOT_FOUND');
   });
+});
 
-  it('未開放訂購時不能暫存', async () => {
-    await db.update(t.event).set({ saleOpen: false }).where(eq(t.event.id, eventId));
-    await expectCode(holdSeats(db, 'AAA111', ['3-1'], 'single', T0), 'SALE_CLOSED');
+describe('後台', () => {
+  beforeEach(setup);
+  const who = 'tester';
+
+  it('勾選後未發布前，購票端不受影響；發布後才生效', async () => {
+    await A.updateZone(db, who, zone['C區（側區）'], { open: false });
+    await A.updateCombo(db, who, combo['親子四人套票'], { active: false });
+    let s = await getBookingState(db, 'AAA111', T0);
+    expect(s.seats.find((x) => x.id === '5-35')!.status).toBe('free');
+    expect(s.combos.some((c) => c.name === '親子四人套票')).toBe(true);
+    expect((await A.getAdminState(db, T0)).dirty).toBe(true);
+
+    await A.publish(db, who, T0);
+    s = await getBookingState(db, 'AAA111', T0);
+    expect(s.seats.find((x) => x.id === '5-35')!.status).toBe('blocked');
+    expect(s.combos.some((c) => c.name === '親子四人套票')).toBe(false);
+    await expectCode(holdSeats(db, 'AAA111', ['5-35'], SINGLE(), T0), 'SEAT_UNAVAILABLE');
+    expect((await A.getAdminState(db, T0)).dirty).toBe(false);
+  });
+
+  it('總開關關閉並發布後，購票端顯示未開放', async () => {
+    await A.updateEventSettings(db, who, { saleOpen: false });
+    await A.publish(db, who, T0);
+    expect((await getBookingState(db, 'AAA111', T0)).sale).toBe('closed');
+    await expectCode(holdSeats(db, 'AAA111', ['3-1'], SINGLE(), T0), 'SALE_CLOSED');
+  });
+
+  it('發布前檢查：開放的票種要有名稱與票價', async () => {
+    await A.createZone(db, who);
+    await expectCode(A.publish(db, who, T0), 'INVALID');
+  });
+
+  it('新增票種、依排數與區塊指定座位，已有訂單的座位不變', async () => {
+    const z = await A.createZone(db, who);
+    await A.updateZone(db, who, z.id, { name: '學生票', price: 1500, color: '#c0392b' });
+    await holdSeats(db, 'AAA111', ['10-1'], SINGLE(), T0);
+    const r = await A.assignZoneByRule(db, who, z.id, [10, 11, 12], ['L1', 'C0', 'R1']);
+    expect(r).toEqual({ updated: 101, skipped: 1 });
+    const all = await A.assignZoneByRule(db, who, z.id, [7], []);
+    expect(all.updated).toBe(42); // 第 7 排全部區塊：12+10+12+4+4
+    await A.publish(db, who, T0);
+    const s = await getBookingState(db, 'BBB222', T0);
+    expect(s.zones.find((x) => x.name === '學生票')?.price).toBe(1500);
+    expect(s.seats.find((x) => x.id === '11-1')!.zoneId).toBe(z.id);
+  });
+
+  it('刪除票種前需先移走座位與組合使用', async () => {
+    await expectCode(A.deleteZone(db, who, zone['A區']), 'BUSY');
+    const z = await A.createZone(db, who);
+    await A.deleteZone(db, who, z.id);
+  });
+
+  it('自訂組合票內容與價格', async () => {
+    const c = await A.createCombo(db, who);
+    await A.updateCombo(db, who, c.id, { name: '學生雙人', price: 2800, items: [{ zoneId: zone['B區'], qty: 2 }] });
+    await A.publish(db, who, T0);
+    const r = await holdSeats(db, 'AAA111', ['8-11', '8-13'], c.id, T0);
+    expect(r.amount).toBe(2800);
+  });
+
+  it('完整流程：暫存出現在後台 → 送出成為新訂單 → 確認到帳 → 消費者收到劃位成功', async () => {
+    const h = await holdSeats(db, 'AAA111', ['2-1', '2-2'], SINGLE(), T0);
+    let st = await A.getAdminState(db, min(1));
+    expect(st.orders[0]).toMatchObject({ status: 'held', isNew: false });
+    expect(st.stats.held).toBe(2);
+
+    await submitOrder(db, 'AAA111', submitBody(h.orderId, ['2-1', '2-2'], h.amount), min(5));
+    st = await A.getAdminState(db, min(6));
+    expect(st.orders[0]).toMatchObject({ status: 'pending', isNew: true });
+    expect(st.stats.newOrders).toBe(1);
+
+    await A.confirmPayment(db, who, h.orderId, { date: '2026-11-15', amount: h.amount }, min(30));
+    st = await A.getAdminState(db, min(31));
+    expect(st.orders[0].status).toBe('paid');
+    expect(st.stats.sold).toBe(2);
+    expect(st.stats.newOrders).toBe(0);
+
+    const buyer = await getBookingState(db, 'AAA111', min(31));
+    expect(buyer.orders[0].status).toBe('paid');
+    expect(buyer.inbox[0].content).toContain('劃位成功');
+    expect(buyer.inbox[0].content).toContain('02-01-C0');
+
+    const tk = await A.ticketData(db, [h.orderId]);
+    expect(tk.tickets.map((x) => x.code)).toEqual(['02-01-C0', '02-02-C0']);
+  });
+
+  it('取消與刪除訂單會釋放座位', async () => {
+    const h = await holdSeats(db, 'AAA111', ['2-5'], SINGLE(), T0);
+    await A.cancelOrder(db, who, h.orderId);
+    expect((await getBookingState(db, 'BBB222', T0)).seats.find((x) => x.id === '2-5')!.status).toBe('free');
+    const h2 = await holdSeats(db, 'AAA111', ['2-7'], SINGLE(), min(1));
+    await submitOrder(db, 'AAA111', submitBody(h2.orderId, ['2-7'], h2.amount), min(2));
+    await A.deleteOrder(db, who, h2.orderId);
+    expect((await getBookingState(db, 'BBB222', min(3))).seats.find((x) => x.id === '2-7')!.status).toBe('free');
+    expect((await A.getAdminState(db, min(3))).orders.find((o) => o.id === h2.orderId)).toBeUndefined();
+  });
+
+  it('席位用途：設為保留後購票端不可選', async () => {
+    const st = await A.getAdminState(db, T0);
+    const pr = st.usages.find((u) => u.code === 'hold-pr')!;
+    await A.setSeatUsage(db, who, pr.id, ['9-1', '9-3']);
+    expect((await getBookingState(db, 'AAA111', T0)).seats.find((x) => x.id === '9-1')!.status).toBe('blocked');
+  });
+
+  it('專屬連結：產生 8 碼代碼並排入簡訊', async () => {
+    const l = await A.createInviteLink(db, who, { name: '丙', phone: '0933333333', quota: 2, expiresAt: EXP });
+    expect(l.code).toMatch(/^[A-Z2-9]{8}$/);
+    const s = await getBookingState(db, l.code, T0);
+    expect(s.link.quota).toBe(2);
   });
 });

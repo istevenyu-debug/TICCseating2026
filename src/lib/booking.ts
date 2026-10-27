@@ -1,15 +1,18 @@
 /**
- * 訂位核心邏輯：查詢座位、暫存、放棄、送出、逾時釋放。
+ * 訂位核心邏輯（購票端）：查詢座位、暫存、放棄、送出、逾時釋放。
  * 所有時間相關函式都接受 now 參數，方便測試。
  *
  * 防止一位兩賣的關鍵：暫存時以「只在 status = 'free' 時才更新」的條件式 UPDATE 搶座位，
  * 實際更新筆數少於要求數量就整筆交易回滾。PostgreSQL 的列鎖保證同一座位只有一筆交易成功。
+ *
+ * 購票端只看「已發布」的開放設定（event.published）：未發布的票種座位顯示為不可選，
+ * 未發布的購票方式不顯示。
  */
-import { and, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { seatLabel } from './layout';
-import { calcAmount, comboProblem } from './pricing';
+import { calcAmount, comboProblem, type ComboRule } from './pricing';
 import { submitInput, type SubmitInput } from './validation';
 
 export class BookingError extends Error {
@@ -18,11 +21,11 @@ export class BookingError extends Error {
   }
 }
 
-const ACTIVE_ORDER = ['held', 'pending', 'paid'];
+export const ACTIVE_ORDER = ['held', 'pending', 'paid'];
 const COUNTED_ORDER = ['pending', 'paid']; // 計入連結已訂張數
 
-type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
-type Exec = Db | Tx;
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export type Exec = Db | Tx;
 
 /* ---------- 連結與場次 ---------- */
 
@@ -35,8 +38,9 @@ async function loadLink(db: Exec, code: string, now: Date) {
   return { link, ev };
 }
 
+/** 購票端看到的開放狀態，依已發布的設定與開賣時間判斷 */
 export function saleState(ev: typeof t.event.$inferSelect, now: Date): 'open' | 'closed' | 'not_started' | 'ended' {
-  if (!ev.saleOpen) return 'closed';
+  if (!ev.published?.open) return 'closed';
   if (ev.saleStart && now < ev.saleStart) return 'not_started';
   if (ev.saleEnd && now > ev.saleEnd) return 'ended';
   return 'open';
@@ -52,7 +56,7 @@ async function usedQuota(db: Exec, linkId: number): Promise<number> {
   return r?.n ?? 0;
 }
 
-async function usedComboSets(db: Exec, eventId: number): Promise<Record<number, number>> {
+export async function usedComboSets(db: Exec, eventId: number): Promise<Record<number, number>> {
   const rows = await db.select({ comboId: t.orders.comboId, n: sql<number>`count(*)::int` })
     .from(t.orders)
     .where(and(eq(t.orders.eventId, eventId), inArray(t.orders.status, ACTIVE_ORDER)))
@@ -60,16 +64,32 @@ async function usedComboSets(db: Exec, eventId: number): Promise<Record<number, 
   return Object.fromEntries(rows.map((r) => [r.comboId, r.n]));
 }
 
+/** 場次的購票方式（含組合內容） */
+export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number })[]> {
+  const combos = await db.select().from(t.combo).where(eq(t.combo.eventId, eventId)).orderBy(asc(t.combo.sort), asc(t.combo.id));
+  const items = combos.length
+    ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
+    : [];
+  return combos.map((c) => ({
+    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort,
+    items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
+  }));
+}
+
 /* ---------- 逾時釋放 ---------- */
 
-async function freeSeatsOf(db: Exec, orderIds: number[]) {
+export async function freeSeatsOf(db: Exec, orderIds: number[]) {
   if (!orderIds.length) return;
   await db.update(t.eventSeat)
     .set({ status: 'free', orderId: null, holdUntil: null, version: sql`${t.eventSeat.version} + 1` })
     .where(inArray(t.eventSeat.orderId, orderIds));
 }
 
-/** 釋放逾時的暫存與逾期未確認到帳的訂單。由每次請求與排程呼叫。 */
+export function expiredMessage(eventName: string, orderNo: string | null) {
+  return `【${eventName}】訂單 ${orderNo} 逾期未確認到帳，已取消並釋放座位。如已匯款請聯繫主辦方。`;
+}
+
+/** 釋放逾時的暫存與逾期未確認到帳的訂單。由每次請求觸發。 */
 export async function sweepExpired(db: Db, eventId: number, now: Date) {
   await db.transaction(async (tx) => {
     const held = await tx.update(t.orders)
@@ -81,13 +101,16 @@ export async function sweepExpired(db: Db, eventId: number, now: Date) {
       .where(and(eq(t.orders.eventId, eventId), eq(t.orders.status, 'pending'), lt(t.orders.payDueAt, now)))
       .returning({ id: t.orders.id, orderNo: t.orders.orderNo, linkId: t.orders.linkId, phone: t.orders.buyerPhone, email: t.orders.buyerEmail });
     await freeSeatsOf(tx, [...held, ...pend].map((o) => o.id));
-    for (const o of pend) {
-      const content = `訂單 ${o.orderNo} 逾期未確認到帳，已取消並釋放座位。如已匯款請聯繫主辦方。`;
-      await tx.insert(t.notification).values([
-        { orderId: o.id, linkId: o.linkId, channel: 'sms', template: 'order_expired', recipient: o.phone ?? '', content },
-        { orderId: o.id, linkId: o.linkId, channel: 'email', template: 'order_expired', recipient: o.email ?? '', content },
-      ]);
-      await tx.insert(t.auditLog).values({ actor: 'system', action: 'order_expired', target: `order:${o.id}` });
+    if (pend.length) {
+      const [ev] = await tx.select({ name: t.event.name }).from(t.event).where(eq(t.event.id, eventId));
+      for (const o of pend) {
+        const content = expiredMessage(ev.name, o.orderNo);
+        await tx.insert(t.notification).values([
+          { orderId: o.id, linkId: o.linkId, channel: 'sms', template: 'order_expired', recipient: o.phone ?? '', content },
+          { orderId: o.id, linkId: o.linkId, channel: 'email', template: 'order_expired', recipient: o.email ?? '', content },
+        ]);
+        await tx.insert(t.auditLog).values({ actor: 'system', action: 'order_expired', target: `order:${o.id}` });
+      }
     }
   });
 }
@@ -100,17 +123,19 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
   const { link, ev } = await loadLink(db, code, now);
   await sweepExpired(db, ev.id, now);
 
-  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
-  const combos = await db.select().from(t.combo)
-    .where(and(eq(t.combo.eventId, ev.id), eq(t.combo.active, true))).orderBy(t.combo.sort);
+  const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
+  const openZones = new Set(pub.zoneIds);
+  const openCombos = new Set(pub.comboIds);
+
+  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
+  const combos = (await loadCombos(db, ev.id)).filter((c) => openCombos.has(c.id));
   const sets = await usedComboSets(db, ev.id);
 
-  const myOrders = await db.select().from(t.orders)
-    .where(eq(t.orders.linkId, link.id)).orderBy(t.orders.id);
+  const myOrders = await db.select().from(t.orders).where(eq(t.orders.linkId, link.id)).orderBy(t.orders.id);
   const myHeld = myOrders.find((o) => o.status === 'held') ?? null;
 
   const seatRows = await db.select({
-    id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo,
+    id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, code: t.venueSeat.code,
     seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType,
     zoneId: t.eventSeat.zoneId, status: t.eventSeat.status, orderId: t.eventSeat.orderId,
     sellable: t.seatUsage.sellable,
@@ -119,25 +144,35 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
     .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
     .where(eq(t.eventSeat.eventId, ev.id));
 
-  const zoneCode = Object.fromEntries(zones.map((z) => [z.id, z.code]));
   const seats = seatRows
     .filter((s) => s.seatType !== 'vip' || ev.vipInstalled)
     .map((s) => {
       let status: ViewSeatStatus;
       if (myHeld && s.orderId === myHeld.id) status = 'mine';
       else if (s.status !== 'free') status = s.status as ViewSeatStatus;
-      else if (!s.sellable) status = 'blocked';
+      else if (!s.sellable || !openZones.has(s.zoneId)) status = 'blocked';
       else status = 'free';
-      return { id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, label: seatLabel(s), zone: zoneCode[s.zoneId], status };
+      return { id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, status };
     });
 
   const orderSeats = myOrders.length
     ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName })
       .from(t.orderSeat).where(inArray(t.orderSeat.orderId, myOrders.map((o) => o.id)))
     : [];
-  const labelOf = Object.fromEntries(seats.map((s) => [s.id, s.label]));
-  const comboById = Object.fromEntries(combos.map((c) => [c.id, c]));
+  const seatById = Object.fromEntries(seatRows.map((s) => [s.id, s]));
   const used = await usedQuota(db, link.id);
+
+  const notes = await db.select().from(t.notification)
+    .where(or(eq(t.notification.linkId, link.id)))
+    .orderBy(t.notification.id);
+  // 同一則訊息可能同時以簡訊與 Email 發送，購票頁只顯示一次
+  const seen = new Set<string>();
+  const inbox = notes.filter((n) => {
+    const k = `${n.orderId}|${n.template}|${n.content}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).reverse().map((n) => ({ at: n.createdAt.toISOString(), content: n.content }));
 
   return {
     now: now.toISOString(),
@@ -149,21 +184,22 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
     },
     link: { name: link.name, phoneTail: link.phone.slice(-3), quota: link.quota, used, expiresAt: link.expiresAt.toISOString() },
     canBuy: Math.max(0, Math.min(ev.maxPerOrder, link.quota - used)),
-    zones: zones.map((z) => ({ code: z.code, name: z.name, color: z.color, price: z.price })),
-    combos: combos.map((c) => ({
-      code: c.code, name: c.name, qty: c.qty, discountPct: c.discountPct, sameZone: c.sameZone,
-      limitSets: c.limitSets, active: c.active, usedSets: sets[c.id] ?? 0,
-    })),
+    zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price })),
+    combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0 })),
     seats,
     held: myHeld && {
-      orderId: myHeld.id, holdUntil: myHeld.holdUntil!.toISOString(), amount: myHeld.amount,
-      comboCode: comboById[myHeld.comboId]?.code ?? 'single',
+      orderId: myHeld.id, orderNo: myHeld.orderNo, holdUntil: myHeld.holdUntil!.toISOString(), amount: myHeld.amount,
+      comboId: myHeld.comboId,
       seatIds: orderSeats.filter((s) => s.orderId === myHeld.id).map((s) => s.seatId),
     },
     orders: myOrders.filter((o) => o.status !== 'held' && o.submittedAt).reverse().map((o) => ({
       orderNo: o.orderNo, status: o.status, amount: o.amount, payDueAt: o.payDueAt?.toISOString() ?? null,
-      seats: orderSeats.filter((s) => s.orderId === o.id).map((s) => ({ label: labelOf[s.seatId] ?? s.seatId, holder: s.holderName })),
+      seats: orderSeats.filter((s) => s.orderId === o.id).map((s) => {
+        const v = seatById[s.seatId];
+        return { label: v ? seatLabel(v) : s.seatId, code: v?.code ?? '', holder: s.holderName };
+      }),
     })),
+    inbox,
   };
 }
 
@@ -171,7 +207,7 @@ export type BookingState = Awaited<ReturnType<typeof getBookingState>>;
 
 /* ---------- 暫存 ---------- */
 
-export async function holdSeats(db: Db, code: string, seatIdsIn: string[], comboCode: string, now = new Date()) {
+export async function holdSeats(db: Db, code: string, seatIdsIn: string[], comboId: number, now = new Date()) {
   const seatIds = [...new Set(seatIdsIn)];
   const pre = await loadLink(db, code, now);
   await sweepExpired(db, pre.ev.id, now);
@@ -182,6 +218,7 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const [ev] = await tx.select().from(t.event).where(eq(t.event.id, link.eventId));
     const st = saleState(ev, now);
     if (st !== 'open') throw new BookingError('SALE_CLOSED', SALE_MSG[st]);
+    const pub = ev.published!;
 
     // 同一連結只能有一筆暫存：先放掉舊的
     const old = await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'replaced', holdUntil: null })
@@ -193,33 +230,35 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       throw new BookingError('QUOTA', canBuy > 0 ? `此連結最多可再訂 ${canBuy} 張。` : '此連結的可訂張數已用完。');
     }
 
-    const [cb] = await tx.select().from(t.combo)
-      .where(and(eq(t.combo.eventId, ev.id), eq(t.combo.code, comboCode)));
-    if (!cb) throw new BookingError('COMBO', '找不到此票種。');
+    const cb = (await loadCombos(tx, ev.id)).find((c) => c.id === comboId);
+    if (!cb || !pub.comboIds.includes(cb.id)) throw new BookingError('COMBO', '此購票方式目前未開放。');
 
     const rows = await tx.select({
       seatId: t.eventSeat.seatId, seatType: t.venueSeat.seatType, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo,
-      zoneCode: t.priceZone.code, price: t.priceZone.price, sellable: t.seatUsage.sellable,
+      zoneId: t.eventSeat.zoneId, zoneName: t.priceZone.name, price: t.priceZone.price, sellable: t.seatUsage.sellable,
     }).from(t.eventSeat)
       .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
       .innerJoin(t.priceZone, eq(t.priceZone.id, t.eventSeat.zoneId))
       .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
       .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seatIds)));
 
-    const valid = rows.filter((r) => r.sellable && (r.seatType !== 'vip' || ev.vipInstalled));
+    const valid = rows.filter((r) => r.sellable && pub.zoneIds.includes(r.zoneId) && (r.seatType !== 'vip' || ev.vipInstalled));
     if (valid.length !== seatIds.length) {
       const ok = new Set(valid.map((r) => r.seatId));
-      throw new BookingError('SEAT_UNAVAILABLE', '部分座位不開放訂購。', seatIds.filter((s) => !ok.has(s)));
+      throw new BookingError('SEAT_UNAVAILABLE', '部分座位目前不開放訂購。', seatIds.filter((s) => !ok.has(s)));
     }
 
+    const zones = await tx.select({ id: t.priceZone.id, name: t.priceZone.name }).from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
+    const zoneName = (id: number) => zones.find((z) => z.id === id)?.name ?? '';
     const sets = (await usedComboSets(tx, ev.id))[cb.id] ?? 0;
-    const problem = comboProblem(cb, valid.map((r) => r.zoneCode), sets);
+    const problem = comboProblem(cb, valid.map((r) => r.zoneId), sets, zoneName);
     if (problem) throw new BookingError('COMBO', problem);
 
     const amount = calcAmount(valid.map((r) => r.price), cb);
     const holdUntil = new Date(now.getTime() + ev.holdMinutes * 60_000);
     const [order] = await tx.insert(t.orders).values({
       eventId: ev.id, linkId: link.id, comboId: cb.id, status: 'held', amount, holdUntil, createdAt: now,
+      buyerName: link.name, buyerPhone: link.phone,
     }).returning();
     const orderNo = `T${ev.id}-${String(order.id).padStart(5, '0')}`;
     await tx.update(t.orders).set({ orderNo }).where(eq(t.orders.id, order.id));
@@ -235,7 +274,12 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       throw new BookingError('SEAT_TAKEN', `${taken.map(seatLabel).join('、')} 已被他人選走，請重新選擇。`, taken.map((r) => r.seatId));
     }
 
-    await tx.insert(t.orderSeat).values(valid.map((r) => ({ orderId: order.id, seatId: r.seatId, unitPrice: r.price })));
+    // 單張購票以票價記單價；組合票將套票價平均分攤（餘數加在第一張）
+    const unit = cb.isSingle ? null : Math.floor(amount / valid.length);
+    await tx.insert(t.orderSeat).values(valid.map((r, i) => ({
+      orderId: order.id, seatId: r.seatId,
+      unitPrice: unit === null ? r.price : unit + (i === 0 ? amount - unit * valid.length : 0),
+    })));
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'hold', target: `order:${order.id}`, detail: seatIds.join(',') });
     return { orderId: order.id, orderNo, amount, holdUntil: holdUntil.toISOString() };
   });
@@ -262,11 +306,11 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
   const input: SubmitInput = parsed.data;
   const { link, ev } = await loadLink(db, code, now);
 
-  const result = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const [order] = await tx.select().from(t.orders)
       .where(and(eq(t.orders.id, input.orderId), eq(t.orders.linkId, link.id))).for('update');
     if (!order || order.status !== 'held') {
-      throw new BookingError('HOLD_GONE', '找不到暫存中的座位，可能已逾時或已送出，請重新選位。');
+      throw new BookingError('HOLD_GONE', '找不到暫存中的座位，可能已逾時、已送出或已被主辦方取消，請重新選位。');
     }
     if (order.holdUntil! < now) {
       throw new BookingError('HOLD_EXPIRED', `暫存已超過 ${ev.holdMinutes} 分鐘，座位已釋放，請重新選位。`);
@@ -289,7 +333,7 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     const payDueAt = new Date(now.getTime() + ev.payHours * 3_600_000);
     await tx.update(t.orders).set({
       status: 'pending', buyerName: input.buyer.name, buyerPhone: input.buyer.phone, buyerEmail: input.buyer.email,
-      submittedAt: now, payDueAt, holdUntil: null,
+      submittedAt: now, payDueAt, holdUntil: null, seenAt: null,
     }).where(eq(t.orders.id, order.id));
     await tx.update(t.eventSeat).set({ status: 'pending', holdUntil: null, version: sql`${t.eventSeat.version} + 1` })
       .where(eq(t.eventSeat.orderId, order.id));
@@ -301,5 +345,4 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'submit', target: `order:${order.id}` });
     return { orderNo: order.orderNo!, amount: order.amount, payDueAt: payDueAt.toISOString(), amountMismatch: input.transfer.amount !== order.amount };
   });
-  return result;
 }

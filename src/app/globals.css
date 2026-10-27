@@ -84,3 +84,76 @@ label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; co
 .bank { background: var(--bg); border-radius: 8px; padding: 10px; font-size: 13px; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid currentColor; white-space: nowrap; }
 .p-pending { color: var(--warn); } .p-paid { color: var(--ok); } .p-cancelled, .p-expired { color: var(--muted); }
+
+/* ---------- 後台 ---------- */
+header.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+a.btn { font: inherit; font-weight: 500; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 8px 12px; text-decoration: none; }
+a.btn.pri { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+a.btn.disabled { opacity: .45; pointer-events: none; }
+.btn.small { font-size: 12.5px; padding: 4px 9px; }
+.btn.danger { color: var(--red); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; background: none; font: inherit; font-weight: 500; color: var(--muted); padding: 8px 12px; border-bottom: 2px solid transparent; cursor: pointer; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; min-width: 110px; }
+.stat b { display: block; font-family: var(--f-mono); font-size: 18px; }
+.stat span { font-size: 12px; color: var(--muted); }
+.badge { display: inline-block; min-width: 18px; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--red); color: #fff; font-size: 11px; line-height: 18px; text-align: center; font-weight: 700; }
+.alertbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 10px; border: 2px solid var(--red); background: var(--surface); }
+.alertbar.soft { border: 1px solid var(--accent); }
+.home { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.hcard { display: flex; flex-direction: column; gap: 6px; text-align: left; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; cursor: pointer; }
+.hcard:hover { border-color: var(--accent); }
+.hcard b { font-size: 16px; } .hcard span { font-size: 13px; color: var(--muted); }
+.hcard em { font-style: normal; font-family: var(--f-mono); font-size: 12.5px; color: var(--accent); margin-top: auto; }
+.hcard.main { border: 2px solid var(--accent); }
+.brushes { display: flex; flex-direction: column; gap: 6px; }
+.brush { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; background: var(--surface); font: inherit; color: var(--ink); text-align: left; }
+.brush.on { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.brush i { width: 16px; height: 16px; border-radius: 4px; flex: none; border: 1px solid var(--line); }
+.brush .c { margin-left: auto; font-family: var(--f-mono); color: var(--muted); font-size: 12px; }
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.switch input { width: auto; }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+th { font-weight: 500; color: var(--muted); font-size: 12px; white-space: nowrap; }
+tr.click { cursor: pointer; } tr.click:hover td, tr.cur td { background: var(--bg); }
+.p-held { color: var(--accent); }
+.pstack { display: flex; flex-direction: column; gap: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.combogrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 12px; }
+.ced { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+input.need { border-color: var(--red); }
+.swrow { display: flex; flex-wrap: wrap; gap: 3px; max-width: 230px; align-items: center; }
+.sw { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); padding: 0; cursor: pointer; }
+.sw.on { outline: 2px solid var(--red); outline-offset: 1px; }
+.swpick { display: inline-flex; width: 24px; height: 20px; border: 1px dashed var(--muted); border-radius: 4px; overflow: hidden; cursor: pointer; }
+.swpick input { width: 34px; height: 30px; padding: 0; border: 0; margin: -5px; cursor: pointer; background: none; }
+.pubgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.checks { display: flex; flex-direction: column; gap: 6px; }
+.dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid var(--line); }
+.pubbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: var(--bg); }
+.pubbar.dirty { outline: 2px solid var(--warn); }
+
+/* ---------- 入場券列印 ---------- */
+.print-wrap { max-width: 210mm; margin: 0 auto; }
+.tk-grid { display: grid; grid-template-columns: 1fr; gap: 6mm; }
+.tk { display: grid; grid-template-columns: 1fr 34mm; border: 1px solid #18213a; border-radius: 3mm; overflow: hidden; background: #fff; color: #18213a; height: 62mm; break-inside: avoid; }
+.tk-main { padding: 4mm 5mm; border-right: 2px dashed #bbb; display: flex; flex-direction: column; gap: 1mm; }
+.tk-ev { font-family: var(--f-display); font-size: 16pt; }
+.tk-sub { font-size: 9.5pt; color: #444; }
+.tk-seat { font-family: var(--f-mono); font-size: 20pt; color: #24407f; margin-top: 1mm; }
+.tk-code { font-family: var(--f-mono); font-size: 10pt; }
+.tk-note { font-size: 8pt; color: #666; margin-top: auto; }
+.tk-stub { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2mm; padding: 3mm; }
+.tk-qr svg { width: 26mm; height: 26mm; display: block; }
+.tk-serial { font-family: var(--f-mono); font-size: 8pt; }
+@media print {
+  body { background: #fff; padding: 0; }
+  .no-print { display: none !important; }
+  @page { size: A4; margin: 8mm; }
+}

@@ -4,7 +4,7 @@ export const normalizePhone = (s: string) => s.replace(/[\s-]/g, '');
 
 export const holdInput = z.object({
   seatIds: z.array(z.string().min(1).max(16)).min(1).max(20),
-  comboCode: z.string().min(1).max(32),
+  comboId: z.number().int().positive(),
 });
 
 export const submitInput = z.object({

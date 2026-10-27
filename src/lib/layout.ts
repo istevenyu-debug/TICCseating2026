@@ -19,6 +19,28 @@ export interface SeatDef {
   seatType: SeatType;
   x: number;
   y: number;
+  block: Block;
+  code: string;
+}
+
+/** 區塊代碼：L2 左側區、L1 左區、C0 中區、R1 右區、R2 右側區 */
+export type Block = 'L2' | 'L1' | 'C0' | 'R1' | 'R2';
+export const BLOCKS: Block[] = ['L2', 'L1', 'C0', 'R1', 'R2'];
+export const BLOCK_NAME: Record<Block, string> = { L2: '左側區', L1: '左區', C0: '中區', R1: '右區', R2: '右側區' };
+const SECTION_BLOCK: Record<string, Block> = { WL: 'L2', L: 'L1', C: 'C0', R: 'R1', WR: 'R2', VL: 'L1', VC: 'C0', VR: 'R1' };
+
+function withCode(s: Omit<SeatDef, 'block' | 'code'>): SeatDef {
+  const block: Block = s.seatType === 'wheelchair'
+    ? (s.x <= 7 ? 'L2' : s.x <= 20 ? 'L1' : s.x <= 44 ? 'R1' : 'R2')
+    : SECTION_BLOCK[s.section];
+  const rowPart = s.seatType === 'wheelchair' ? 'WC' : s.rowNo === 0 ? 'V' : String(s.rowNo).padStart(2, '0');
+  const seatPart = s.seatType === 'wheelchair' ? s.seatNo : s.seatNo.padStart(2, '0');
+  return { ...s, block, code: `${rowPart}-${seatPart}-${block}` };
+}
+
+/** 排數代號：1–12 為一般排，0 為 VIP 排，-1 為輪椅席 */
+export function rowKey(s: { rowNo: number | null; seatType: string }): number {
+  return s.seatType === 'wheelchair' ? -1 : (s.rowNo ?? 0);
 }
 
 export const GRID = { cols: 52, rows: 13, rowLabelCols: [8, 45] } as const;
@@ -36,7 +58,7 @@ const WHEELCHAIR: [string, number, number][] = [
 ];
 
 export function buildSeats(): SeatDef[] {
-  const out: SeatDef[] = [];
+  const out: Omit<SeatDef, 'block' | 'code'>[] = [];
   const n = (rowNo: number, seat: number, section: SeatDef['section'], x: number) =>
     out.push({ id: `${rowNo}-${seat}`, section, rowNo, seatNo: String(seat), seatType: 'normal', x, y: rowNo + 1 });
 
@@ -60,7 +82,7 @@ export function buildSeats(): SeatDef[] {
   for (const [h, x, y] of WHEELCHAIR) {
     out.push({ id: `W-${h}`, section: 'W', rowNo: null, seatNo: h, seatType: 'wheelchair', x, y });
   }
-  return out;
+  return out.map(withCode);
 }
 
 export function seatLabel(s: { rowNo: number | null; seatNo: string; seatType: string }): string {
@@ -69,8 +91,8 @@ export function seatLabel(s: { rowNo: number | null; seatNo: string; seatType: s
   return `第${s.rowNo}排 ${s.seatNo}號`;
 }
 
-/** 預設票區：中區全部與左右區 1–6 排為 A，左右區 7–12 排為 B，側區為 C */
-export function defaultZoneCode(s: SeatDef): string {
+/** 預設票種：中區全部與左右區 1–6 排為 A，左右區 7–12 排為 B，側區為 C */
+export function defaultZoneCode(s: SeatDef): 'A' | 'B' | 'C' | 'V' | 'W' {
   if (s.seatType === 'wheelchair') return 'W';
   if (s.seatType === 'vip') return 'V';
   if (s.section === 'WL' || s.section === 'WR') return 'C';

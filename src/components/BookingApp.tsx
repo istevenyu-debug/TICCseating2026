@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookingState } from '@/lib/booking';
-import { calcAmount, comboProblem } from '@/lib/pricing';
+import { calcAmount, comboDesc, comboProblem } from '@/lib/pricing';
 import SeatMap from './SeatMap';
 
 type ApiOk<T> = { ok: true; data: T };
@@ -20,7 +20,7 @@ async function api<T>(url: string, body?: unknown): Promise<ApiOk<T> | ApiErr> {
 }
 
 const money = (n: number) => `NT$${n.toLocaleString('en-US')}`;
-const STATUS_LABEL: Record<string, string> = { pending: '待確認到帳', paid: '劃位成功', cancelled: '已取消', expired: '逾期取消' };
+const STATUS_LABEL: Record<string, string> = { pending: '待確認到帳', paid: '劃位成功', cancelled: '已取消', expired: '逾時取消' };
 const SALE_LABEL: Record<string, string> = { closed: '目前未開放訂購。', not_started: '尚未開始訂購。', ended: '訂購已截止。' };
 
 function fmtDate(iso: string) {
@@ -41,7 +41,7 @@ export default function BookingApp({ code }: { code: string }) {
   const [st, setSt] = useState<BookingState | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set());
-  const [combo, setCombo] = useState('single');
+  const [combo, setCombo] = useState<number>(0); // 0 = 預設單張購票
   const [msg, setMsg] = useState<{ kind: 'err' | 'ok' | 'warn'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
@@ -70,7 +70,7 @@ export default function BookingApp({ code }: { code: string }) {
     if (!st) return;
     if (held) {
       setSel(new Set(held.seatIds));
-      setCombo(held.comboCode);
+      setCombo(held.comboId);
       setForm((f) => f ?? {
         name: st.link.name, phone: '', email: '',
         holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.link.name : '', id4: '' }])),
@@ -104,7 +104,7 @@ export default function BookingApp({ code }: { code: string }) {
   }, [held, remain <= 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const seatById = useMemo(() => Object.fromEntries((st?.seats ?? []).map((s) => [s.id, s])), [st]);
-  const zoneBy = useMemo(() => Object.fromEntries((st?.zones ?? []).map((z) => [z.code, z])), [st]);
+  const zoneBy = useMemo(() => Object.fromEntries((st?.zones ?? []).map((z) => [z.id, z])), [st]);
 
   if (fatal) {
     return <main className="wrap"><div className="card"><h1>無法開啟購票頁</h1><p className="note err">{fatal}</p></div></main>;
@@ -112,10 +112,11 @@ export default function BookingApp({ code }: { code: string }) {
   if (!st) return <main className="wrap"><div className="card muted">座位載入中…</div></main>;
 
   const ids = [...sel].filter((id) => seatById[id]);
-  const zonesSel = ids.map((id) => seatById[id].zone);
+  const zonesSel = ids.map((id) => seatById[id].zoneId);
   const prices = zonesSel.map((z) => zoneBy[z]?.price ?? 0);
-  const cur = st.combos.find((c) => c.code === combo) ?? st.combos[0];
-  const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets) : '尚無票種';
+  const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放票種';
+  const cur = st.combos.find((c) => c.id === combo) ?? st.combos.find((c) => c.isSingle) ?? st.combos[0];
+  const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets, zoneName) : '目前沒有開放的購票方式';
   const amount = held ? held.amount : cur ? calcAmount(prices, cur) : 0;
   const open = st.sale === 'open';
 
@@ -134,7 +135,7 @@ export default function BookingApp({ code }: { code: string }) {
 
   async function doHold() {
     setBusy(true); setMsg(null);
-    const r = await api<{ orderId: number }>(`/api/t/${code}/hold`, { seatIds: ids, comboCode: combo });
+    const r = await api<{ orderId: number }>(`/api/t/${code}/hold`, { seatIds: ids, comboId: cur?.id });
     setBusy(false);
     if (!r.ok) {
       if (r.code === 'SEAT_TAKEN' && Array.isArray(r.detail)) {
@@ -149,7 +150,7 @@ export default function BookingApp({ code }: { code: string }) {
   async function doRelease() {
     setBusy(true);
     await api(`/api/t/${code}/release`, {});
-    setBusy(false); setSel(new Set()); setCombo('single'); setForm(null); setMsg(null);
+    setBusy(false); setSel(new Set()); setCombo(0); setForm(null); setMsg(null);
     await load();
   }
 
@@ -168,7 +169,7 @@ export default function BookingApp({ code }: { code: string }) {
     if (!r.ok) { setMsg({ kind: 'err', text: r.message }); if (r.code.startsWith('HOLD')) await load(); return; }
     setLastOrder(r.data.orderNo);
     setMsg({ kind: 'ok', text: `訂購資料已送出（訂單 ${r.data.orderNo}）。主辦方確認到帳後，會以簡訊及 Email 通知劃位結果。${r.data.amountMismatch ? '提醒：您填寫的匯款金額與應付金額不同，主辦方會再與您確認。' : ''}` });
-    setSel(new Set()); setCombo('single'); setForm(null);
+    setSel(new Set()); setCombo(0); setForm(null);
     await load();
   }
 
@@ -200,9 +201,9 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="sellist">
                   {ids.map((id) => (
                     <div className="selitem" key={id}>
-                      <span>{seatById[id].label} <span className="muted small">{zoneBy[seatById[id].zone]?.name}</span></span>
+                      <span>{seatById[id].label} <span className="mono small muted">{seatById[id].code}</span> <span className="muted small">{zoneBy[seatById[id].zoneId]?.name}</span></span>
                       <span className="row">
-                        <span className="mono small">{money(zoneBy[seatById[id].zone]?.price ?? 0)}</span>
+                        <span className="mono small">{money(zoneBy[seatById[id].zoneId]?.price ?? 0)}</span>
                         <button aria-label={`取消 ${seatById[id].label}`} onClick={() => toggle(id)}>×</button>
                       </span>
                     </div>
@@ -211,23 +212,23 @@ export default function BookingApp({ code }: { code: string }) {
               ) : (
                 <p className="small muted">在座位圖上按一下勾選座位（出現紅框），再按一下取消。</p>
               )}
-              <h3>票種</h3>
+              <h3>購票方式</h3>
               <div className="combos">
                 {st.combos.map((c) => {
-                  const why = comboProblem(c, zonesSel, c.usedSets);
+                  const why = comboProblem(c, zonesSel, c.usedSets, zoneName);
                   const dis = !!why && ids.length > 0;
-                  const desc = c.qty === 0 ? '依各票區票價計算'
-                    : `${c.qty} 張${c.sameZone ? '・同一票區' : ''}・${c.discountPct / 10} 折${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
+                  const desc = c.isSingle ? '依各票種票價計算'
+                    : `${comboDesc(c, zoneName)}・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
                   return (
-                    <label key={c.code} className={`combo${dis ? ' dis' : ''}`}>
-                      <input type="radio" name="combo" value={c.code} checked={combo === c.code} disabled={dis} onChange={() => setCombo(c.code)} />
+                    <label key={c.id} className={`combo${dis ? ' dis' : ''}`}>
+                      <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={dis} onChange={() => setCombo(c.id)} />
                       <span><b>{c.name}</b><br /><span className="small muted">{desc}{dis ? `｜${why}` : ''}</span></span>
                     </label>
                   );
                 })}
               </div>
               <div className="total">
-                <span className="muted">{cur && cur.qty > 0 && ids.length ? `原價 ${money(prices.reduce((a, b) => a + b, 0))}　` : ''}應付金額</span>
+                <span className="muted">{cur && !cur.isSingle && ids.length ? `原價 ${money(prices.reduce((a, b) => a + b, 0))}　` : ''}應付金額</span>
                 <b>{money(ids.length ? amount : 0)}</b>
               </div>
               <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={!open || busy || !ids.length || !!curProblem} onClick={doHold}>
@@ -242,10 +243,10 @@ export default function BookingApp({ code }: { code: string }) {
               <p className="small muted" style={{ margin: '0 0 8px' }}>請在時間內完成匯款並送出資料，逾時座位會自動釋放。</p>
               <div className="sellist">
                 {held.seatIds.map((id) => (
-                  <div className="selitem" key={id}><span>{seatById[id]?.label ?? id}</span><span className="small muted">{zoneBy[seatById[id]?.zone]?.name}</span></div>
+                  <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small muted">{zoneBy[seatById[id]?.zoneId]?.name}</span></div>
                 ))}
               </div>
-              <div className="total"><span className="muted">{st.combos.find((c) => c.code === held.comboCode)?.name}</span><b>{money(held.amount)}</b></div>
+              <div className="total"><span className="muted">{st.combos.find((c) => c.id === held.comboId)?.name}</span><b>{money(held.amount)}</b></div>
 
               <h3>匯款帳戶</h3>
               <div className="bank">
@@ -300,12 +301,22 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.seats.map((s) => s.label).join('、')}</div>
+                <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>
                 <div className="small muted">
                   {money(o.amount)}{o.status === 'pending' && o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : ''}
                 </div>
               </div>
             )) : <p className="small muted" style={{ margin: 0 }}>尚無訂單。送出訂購資料後會顯示在這裡。</p>}
+          </div>
+
+          <div className="card">
+            <h2>我收到的通知</h2>
+            {st.inbox.length ? st.inbox.map((n, i) => (
+              <div key={i} className="note" style={{ marginBottom: 6 }}>
+                <div className="small muted">{fmtDate(n.at)}</div>
+                <div className="small">{n.content}</div>
+              </div>
+            )) : <p className="small muted" style={{ margin: 0 }}>尚無通知。主辦方確認到帳後，劃位成功訊息會出現在這裡，同時以簡訊及 Email 寄給您。</p>}
           </div>
         </div>
       </div>

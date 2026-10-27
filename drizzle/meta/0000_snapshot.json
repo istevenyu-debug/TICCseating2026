@@ -1,9 +1,84 @@
 {
-  "id": "736b42cd-8f1f-403d-8672-066debfe5647",
+  "id": "5ece7513-588a-4ebc-a78a-45ad81983c16",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
+    "public.admin_user": {
+      "name": "admin_user",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "password_hash": {
+          "name": "password_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'admin'"
+        },
+        "active": {
+          "name": "active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "admin_user_username_idx": {
+          "name": "admin_user_username_idx",
+          "columns": [
+            {
+              "expression": "username",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.audit_log": {
       "name": "audit_log",
       "schema": "",
@@ -70,37 +145,26 @@
           "primaryKey": false,
           "notNull": true
         },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "name": {
           "name": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
-        },
-        "qty": {
-          "name": "qty",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "discount_pct": {
-          "name": "discount_pct",
-          "type": "integer",
-          "primaryKey": false,
           "notNull": true,
-          "default": 100
+          "default": "''"
         },
-        "same_zone": {
-          "name": "same_zone",
+        "is_single": {
+          "name": "is_single",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "price": {
+          "name": "price",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "limit_sets": {
           "name": "limit_sets",
@@ -141,6 +205,72 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.combo_item": {
+      "name": "combo_item",
+      "schema": "",
+      "columns": {
+        "combo_id": {
+          "name": "combo_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "zone_id": {
+          "name": "zone_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "qty": {
+          "name": "qty",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "combo_item_combo_id_combo_id_fk": {
+          "name": "combo_item_combo_id_combo_id_fk",
+          "tableFrom": "combo_item",
+          "tableTo": "combo",
+          "columnsFrom": [
+            "combo_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "combo_item_zone_id_price_zone_id_fk": {
+          "name": "combo_item_zone_id_price_zone_id_fk",
+          "tableFrom": "combo_item",
+          "tableTo": "price_zone",
+          "columnsFrom": [
+            "zone_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "combo_item_combo_id_zone_id_pk": {
+          "name": "combo_item_combo_id_zone_id_pk",
+          "columns": [
+            "combo_id",
+            "zone_id"
+          ]
+        }
+      },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -235,6 +365,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "''"
+        },
+        "published": {
+          "name": "published",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -731,6 +867,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "seen_at": {
+          "name": "seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -931,17 +1073,12 @@
           "primaryKey": false,
           "notNull": true
         },
-        "code": {
-          "name": "code",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "name": {
           "name": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "''"
         },
         "color": {
           "name": "color",
@@ -953,7 +1090,22 @@
           "name": "price",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": 0
+        },
+        "open": {
+          "name": "open",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort": {
+          "name": "sort",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {},
@@ -1065,6 +1217,18 @@
         },
         "seat_type": {
           "name": "seat_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "block": {
+          "name": "block",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
           "type": "text",
           "primaryKey": false,
           "notNull": true

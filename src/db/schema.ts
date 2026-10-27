@@ -3,8 +3,16 @@
  * 金額一律為整數新台幣；時間一律 timestamptz。
  */
 import {
-  pgTable, serial, integer, text, boolean, timestamp, primaryKey, uniqueIndex, index,
+  pgTable, serial, integer, text, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb,
 } from 'drizzle-orm/pg-core';
+
+/** 發布到購票頁的開放設定快照：後台勾選後按「發布」才寫入，購票端只看這份 */
+export interface Published {
+  open: boolean;
+  zoneIds: number[];
+  comboIds: number[];
+  at: string; // ISO 時間
+}
 
 /** 場館座位模板（與場次無關，固定不變） */
 export const venueSeat = pgTable('venue_seat', {
@@ -13,6 +21,8 @@ export const venueSeat = pgTable('venue_seat', {
   rowNo: integer('row_no'), // 1–12；VIP 排為 0；輪椅席為 null
   seatNo: text('seat_no').notNull(), // 座號（輪椅席為 H1–H16）
   seatType: text('seat_type').notNull(), // normal / vip / wheelchair
+  block: text('block').notNull(), // L2 左側區 / L1 左區 / C0 中區 / R1 右區 / R2 右側區
+  code: text('code').notNull(), // 座位編號：排-席次-區，例 03-15-L1、V-07-C0、WC-H11-L2
   x: integer('x').notNull(), // 實體座標：欄
   y: integer('y').notNull(), // 實體座標：列
   entrance: text('entrance').notNull().default('2M 入口'),
@@ -33,16 +43,18 @@ export const event = pgTable('event', {
   bankName: text('bank_name').notNull().default(''),
   bankAccount: text('bank_account').notNull().default(''),
   accountName: text('account_name').notNull().default(''),
+  published: jsonb('published').$type<Published>(),
 });
 
-/** 票區 */
+/** 票種（票區）：名稱、票價、座位底色由主辦方自訂；open 為後台勾選的開放狀態（發布後生效） */
 export const priceZone = pgTable('price_zone', {
   id: serial('id').primaryKey(),
   eventId: integer('event_id').notNull().references(() => event.id),
-  code: text('code').notNull(),
-  name: text('name').notNull(),
-  color: text('color').notNull(),
-  price: integer('price').notNull(),
+  name: text('name').notNull().default(''),
+  color: text('color').notNull(), // #rrggbb
+  price: integer('price').notNull().default(0),
+  open: boolean('open').notNull().default(true),
+  sort: integer('sort').notNull().default(0),
 });
 
 /** 席位用途類別 */
@@ -69,19 +81,24 @@ export const eventSeat = pgTable('event_seat', {
   byOrder: index('event_seat_order_idx').on(t.orderId),
 }));
 
-/** 組合票。qty = 0 代表單張購票 */
+/** 購票方式：單張購票（isSingle）或組合票。組合票內容見 combo_item，價格為套票價 */
 export const combo = pgTable('combo', {
   id: serial('id').primaryKey(),
   eventId: integer('event_id').notNull().references(() => event.id),
-  code: text('code').notNull(),
-  name: text('name').notNull(),
-  qty: integer('qty').notNull(),
-  discountPct: integer('discount_pct').notNull().default(100),
-  sameZone: boolean('same_zone').notNull().default(false),
+  name: text('name').notNull().default(''),
+  isSingle: boolean('is_single').notNull().default(false),
+  price: integer('price').notNull().default(0), // 套票價；單張購票不使用
   limitSets: integer('limit_sets').notNull().default(0), // 0 = 不限量
-  active: boolean('active').notNull().default(true),
+  active: boolean('active').notNull().default(true), // 後台勾選的開放狀態（發布後生效）
   sort: integer('sort').notNull().default(0),
 });
+
+/** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */
+export const comboItem = pgTable('combo_item', {
+  comboId: integer('combo_id').notNull().references(() => combo.id, { onDelete: 'cascade' }),
+  zoneId: integer('zone_id').notNull().references(() => priceZone.id),
+  qty: integer('qty').notNull(),
+}, (t) => ({ pk: primaryKey({ columns: [t.comboId, t.zoneId] }) }));
 
 /** 專屬購票連結 */
 export const inviteLink = pgTable('invite_link', {
@@ -113,6 +130,7 @@ export const orders = pgTable('orders', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   submittedAt: timestamp('submitted_at', { withTimezone: true }),
   closedReason: text('closed_reason'),
+  seenAt: timestamp('seen_at', { withTimezone: true }), // 後台已看過（新訂單提示用）
 }, (t) => ({
   orderNo: uniqueIndex('orders_order_no_idx').on(t.orderNo),
   byLink: index('orders_link_idx').on(t.linkId),
@@ -164,3 +182,14 @@ export const auditLog = pgTable('audit_log', {
   detail: text('detail'),
   at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** 後台帳號 */
+export const adminUser = pgTable('admin_user', {
+  id: serial('id').primaryKey(),
+  username: text('username').notNull(),
+  passwordHash: text('password_hash').notNull(), // scrypt
+  displayName: text('display_name').notNull().default(''),
+  role: text('role').notNull().default('admin'), // admin / staff
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ username: uniqueIndex('admin_user_username_idx').on(t.username) }));

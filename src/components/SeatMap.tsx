@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { BookingState } from '@/lib/booking';
+import { inkFor } from '@/lib/color';
 
 type Seat = BookingState['seats'][number];
 
@@ -18,7 +19,7 @@ const ROW_LABEL_COLS = [8, 45];
 
 export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, locked }: Props) {
   const [cell, setCell] = useState(22);
-  const zone = Object.fromEntries(zones.map((z) => [z.code, z]));
+  const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
 
   const rows: { y: number; label: string }[] = [];
@@ -29,8 +30,8 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
     <div className="card">
       <div className="mapbar">
         <div className="legend">
-          {zones.filter((z) => z.code !== 'V' || vipInstalled).map((z) => (
-            <span key={z.code}><i style={{ background: z.color }} />{z.name} {fmt(z.price)}</span>
+          {zones.filter((z) => seats.some((s) => s.zoneId === z.id)).map((z) => (
+            <span key={z.id}><i style={{ background: z.color }} />{z.name} {fmt(z.price)}</span>
           ))}
           <span><i style={{ outline: '2px solid var(--red)', outlineOffset: -2 }} />已勾選</span>
           <span><i style={{ background: 'repeating-linear-gradient(-45deg,var(--sold) 0 2px,transparent 2px 5px)' }} />他人暫存中</span>
@@ -51,17 +52,17 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
             <div key={`${r.y}-${c}`} className="rl" style={{ gridColumn: c, gridRow: r.y }}>{r.label}</div>
           )))}
           {seats.map((s) => {
-            const z = zone[s.zone];
+            const z = zone[s.zoneId];
             const isSel = selected.has(s.id);
             const clickable = !locked && (s.status === 'free' || isSel);
-            const title = `${s.label}・${z?.name ?? ''} ${z ? fmt(z.price) : ''}`;
+            const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}`;
             return (
               <button
                 key={s.id}
                 type="button"
                 className={`seat${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}`}
                 data-k={s.status}
-                style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color }}
+                style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color, color: z && (s.status === 'free' || isSel) ? inkFor(z.color) : undefined }}
                 title={title}
                 aria-label={title}
                 aria-pressed={isSel}
@@ -75,7 +76,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
         </div>
       </div>
       <p className="small muted" style={{ margin: '10px 0 0' }}>
-        單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消。
+        單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消。游標停在座位上可看座位編號（排-席次-區）。
       </p>
     </div>
   );

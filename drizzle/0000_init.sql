@@ -1,3 +1,13 @@
+CREATE TABLE IF NOT EXISTS "admin_user" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"username" text NOT NULL,
+	"password_hash" text NOT NULL,
+	"display_name" text DEFAULT '' NOT NULL,
+	"role" text DEFAULT 'admin' NOT NULL,
+	"active" boolean DEFAULT true NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "audit_log" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"actor" text NOT NULL,
@@ -10,14 +20,19 @@ CREATE TABLE IF NOT EXISTS "audit_log" (
 CREATE TABLE IF NOT EXISTS "combo" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"event_id" integer NOT NULL,
-	"code" text NOT NULL,
-	"name" text NOT NULL,
-	"qty" integer NOT NULL,
-	"discount_pct" integer DEFAULT 100 NOT NULL,
-	"same_zone" boolean DEFAULT false NOT NULL,
+	"name" text DEFAULT '' NOT NULL,
+	"is_single" boolean DEFAULT false NOT NULL,
+	"price" integer DEFAULT 0 NOT NULL,
 	"limit_sets" integer DEFAULT 0 NOT NULL,
 	"active" boolean DEFAULT true NOT NULL,
 	"sort" integer DEFAULT 0 NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS "combo_item" (
+	"combo_id" integer NOT NULL,
+	"zone_id" integer NOT NULL,
+	"qty" integer NOT NULL,
+	CONSTRAINT "combo_item_combo_id_zone_id_pk" PRIMARY KEY("combo_id","zone_id")
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "event" (
@@ -33,7 +48,8 @@ CREATE TABLE IF NOT EXISTS "event" (
 	"pay_hours" integer DEFAULT 48 NOT NULL,
 	"bank_name" text DEFAULT '' NOT NULL,
 	"bank_account" text DEFAULT '' NOT NULL,
-	"account_name" text DEFAULT '' NOT NULL
+	"account_name" text DEFAULT '' NOT NULL,
+	"published" jsonb
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "event_seat" (
@@ -97,7 +113,8 @@ CREATE TABLE IF NOT EXISTS "orders" (
 	"pay_due_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"submitted_at" timestamp with time zone,
-	"closed_reason" text
+	"closed_reason" text,
+	"seen_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "payment" (
@@ -116,10 +133,11 @@ CREATE TABLE IF NOT EXISTS "payment" (
 CREATE TABLE IF NOT EXISTS "price_zone" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"event_id" integer NOT NULL,
-	"code" text NOT NULL,
-	"name" text NOT NULL,
+	"name" text DEFAULT '' NOT NULL,
 	"color" text NOT NULL,
-	"price" integer NOT NULL
+	"price" integer DEFAULT 0 NOT NULL,
+	"open" boolean DEFAULT true NOT NULL,
+	"sort" integer DEFAULT 0 NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "seat_usage" (
@@ -136,6 +154,8 @@ CREATE TABLE IF NOT EXISTS "venue_seat" (
 	"row_no" integer,
 	"seat_no" text NOT NULL,
 	"seat_type" text NOT NULL,
+	"block" text NOT NULL,
+	"code" text NOT NULL,
 	"x" integer NOT NULL,
 	"y" integer NOT NULL,
 	"entrance" text DEFAULT '2M 入口' NOT NULL
@@ -143,6 +163,18 @@ CREATE TABLE IF NOT EXISTS "venue_seat" (
 --> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "combo" ADD CONSTRAINT "combo_event_id_event_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."event"("id") ON DELETE no action ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "combo_item" ADD CONSTRAINT "combo_item_combo_id_combo_id_fk" FOREIGN KEY ("combo_id") REFERENCES "public"."combo"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;
+--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "combo_item" ADD CONSTRAINT "combo_item_zone_id_price_zone_id_fk" FOREIGN KEY ("zone_id") REFERENCES "public"."price_zone"("id") ON DELETE no action ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
@@ -225,6 +257,7 @@ EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
 --> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "admin_user_username_idx" ON "admin_user" USING btree ("username");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "event_seat_order_idx" ON "event_seat" USING btree ("order_id");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "invite_link_code_idx" ON "invite_link" USING btree ("code");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "orders_order_no_idx" ON "orders" USING btree ("order_no");--> statement-breakpoint

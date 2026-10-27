@@ -4,7 +4,7 @@ import { BookingError } from './booking';
 const STATUS: Record<string, number> = {
   LINK_NOT_FOUND: 404, LINK_DISABLED: 403, LINK_EXPIRED: 410, SALE_CLOSED: 409,
   SEAT_TAKEN: 409, SEAT_UNAVAILABLE: 409, QUOTA: 409, COMBO: 422, INVALID: 422,
-  HOLD_GONE: 409, HOLD_EXPIRED: 410,
+  HOLD_GONE: 409, HOLD_EXPIRED: 410, UNAUTHORIZED: 401, NOT_FOUND: 404, BUSY: 409, NO_EVENT: 409, TOO_MANY: 429,
 };
 
 export async function handle<T>(fn: () => Promise<T>) {
