@@ -1,7 +1,8 @@
-node_modules/
-.next/
+*.tsbuildinfo
 .data/
 .env
 .env.local
-*.tsbuildinfo
+.next/
 next-env.d.ts
+node_modules/
+測試網址.txt

@@ -31,6 +31,15 @@
 
 本機開發未設定 `ADMIN_*` 時，自動建立 `admin` / `ticc-dev-2026`。正式環境（`NODE_ENV=production`）不會自動建立預設帳號。
 
+## 在家用電腦開測試站（不需固定 IP）
+
+1. 安裝 Node.js 20 LTS（https://nodejs.org）
+2. 從 GitHub 下載本專案（Code → Download ZIP）並解壓縮
+3. Windows 點兩下 `啟動測試站.bat`；Mac 點兩下 `啟動測試站.command`
+4. 第一次會詢問後台帳號密碼，接著自動建置、啟動，並產生一個 `https://….trycloudflare.com` 網址（也存在 `測試網址.txt`）
+
+電腦要保持開機、視窗不要關。每次重新啟動網址都會改變，資料會保留在 `.data/`。要讓同事用不同後台帳號登入：`npm run admin:add`。
+
 ## 本機執行
 
 ```bash
