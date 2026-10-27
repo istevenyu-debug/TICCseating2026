@@ -16,7 +16,7 @@ let eventId: number;
 async function setup() {
   db = await createPgliteDb();
   await seedVenue(db);
-  const ev = await createEvent(db, { name: '測試場次', showAt: new Date('2026-12-20T19:30:00+08:00') });
+  const ev = await createEvent(db, { name: '測試場次', showAt: new Date('2026-12-20T19:30:00+08:00'), vipInstalled: false });
   eventId = ev.id;
   await createLink(db, { eventId, code: 'AAA111', name: '甲', phone: '0911111111', quota: 6, expiresAt: EXP });
   await createLink(db, { eventId, code: 'BBB222', name: '乙', phone: '0922222222', quota: 4, expiresAt: EXP });

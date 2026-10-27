@@ -4,7 +4,7 @@
  * 已有場次時不重複建立。
  */
 import { getDb } from '../src/db/client';
-import { createEvent, createLink, seedVenue, setUsage } from '../src/db/seed';
+import { createEvent, createLink, seedVenue } from '../src/db/seed';
 import * as t from '../src/db/schema';
 
 async function main() {
@@ -22,8 +22,6 @@ async function main() {
     bankAccount: '000-00-0000000',
     accountName: '範例主辦單位',
   });
-  await setUsage(db, ev.id, 'hold-pr', ['6-1', '6-2', '6-3', '6-4']);
-  await setUsage(db, ev.id, 'hold-sponsor', ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6']);
   const exp = new Date('2026-12-10T23:59:59+08:00');
   await createLink(db, { eventId: ev.id, code: 'DEMO26', name: '測試購票人', phone: '0900000000', quota: 6, expiresAt: exp });
   await createLink(db, { eventId: ev.id, code: 'DEMO27', name: '第二位測試者', phone: '0900000001', quota: 4, expiresAt: exp });

@@ -30,7 +30,7 @@ export async function createEvent(db: Db, input: CreateEventInput) {
     const [ev] = await tx.insert(t.event).values({
       name: input.name,
       showAt: input.showAt,
-      vipInstalled: input.vipInstalled ?? false,
+      vipInstalled: input.vipInstalled ?? true,
       saleOpen: input.saleOpen ?? true,
       maxPerOrder: input.maxPerOrder ?? 6,
       holdMinutes: input.holdMinutes ?? 20,
