@@ -7,13 +7,28 @@ import { comboDesc, comboQty } from '@/lib/pricing';
 import { phoneProblem } from '@/lib/validation';
 import AdminMap, { type SeatLook } from './AdminMap';
 
-type State = AdminState & { user: { username: string; displayName: string; role: string } };
+type NotifyPublic = {
+  email: { host: string; port: number; user: string; fromName: string; passSet: boolean; ready: boolean };
+  sms: { url: string; user: string; passSet: boolean; ready: boolean };
+};
+type Notice = { id: number; orderId: number | null; channel: string; template: string; recipient: string; content: string; status: string; error: string | null; attempts: number; createdAt: string; sentAt: string | null };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; notifications: Notice[] };
+type Delivery = { channel: string; status: string; error: string | null }[];
+const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
+const N_TEMPLATE: Record<string, string> = { invite: '專屬連結', order_received: '收到訂購資料', order_confirmed: '劃位成功', order_cancelled: '訂單取消', order_expired: '逾期取消' };
+/** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
+function deliveryText(d: Delivery | undefined) {
+  if (!d?.length) return { text: '', bad: false };
+  const parts = [...d].sort((a, b) => a.channel.localeCompare(b.channel)).reverse().map((x) =>
+    `${x.channel === 'sms' ? '簡訊' : 'Email'}${N_STATUS[x.status] ?? x.status}${x.error && x.status !== 'sent' ? `（${x.error}）` : ''}`);
+  return { text: parts.join('、'), bad: d.some((x) => x.status !== 'sent') };
+}
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
-type Tab = 'home' | 'usage' | 'price' | 'links' | 'orders' | 'tickets';
+type Tab = 'home' | 'usage' | 'price' | 'links' | 'orders' | 'tickets' | 'notify';
 
 const TABS: [Tab, string][] = [
-  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['links', '三、專屬連結'], ['orders', '三、訂單與到帳'], ['tickets', '四、紙本入場券'],
+  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['links', '三、專屬連結'], ['orders', '三、訂單與到帳'], ['tickets', '四、紙本入場券'], ['notify', '五、通知設定'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -141,6 +156,7 @@ export default function AdminApp() {
         {TABS.map(([k, n]) => (
           <button key={k} className={tab === k ? 'on' : ''} onClick={() => go(k)}>
             {n}{k === 'orders' && st.stats.newOrders ? <span className="badge">{st.stats.newOrders}</span> : null}
+            {k === 'notify' && (!st.notify.email.ready || !st.notify.sms.ready || st.notifications.some((x) => x.status === 'failed')) ? <span className="badge">!</span> : null}
           </button>
         ))}
       </nav>
@@ -177,6 +193,7 @@ export default function AdminApp() {
       {tab === 'links' && <Links />}
       {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
+      {tab === 'notify' && <Notify />}
     </main>
     </AdminCtx.Provider>
   );
@@ -530,7 +547,8 @@ function Links() {
           const digits = f.phone.replace(/\D/g, '');
           const q = parseInt(f.quota.trim() || '0');
           if (!Number.isInteger(q) || q < 0 || q > 200) { setMsg({ kind: 'err', text: '可購張數請填 0–200 的整數（0＝不限）' }); return; }
-          const r = await act({ action: 'link.create', name: f.name.trim(), phone: digits, quota: q, expiresAt: f.expiresAt }, `已為 ${f.name.trim()} 產生專屬連結，請在左側清單按「複製連結」`);
+          const r = await act({ action: 'link.create', name: f.name.trim(), phone: digits, quota: q, expiresAt: f.expiresAt }) as { delivery?: Delivery } | null;
+          if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已為 ${f.name.trim()} 產生專屬連結。${d.text ? `通知：${d.text}。` : ''}也可在左側清單按「複製連結」自行傳送。` }); }
           if (r) setF({ name: '', phone: '', quota: f.quota, expiresAt: f.expiresAt });
         }}>
           <label className="f">對象姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
@@ -628,8 +646,11 @@ function OrderDetail({ o }: { o: Order }) {
         </div>
         <label className="f" style={{ marginTop: 8 }}>備註<input value={c.note} placeholder="例：核對網銀明細" onChange={(e) => setC({ ...c, note: e.target.value })} /></label>
         <div className="row" style={{ marginTop: 10 }}>
-          <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={() => act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }, '已確認到帳，並通知消費者劃位成功')}>確認到帳，通知消費者劃位成功</button>
-          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, () => act({ action: 'order.cancel', id: o.id }, '已取消訂單並通知消費者'))}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
+          <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
+            const r = await act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }) as { delivery?: Delivery } | null;
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。通知消費者：${d.text || '無'}。${d.bad ? '可到「五、通知設定」查看原因或重寄。' : ''}` }); }
+          }}>確認到帳，通知消費者劃位成功</button>
+          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。通知消費者：${d.text || '無'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
         </div>
       </>}
 
@@ -667,6 +688,120 @@ function Tickets() {
       <a className={`btn pri${pick.size ? '' : ' disabled'}`} style={{ marginTop: 12, display: 'inline-block' }}
         href={pick.size ? `/admin/tickets?ids=${[...pick].join(',')}` : undefined} target="_blank" rel="noreferrer">開啟列印頁</a>
       <p className="small muted">列印頁為 A4 每頁 4 張，每張含唯一序號與 QR code。用瀏覽器的列印功能列印，或另存成 PDF。</p>
+    </div>
+  );
+}
+
+/* ---------- 五、通知設定 ---------- */
+function Notify() {
+  const { st, act, busy, setMsg } = useAdmin();
+  const ne = st.notify.email, ns = st.notify.sms;
+  const [e, setE] = useState({ user: ne.user, pass: '', fromName: ne.fromName, host: ne.host, port: String(ne.port) });
+  const [m, setM] = useState({ user: ns.user, pass: '', url: ns.url });
+  const [adv, setAdv] = useState(ne.host !== 'smtp.gmail.com');
+  const [to, setTo] = useState({ email: '', phone: '' });
+  const [show, setShow] = useState<'all' | 'bad'>('all');
+  const list = st.notifications.filter((x) => show === 'all' || x.status === 'failed' || x.status === 'simulated');
+  const ok = (b: boolean) => b ? <span className="pill p-paid">已設定，會真的寄出</span> : <span className="pill p-cancelled">尚未設定，只存紀錄</span>;
+  const test = async (channel: 'sms' | 'email') => {
+    const r = await act({ action: 'notify.test', channel, to: channel === 'sms' ? to.phone : to.email });
+    if (r) setMsg({ kind: 'ok', text: channel === 'sms' ? `測試簡訊已送出到 ${to.phone}，請看手機是否收到。` : `測試信已寄到 ${to.email}，請看信箱（也看看垃圾郵件匣）。` });
+  };
+  return (
+    <div className="pstack">
+      <div className="card">
+        <h2>通知寄送狀態</h2>
+        <div className="bank">
+          <span className="muted">Email</span><span>{ok(ne.ready)}{ne.ready && <span className="small muted">　寄件：{ne.user}</span>}</span>
+          <span className="muted">簡訊</span><span>{ok(ns.ready)}{ns.ready && <span className="small muted">　三竹帳號：{ns.user}</span>}</span>
+        </div>
+        <p className="small muted" style={{ marginBottom: 0 }}>消費者送出訂購、確認到帳、取消訂單、發出專屬連結時，系統會自動寄出。失敗會自動重試 3 次，下方「通知紀錄」可看結果與原因，也可以重寄。</p>
+      </div>
+
+      <div className="grid2">
+        <div className="card">
+          <h2>Email（Gmail）</h2>
+          <form onSubmit={async (ev) => {
+            ev.preventDefault();
+            if (!e.user.trim()) { setMsg({ kind: 'err', text: '請填寫寄件 Email' }); return; }
+            if (!ne.passSet && !e.pass.trim()) { setMsg({ kind: 'err', text: '請填寫應用程式密碼' }); return; }
+            const values: Record<string, string> = { 'email.user': e.user.trim(), 'email.pass': e.pass.replace(/\s/g, ''), 'email.fromName': e.fromName.trim(),
+              'email.host': adv ? e.host.trim() : 'smtp.gmail.com', 'email.port': adv ? e.port.trim() : '465' };
+            if (await act({ action: 'notify.save', values }, '已儲存 Email 設定，建議寄一封測試信確認')) setE({ ...e, pass: '' });
+          }}>
+            <label className="f">寄件 Email<input value={e.user} placeholder="例：ticket.yourname@gmail.com" autoComplete="off" onChange={(x) => setE({ ...e, user: x.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>應用程式密碼（16 碼）<input type="password" value={e.pass} autoComplete="new-password"
+              placeholder={ne.passSet ? '已設定；要更換才需要填' : 'Google 帳戶 → 安全性 → 應用程式密碼'} onChange={(x) => setE({ ...e, pass: x.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>寄件人名稱（消費者看到的）<input value={e.fromName} placeholder="例：冬季音樂會主辦單位" onChange={(x) => setE({ ...e, fromName: x.target.value })} /></label>
+            <label className="switch small" style={{ marginTop: 8 }}><input type="checkbox" checked={adv} onChange={(x) => setAdv(x.target.checked)} />不是用 Gmail（自訂寄信伺服器）</label>
+            {adv && <div className="fields" style={{ marginTop: 6 }}>
+              <label className="f">SMTP 主機<input value={e.host} onChange={(x) => setE({ ...e, host: x.target.value })} /></label>
+              <label className="f">連接埠<input value={e.port} inputMode="numeric" onChange={(x) => setE({ ...e, port: x.target.value })} /></label>
+            </div>}
+            <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy}>儲存 Email 設定</button>
+          </form>
+          <h3>寄測試信</h3>
+          <div className="row">
+            <input style={{ flex: 1 }} value={to.email} placeholder="收件 Email" onChange={(x) => setTo({ ...to, email: x.target.value })} />
+            <button className="btn" disabled={busy || !ne.ready} onClick={() => test('email')}>寄測試信</button>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>簡訊（三竹 Mitake）</h2>
+          <form onSubmit={async (ev) => {
+            ev.preventDefault();
+            if (!m.user.trim()) { setMsg({ kind: 'err', text: '請填寫三竹帳號' }); return; }
+            if (!ns.passSet && !m.pass.trim()) { setMsg({ kind: 'err', text: '請填寫三竹密碼' }); return; }
+            if (!/^https:\/\/\S+$/.test(m.url.trim())) { setMsg({ kind: 'err', text: 'API 網址應以 https:// 開頭' }); return; }
+            if (await act({ action: 'notify.save', values: { 'sms.user': m.user.trim(), 'sms.pass': m.pass, 'sms.url': m.url.trim() } }, '已儲存簡訊設定，建議發一則測試簡訊確認')) setM({ ...m, pass: '' });
+          }}>
+            <label className="f">三竹帳號<input value={m.user} autoComplete="off" onChange={(x) => setM({ ...m, user: x.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>三竹密碼<input type="password" value={m.pass} autoComplete="new-password"
+              placeholder={ns.passSet ? '已設定；要更換才需要填' : ''} onChange={(x) => setM({ ...m, pass: x.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>API 網址（三竹開通時提供；一般不用改）<input value={m.url} onChange={(x) => setM({ ...m, url: x.target.value })} /></label>
+            <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy}>儲存簡訊設定</button>
+          </form>
+          <h3>發測試簡訊</h3>
+          <div className="row">
+            <input style={{ flex: 1 }} value={to.phone} inputMode="tel" maxLength={13} placeholder="手機 09xxxxxxxx" onChange={(x) => setTo({ ...to, phone: x.target.value })} />
+            <button className="btn" disabled={busy || !ns.ready} onClick={() => test('sms')}>發測試簡訊</button>
+          </div>
+          {to.phone && phoneProblem(to.phone) && <div className="small" style={{ color: 'var(--red)' }}>{phoneProblem(to.phone)}</div>}
+          <p className="small muted">每則簡訊依字數計費，70 字以內算 1 則；劃位成功通知約 2–3 則。</p>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>通知紀錄 <span className="small muted">最近 100 則</span></h2>
+        <div className="row" style={{ marginBottom: 8 }}>
+          <label className="switch small"><input type="radio" checked={show === 'all'} onChange={() => setShow('all')} />全部</label>
+          <label className="switch small"><input type="radio" checked={show === 'bad'} onChange={() => setShow('bad')} />只看沒寄出的（{st.notifications.filter((x) => x.status === 'failed' || x.status === 'simulated').length}）</label>
+        </div>
+        <div className="tbl"><table>
+          <thead><tr><th>時間</th><th>內容</th><th>管道</th><th>收件人</th><th>結果</th><th></th></tr></thead>
+          <tbody>
+            {list.map((x) => (
+              <tr key={x.id}>
+                <td className="small">{tw(x.createdAt)}</td>
+                <td><span title={x.content}>{N_TEMPLATE[x.template] ?? x.template}</span></td>
+                <td>{x.channel === 'sms' ? '簡訊' : 'Email'}</td>
+                <td className="mono small">{x.recipient || '—'}</td>
+                <td>
+                  <span className={`pill ${x.status === 'sent' ? 'p-paid' : x.status === 'queued' ? 'p-pending' : 'p-cancelled'}`}>{N_STATUS[x.status] ?? x.status}</span>
+                  {x.error && x.status !== 'sent' && <div className="small" style={{ color: 'var(--red)' }}>{x.error}</div>}
+                </td>
+                <td>{(x.status === 'failed' || x.status === 'simulated') && x.recipient &&
+                  <button className="btn small" disabled={busy} onClick={async () => {
+                    const r = await act({ action: 'notify.resend', id: x.id }) as { status: string; error: string | null } | null;
+                    if (r) setMsg({ kind: r.status === 'sent' ? 'ok' : 'err', text: r.status === 'sent' ? '已重寄成功' : `重寄結果：${N_STATUS[r.status] ?? r.status}${r.error ? `（${r.error}）` : ''}` });
+                  }}>重寄</button>}</td>
+              </tr>
+            ))}
+            {!list.length && <tr><td colSpan={6} className="muted">沒有通知</td></tr>}
+          </tbody>
+        </table></div>
+      </div>
     </div>
   );
 }

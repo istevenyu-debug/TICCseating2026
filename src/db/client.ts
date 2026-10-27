@@ -16,7 +16,12 @@ const MIGRATIONS = path.resolve(process.cwd(), 'drizzle');
 const g = globalThis as unknown as { __ticcDb?: Promise<Db> };
 
 export function getDb(): Promise<Db> {
-  if (!g.__ticcDb) g.__ticcDb = connect();
+  if (!g.__ticcDb) {
+    g.__ticcDb = connect().then(async (db) => {
+      (await import('@/lib/notify')).startDispatcher(db); // 每 30 秒補寄通知
+      return db;
+    });
+  }
   return g.__ticcDb;
 }
 

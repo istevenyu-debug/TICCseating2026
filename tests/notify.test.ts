@@ -1,0 +1,124 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { createPgliteDb, type Db } from '@/db/client';
+import { createEvent, createLink, seedVenue } from '@/db/seed';
+import * as t from '@/db/schema';
+import * as A from '@/lib/admin';
+import { holdSeats, submitOrder } from '@/lib/booking';
+import { dispatchQueued, mitakeSend, publicNotifyConfig, resendNotification, saveNotifyConfig, sendTest, type Senders } from '@/lib/notify';
+
+const T0 = new Date('2026-11-15T10:00:00+08:00');
+const EXP = new Date('2026-12-10T23:59:59+08:00');
+let db: Db;
+let single: number;
+
+async function order() {
+  const h = await holdSeats(db, 'AAA111', ['3-1'], single, T0);
+  await submitOrder(db, 'AAA111', {
+    orderId: h.orderId, buyer: { name: '王大明', phone: '0912345678', email: 'wang@example.com' },
+    holders: [{ seatId: '3-1', name: '王大明', id4: 'A123' }], transfer: { last5: '12345', amount: h.amount, time: '10:05' }, agree: true,
+  }, T0);
+  return h.orderId;
+}
+
+function fake(fail?: { sms?: string; email?: string }) {
+  const sent: { ch: string; to: string; text: string; subject?: string }[] = [];
+  const s: Senders = {
+    email: async (_c, to, subject, text) => { if (fail?.email) throw new Error(fail.email); sent.push({ ch: 'email', to, subject, text }); },
+    sms: async (_c, to, text) => { if (fail?.sms) throw new Error(fail.sms); sent.push({ ch: 'sms', to, text }); },
+  };
+  return { s, sent };
+}
+
+beforeEach(async () => {
+  db = await createPgliteDb();
+  await seedVenue(db);
+  const ev = await createEvent(db, { name: '測試場次', showAt: new Date('2026-12-20T19:30:00+08:00'), vipInstalled: false });
+  await createLink(db, { eventId: ev.id, code: 'AAA111', name: '甲', phone: '0911111111', quota: 6, expiresAt: EXP });
+  single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
+});
+
+const configure = () => saveNotifyConfig(db, 'tester', { 'email.user': 'ticket@gmail.com', 'email.pass': 'abcdabcdabcdabcd', 'sms.user': 'mitake', 'sms.pass': 'pw' });
+
+describe('通知寄送', () => {
+  it('未設定寄送帳號：通知標為「未寄出（尚未設定）」', async () => {
+    await order();
+    const { s, sent } = fake();
+    await dispatchQueued(db, s);
+    const rows = await db.select().from(t.notification);
+    expect(rows.map((r) => r.status)).toEqual(['simulated']);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('設定後：送出訂購寄 Email；確認到帳寄簡訊＋Email，內容含「我的訂單」網址', async () => {
+    await configure();
+    const id = await order();
+    const { s, sent } = fake();
+    await dispatchQueued(db, s);
+    expect(sent).toEqual([expect.objectContaining({ ch: 'email', to: 'wang@example.com', subject: '已收到您的訂購資料' })]);
+    await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0, 'https://abc-def.trycloudflare.com');
+    await dispatchQueued(db, s);
+    const last = sent.slice(1);
+    expect(last.map((x) => x.ch).sort()).toEqual(['email', 'sms']);
+    expect(last[0].text).toContain('https://abc-def.trycloudflare.com/t/AAA111');
+    expect((await db.select().from(t.notification)).every((r) => r.status === 'sent')).toBe(true);
+  });
+
+  it('寄送失敗重試 3 次後標為失敗並記錄原因；修好後可重寄', async () => {
+    await configure();
+    await order();
+    const bad = fake({ email: 'Email 帳號或應用程式密碼錯誤' });
+    for (let i = 0; i < 3; i++) await dispatchQueued(db, bad.s);
+    let [n] = await db.select().from(t.notification);
+    expect(n).toMatchObject({ status: 'failed', attempts: 3, error: 'Email 帳號或應用程式密碼錯誤' });
+    await db.update(t.notification).set({ status: 'queued', attempts: 0 }).where(eq(t.notification.id, n.id)); // 等同按「重寄」
+    await dispatchQueued(db, fake().s);
+    [n] = await db.select().from(t.notification);
+    expect(n.status).toBe('sent');
+    await expect(resendNotification(db, 'tester', 9999)).rejects.toThrow('找不到');
+  });
+
+  it('發出專屬連結的簡訊含完整網址', async () => {
+    await configure();
+    await A.createInviteLink(db, 'tester', { name: '乙', phone: '0922222222', quota: 21, expiresAt: EXP }, 'https://x-y.trycloudflare.com');
+    const { s, sent } = fake();
+    await dispatchQueued(db, s);
+    expect(sent[0]).toMatchObject({ ch: 'sms', to: '0922222222' });
+    expect(sent[0].text).toMatch(/https:\/\/x-y\.trycloudflare\.com\/t\/[A-Z0-9]{8} 可訂 21 張/);
+  });
+
+  it('密碼不回傳後台；密碼留空不會覆蓋', async () => {
+    await configure();
+    await saveNotifyConfig(db, 'tester', { 'email.user': 'new@gmail.com', 'email.pass': '' });
+    const p = await publicNotifyConfig(db);
+    expect(JSON.stringify(p)).not.toContain('abcdabcd');
+    expect(p.email).toMatchObject({ user: 'new@gmail.com', passSet: true, ready: true });
+  });
+
+  it('測試寄送：未設定時提示、格式錯誤擋下', async () => {
+    await expect(sendTest(db, 'sms', '0912345678', fake().s)).rejects.toThrow('三竹');
+    await configure();
+    await expect(sendTest(db, 'sms', '0912345678123', fake().s)).rejects.toThrow('10 位數字');
+    await expect(sendTest(db, 'email', 'a@example.com', fake().s)).resolves.toBeUndefined();
+  });
+});
+
+describe('三竹回應判讀', () => {
+  const cfg = { url: 'https://smsapi.mitake.com.tw/api/mtk/SmSend', user: 'u', pass: 'p' };
+  it('statuscode 1 為成功；帶 CharsetURL=UTF8 與表單參數', async () => {
+    const f = vi.fn(async () => new Response('[1]\r\nmsgid=1234567890\r\nstatuscode=1\r\nAccountPoint=98\r\n'));
+    vi.stubGlobal('fetch', f);
+    await mitakeSend(cfg, '0912-345-678', '測試');
+    const [url, init] = f.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toContain('CharsetURL=UTF8');
+    expect(String(init.body)).toContain('dstaddr=0912345678');
+    vi.unstubAllGlobals();
+  });
+  it('statuscode e 顯示帳密錯誤、s 顯示點數不足', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[1]\r\nstatuscode=e\r\n')));
+    await expect(mitakeSend(cfg, '0912345678', 'x')).rejects.toThrow('三竹帳號或密碼錯誤');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('[1]\r\nstatuscode=s\r\n')));
+    await expect(mitakeSend(cfg, '0912345678', 'x')).rejects.toThrow('點數不足');
+    vi.unstubAllGlobals();
+  });
+});

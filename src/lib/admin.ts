@@ -282,12 +282,13 @@ export async function deleteCombo(db: Db, actor: string, id: number) {
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-export function linkUrl(code: string) {
-  const base = (process.env.PUBLIC_BASE_URL ?? '').replace(/\/$/, '');
-  return `${base}/t/${code}`;
+/** 購票連結完整網址。base 為後台目前使用的網址（例如臨時通道網址）；正式環境可用 PUBLIC_BASE_URL 固定 */
+export function linkUrl(code: string, base?: string) {
+  const b = (process.env.PUBLIC_BASE_URL || base || '').replace(/\/$/, '');
+  return `${b}/t/${code}`;
 }
 
-export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date }) {
+export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date }, base?: string) {
   const ev = await currentEvent(db);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
@@ -296,7 +297,7 @@ export async function createInviteLink(db: Db, actor: string, v: { name: string;
     const [l] = await db.insert(t.inviteLink).values({ eventId: ev.id, code, ...v }).returning();
     await db.insert(t.notification).values({
       linkId: l.id, channel: 'sms', template: 'invite', recipient: v.phone,
-      content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code)} 可訂 ${v.quota || '不限'} 張。`,
+      content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code, base)} 可訂 ${v.quota || '不限'} 張，${v.expiresAt.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' })} 前有效。`,
     });
     await audit(db, actor, 'link_create', `link:${l.id}`, { name: v.name, quota: v.quota });
     return l;
@@ -329,9 +330,9 @@ export async function updateInviteLink(db: Db, actor: string, id: number, v: Par
 
 /* ---------- 訂單 ---------- */
 
-export function confirmMessage(eventName: string, o: { buyerName: string | null; orderNo: string | null }, amount: number, seatText: string, showAt: Date) {
+export function confirmMessage(eventName: string, o: { buyerName: string | null; orderNo: string | null }, amount: number, seatText: string, showAt: Date, myOrderUrl?: string) {
   const when = showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  return `【${eventName}】${o.buyerName ?? ''} 您好，已確認收到您的匯款 NT$${amount.toLocaleString('en-US')}。劃位成功：${seatText}。訂單編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至購票頁「我的訂單」查看，入場時請出示 QR code 與身分證件。`;
+  return `【${eventName}】${o.buyerName ?? ''} 您好，已確認收到您的匯款 NT$${amount.toLocaleString('en-US')}。劃位成功：${seatText}。訂單編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至購票頁「我的訂單」查看${myOrderUrl ? `：${myOrderUrl}` : ''}，入場時請出示 QR code 與身分證件。`;
 }
 
 export async function markOrderSeen(db: Db, id: number, now = new Date()) {
@@ -339,7 +340,7 @@ export async function markOrderSeen(db: Db, id: number, now = new Date()) {
 }
 
 /** 確認到帳：座位改為已售出，並通知消費者劃位成功 */
-export async function confirmPayment(db: Db, actor: string, id: number, v: { date: string; amount: number; note?: string }, now = new Date()) {
+export async function confirmPayment(db: Db, actor: string, id: number, v: { date: string; amount: number; note?: string }, now = new Date(), base?: string) {
   const ev = await currentEvent(db);
   return db.transaction(async (tx) => {
     const [o] = await tx.select().from(t.orders).where(and(eq(t.orders.id, id), eq(t.orders.eventId, ev.id))).for('update');
@@ -352,7 +353,8 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
     const seats = await tx.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, holder: t.orderSeat.holderName })
       .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(eq(t.orderSeat.orderId, id));
     const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}，持票人 ${s.holder ?? ''}）`).join('、');
-    const content = confirmMessage(ev.name, o, v.amount, seatText, ev.showAt);
+    const [lk] = await tx.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
+    const content = confirmMessage(ev.name, o, v.amount, seatText, ev.showAt, lk && (base || process.env.PUBLIC_BASE_URL) ? linkUrl(lk.code, base) : undefined);
     await tx.insert(t.notification).values([
       { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_confirmed', recipient: o.buyerPhone ?? '', content },
       { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_confirmed', recipient: o.buyerEmail ?? '', content },

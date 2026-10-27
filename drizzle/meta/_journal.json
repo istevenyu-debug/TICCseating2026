@@ -36,6 +36,13 @@
       "when": 1793100853798,
       "tag": "0004_combo_auto_holders",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793102433335,
+      "tag": "0005_notify_delivery",
+      "breakpoints": true
     }
   ]
 }

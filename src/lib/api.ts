@@ -23,6 +23,14 @@ export async function readJson(req: Request): Promise<unknown> {
   try { return await req.json(); } catch { throw new BookingError('INVALID', '資料格式不正確'); }
 }
 
+/** 這次請求的網站網址（經 Cloudflare 通道時為通道網址），用於簡訊裡的連結 */
+export function originOf(req: Request): string {
+  const h = req.headers;
+  const host = h.get('x-forwarded-host') ?? h.get('host') ?? '';
+  const proto = h.get('x-forwarded-proto') ?? (/^(localhost|127\.)/.test(host) ? 'http' : 'https');
+  return host ? `${proto.split(',')[0]}://${host.split(',')[0]}` : '';
+}
+
 /** 公開連結的訪客代碼（由瀏覽器產生，放在 x-visitor 標頭） */
 export function visitor(req: Request): string | undefined {
   return req.headers.get('x-visitor') ?? undefined;

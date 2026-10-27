@@ -174,9 +174,17 @@ export const notification = pgTable('notification', {
   template: text('template').notNull(),
   recipient: text('recipient').notNull(),
   content: text('content').notNull(),
-  status: text('status').notNull().default('queued'), // queued / sent / failed
+  status: text('status').notNull().default('queued'), // queued 待寄 / sent 已寄出 / failed 失敗 / simulated 未設定寄送（只存紀錄）
+  error: text('error'), // 失敗原因
+  attempts: integer('attempts').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp('sent_at', { withTimezone: true }),
+});
+
+/** 系統設定（通知寄送帳號等）。密碼類只寫不讀，不回傳到後台畫面 */
+export const appSetting = pgTable('app_setting', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull().default(''),
 });
 
 /** 操作紀錄 */

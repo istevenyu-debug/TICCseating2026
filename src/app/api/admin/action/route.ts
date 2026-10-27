@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { handle, readJson } from '@/lib/api';
+import { handle, originOf, readJson } from '@/lib/api';
 import { requireAdmin } from '@/lib/adminApi';
 import { BookingError } from '@/lib/booking';
 import * as A from '@/lib/admin';
 import { normalizePhone } from '@/lib/validation';
+import { and, desc, eq } from 'drizzle-orm';
+import * as t from '@/db/schema';
+import type { Db } from '@/db/client';
+import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,7 +49,23 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('order.confirm'), id, date: z.string().min(1), amount: money, note: z.string().max(200).optional() }),
   z.object({ action: z.literal('order.cancel'), id }),
   z.object({ action: z.literal('order.delete'), id }),
+  z.object({ action: z.literal('notify.save'), values: z.object({
+    'email.host': z.string().max(200), 'email.port': z.string().max(6), 'email.user': z.string().max(200), 'email.pass': z.string().max(200),
+    'email.fromName': z.string().max(60), 'sms.url': z.string().max(300), 'sms.user': z.string().max(100), 'sms.pass': z.string().max(200),
+  }).partial() }),
+  z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
+  z.object({ action: z.literal('notify.resend'), id }),
 ]);
+
+/** 寄出待寄通知，並回報這筆訂單或連結剛產生的通知結果 */
+async function deliver(db: Db, by: { orderId?: number; linkId?: number }) {
+  await dispatchQueued(db);
+  const rows = await db.select({ channel: t.notification.channel, status: t.notification.status, error: t.notification.error })
+    .from(t.notification)
+    .where(by.orderId ? eq(t.notification.orderId, by.orderId) : and(eq(t.notification.linkId, by.linkId!), eq(t.notification.template, 'invite')))
+    .orderBy(desc(t.notification.id)).limit(2);
+  return rows;
+}
 
 const endOfDay = (s: string) => {
   const d = new Date(/T/.test(s) ? s : `${s}T23:59:59+08:00`);
@@ -73,15 +93,18 @@ export async function POST(req: Request) {
       case 'combo.update': return A.updateCombo(db, who, a.id, a.values);
       case 'combo.delete': return A.deleteCombo(db, who, a.id);
       case 'link.createPublic': return A.createPublicLink(db, who);
-      case 'link.create': return A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt) });
+      case 'link.create': { const l = await A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt) }, originOf(req)); return { ...l, delivery: await deliver(db, { linkId: l.id }) }; }
       case 'link.update': {
         const { expiresAt, ...rest } = a.values;
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });
       }
       case 'order.seen': return A.markOrderSeen(db, a.id);
-      case 'order.confirm': return A.confirmPayment(db, who, a.id, { date: a.date, amount: a.amount, note: a.note });
-      case 'order.cancel': return A.cancelOrder(db, who, a.id);
+      case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, { date: a.date, amount: a.amount, note: a.note }, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
+      case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
       case 'order.delete': return A.deleteOrder(db, who, a.id);
+      case 'notify.save': return saveNotifyConfig(db, who, a.values);
+      case 'notify.test': return sendTest(db, a.channel, a.to);
+      case 'notify.resend': return resendNotification(db, who, a.id);
     }
   });
 }
