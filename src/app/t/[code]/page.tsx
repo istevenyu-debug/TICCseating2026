@@ -7,7 +7,7 @@ export function generateMetadata({ params }: { params: { code: string } }): Meta
   return {
     manifest: `/t/${encodeURIComponent(params.code)}/manifest.webmanifest`,
     appleWebApp: { capable: true, title: '大會堂劃位', statusBarStyle: 'default' },
-    icons: { apple: '/app-icon' },
+    icons: { apple: '/app-icon.png' },
   };
 }
 

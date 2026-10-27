@@ -11,7 +11,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -55,6 +55,8 @@ const env = Object.fromEntries(readFileSync('.env.local', 'utf8').split(/\r?\n/)
   .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
 
 /* 2. 建置與示範資料 */
+// 解壓縮新版 ZIP「取代檔案」不會刪掉舊版已移除的檔案，這裡先清掉，避免建置失敗
+for (const old of ['src/app/app-icon', '.next/types']) rmSync(old, { recursive: true, force: true });
 say('建置網站（約 1–2 分鐘）'); run(npm, ['run', 'build']);
 say('準備資料庫'); run(npm, ['run', 'db:seed']);
 
