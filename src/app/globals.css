@@ -172,3 +172,9 @@ input.need { border-color: var(--red); }
 .alertbox-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; color: var(--ok); }
 .alertbox.err .alertbox-title { color: var(--red); }
 @keyframes alertin { from { transform: translateY(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* 連座：同組座位下緣加粗線，並用小橋接起來，看起來是一組 */
+.seat.bm { box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .3); }
+.seat.bl::after { content: ''; position: absolute; top: 30%; right: -5px; width: 8px; height: 40%; background: inherit; z-index: 2;
+  border-top: 1px solid rgba(0, 0, 0, .3); border-bottom: 1px solid rgba(0, 0, 0, .3); pointer-events: none; }
+.legend i.pairi { width: 26px; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .3); }

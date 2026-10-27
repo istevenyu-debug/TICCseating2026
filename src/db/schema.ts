@@ -78,6 +78,7 @@ export const eventSeat = pgTable('event_seat', {
   orderId: integer('order_id'),
   holdUntil: timestamp('hold_until', { withTimezone: true }),
   version: integer('version').notNull().default(0),
+  bundle: text('bundle'), // 連座：同一個值的座位必須整組一起訂（例：贈票區左右兩位一組）
 }, (t) => ({
   pk: primaryKey({ columns: [t.eventId, t.seatId] }),
   byOrder: index('event_seat_order_idx').on(t.orderId),

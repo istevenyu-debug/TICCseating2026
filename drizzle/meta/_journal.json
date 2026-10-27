@@ -50,6 +50,13 @@
       "when": 1793103237083,
       "tag": "0006_push_sub",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793112184417,
+      "tag": "0007_seat_bundle",
+      "breakpoints": true
     }
   ]
 }

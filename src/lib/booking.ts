@@ -181,7 +181,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
   const seatRows = await db.select({
     id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, code: t.venueSeat.code,
     seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType,
-    zoneId: t.eventSeat.zoneId, status: t.eventSeat.status, orderId: t.eventSeat.orderId,
+    zoneId: t.eventSeat.zoneId, status: t.eventSeat.status, orderId: t.eventSeat.orderId, bundle: t.eventSeat.bundle,
     sellable: t.seatUsage.sellable,
   }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
@@ -196,7 +196,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
       else if (s.status !== 'free') status = s.status as ViewSeatStatus;
       else if (!s.sellable || !openZones.has(s.zoneId)) status = 'blocked';
       else status = 'free';
-      return { id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, status };
+      return { id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, status, bundle: s.bundle };
     });
 
   const orderSeats = myOrders.length
@@ -302,6 +302,17 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
       .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seatIds)));
 
+    // 連座：選了其中一位，整組都要一起選
+    const bundles = [...new Set((await tx.select({ b: t.eventSeat.bundle }).from(t.eventSeat)
+      .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seatIds)))).map((r) => r.b).filter((b): b is string => !!b))];
+    if (bundles.length) {
+      const members = await tx.select({ seatId: t.eventSeat.seatId }).from(t.eventSeat)
+        .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.bundle, bundles)));
+      const want = new Set(seatIds);
+      const missing = members.map((m) => m.seatId).filter((id) => !want.has(id));
+      if (missing.length) throw new BookingError('BUNDLE', '連座的座位需整組一起訂購（按一下會同時選取整組）。', missing);
+    }
+
     const valid = rows.filter((r) => r.sellable && pub.zoneIds.includes(r.zoneId) && (r.seatType !== 'vip' || ev.vipInstalled));
     if (valid.length !== seatIds.length) {
       const ok = new Set(valid.map((r) => r.seatId));
@@ -311,7 +322,8 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const zones = await tx.select({ id: t.priceZone.id, name: t.priceZone.name }).from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
     const zoneName = (id: number) => zones.find((z) => z.id === id)?.name ?? '';
     const usedSets = (await usedComboSets(tx, ev.id))[cb.id] ?? 0;
-    const problem = comboProblem(cb, valid.map((r) => r.zoneId), usedSets, zoneName);
+    const giftZones = new Set(valid.filter((r) => r.price === 0).map((r) => r.zoneId));
+    const problem = comboProblem(cb, valid.map((r) => r.zoneId), usedSets, zoneName, giftZones);
     if (problem) throw new BookingError('COMBO', problem);
 
     const sets = cb.isSingle ? 1 : comboSets(cb, valid.map((r) => r.zoneId));

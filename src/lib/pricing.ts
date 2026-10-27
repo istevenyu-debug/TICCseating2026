@@ -48,9 +48,13 @@ export function comboSets(c: Pick<ComboRule, 'isSingle' | 'items'>, zoneIds: num
  */
 export function comboProblem(
   c: ComboRule, zoneIds: number[], usedSets: number, zoneName: (id: number) => string = (id) => `票種${id}`,
+  giftZones: Set<number> = new Set(), // 票價 0 的票種（贈票）：只能透過組合票取得
 ): string | null {
   if (zoneIds.length === 0) return '請先勾選座位';
-  if (c.isSingle) return null;
+  if (c.isSingle) {
+    const g = zoneIds.find((z) => giftZones.has(z));
+    return g !== undefined ? `「${zoneName(g)}」為贈票，只能以組合票（例如功德組）訂購` : null;
+  }
   if (comboQty(c) === 0) return '此組合尚未設定內容';
   if (!(c.price > 0)) return '此組合尚未設定套票價格';
   const k = comboSets(c, zoneIds);

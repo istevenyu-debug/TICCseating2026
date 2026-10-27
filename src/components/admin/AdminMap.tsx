@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import type { AdminState } from '@/lib/admin';
+import { bundleClass, bundleIndex } from '@/lib/bundle';
 
 type Seat = AdminState['seats'][number];
 export interface SeatLook { bg?: string; ink?: string; kind: 'free' | 'held' | 'pending' | 'sold' | 'blocked'; title: string; dim?: boolean }
@@ -19,6 +20,7 @@ const ROW_LABEL_COLS = [8, 45];
 
 export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }: Props) {
   const [cell, setCell] = useState(22);
+  const { linkRight } = bundleIndex(seats);
   const painting = useRef<Set<string> | null>(null);
   const [preview, setPreview] = useState<Set<string>>(new Set());
 
@@ -61,7 +63,7 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
               <button
                 key={s.id}
                 type="button"
-                className={`seat${s.type === 'wheelchair' ? ' wheel' : ''}${hot ? ' sel' : ''}`}
+                className={`seat${s.type === 'wheelchair' ? ' wheel' : ''}${hot ? ' sel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={L.kind}
                 style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: L.bg, color: L.ink, opacity: L.dim ? 0.45 : undefined, cursor: onPaint ? 'pointer' : 'default' }}
                 title={L.title}

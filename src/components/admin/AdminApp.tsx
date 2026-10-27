@@ -5,6 +5,7 @@ import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
 import { comboDesc, comboQty } from '@/lib/pricing';
 import { phoneProblem } from '@/lib/validation';
+import { bundleIndex } from '@/lib/bundle';
 import AdminMap, { type SeatLook } from './AdminMap';
 
 type NotifyPublic = {
@@ -271,6 +272,21 @@ function Price() {
   const [blks, setBlks] = useState<Set<string>>(new Set());
   const [rowText, setRowText] = useState('');
   const [ruleNote, setRuleNote] = useState<{ err: boolean; text: string } | null>(null);
+  const [bsize, setBsize] = useState('2');
+  const bidx = bundleIndex(st.seats);
+  const bundleSummary = (() => {
+    const per = new Map<number, number>();
+    bidx.groups.forEach((g) => { const r = st.seats.find((x) => x.id === g[0].id)!.row; per.set(r, (per.get(r) ?? 0) + 1); });
+    return [...per].sort((a, b) => a[0] - b[0]).map(([r, n]) => `${r === 0 ? 'VIP' : r === -1 ? '輪椅' : `第${r}排`} ${n} 組`).join('、');
+  })();
+  async function makeBundles(clear: boolean) {
+    const r = await act(clear ? { action: 'bundle.clear', rows: [...rows], blocks: [...blks] } : { action: 'bundle.create', rows: [...rows], blocks: [...blks], size: parseInt(bsize) || 2 });
+    if (!r) return;
+    if (clear) { const d = r as { cleared: number }; setRuleNote({ err: false, text: d.cleared ? `已取消 ${d.cleared} 組連座（第 ${rowsText(rows)} 排），改回單人選位` : '這些座位原本就沒有連座' }); return; }
+    const d = r as { groups: number; perRow: Record<string, number>; leftovers: string[] };
+    const per = Object.entries(d.perRow).map(([k, n]) => `${k === '0' ? 'VIP' : `第${k}排`} ${n} 組`).join('、');
+    setRuleNote({ err: false, text: `已建立 ${d.groups} 組連座（${per}），${parseInt(bsize) || 2} 位一組${d.leftovers.length ? `；湊不滿一組、維持單人：${d.leftovers.join('、')}` : ''}` });
+  }
   const zoneName = (id: number) => zoneById[id]?.name || '（未命名）';
   const toggle = <T,>(set: Set<T>, v: T) => { const n = new Set(set); if (n.has(v)) n.delete(v); else n.add(v); return n; };
 
@@ -313,8 +329,9 @@ function Price() {
                 </div></td>
                 <td><input key={`n${z.id}-${z.name}`} defaultValue={z.name} placeholder="例：A區、學生票" className={z.name ? '' : 'need'}
                   onBlur={(e) => e.target.value.trim() !== z.name && act({ action: 'zone.update', id: z.id, values: { name: e.target.value.trim() } })} /></td>
-                <td><input key={`p${z.id}-${z.price}`} defaultValue={z.price || ''} placeholder="請填票價" inputMode="numeric" className={`mono ${z.price ? '' : 'need'}`} style={{ width: 110 }}
-                  onBlur={(e) => { const v = parseInt(e.target.value.replace(/[^\d]/g, '')) || 0; if (v !== z.price) act({ action: 'zone.update', id: z.id, values: { price: v } }); }} /></td>
+                <td><input key={`p${z.id}-${z.price}`} defaultValue={z.price} placeholder="請填票價" inputMode="numeric" className="mono" style={{ width: 110 }}
+                  onBlur={(e) => { const v = parseInt(e.target.value.replace(/[^\d]/g, '')) || 0; if (v !== z.price) act({ action: 'zone.update', id: z.id, values: { price: v } }); }} />
+                  {z.price === 0 && <div className="small muted">0＝贈票，只能透過組合票</div>}</td>
                 <td className="mono">{z.seatCount}</td>
                 <td><button className="btn small danger" disabled={busy} onClick={() => confirm2(`zdel${z.id}`, () => act({ action: 'zone.delete', id: z.id }, '已刪除票種'))}>{sure === `zdel${z.id}` ? '再按一次確認' : '刪除'}</button></td>
               </tr>
@@ -355,6 +372,14 @@ function Price() {
           </div>
           {ruleNote && <div className={`note ${ruleNote.err ? 'err' : 'ok'}`} style={{ marginTop: 8 }}>{ruleNote.text}</div>}
           <p className="small muted">也可以直接在座位圖上點按或拖曳，把座位改成上面選的票種。</p>
+          <h3>連座（按一下選整組）</h3>
+          <p className="small muted" style={{ margin: '0 0 6px' }}>用上面選的排與區塊，由左到右每幾位綁成一組，不會跨走道。例：贈票區第 2、3 排兩位一組 → 每排 17 組。消費者按其中一位就會選到整組。</p>
+          <div className="row">
+            <label className="f" style={{ width: 90 }}>每組幾位<input value={bsize} inputMode="numeric" onChange={(e) => setBsize(e.target.value.replace(/\D/g, ''))} /></label>
+            <button className="btn pri" style={{ alignSelf: 'flex-end' }} disabled={busy || !rows.size} onClick={() => makeBundles(false)}>建立連座</button>
+            <button className="btn" style={{ alignSelf: 'flex-end' }} disabled={busy || !rows.size} onClick={() => makeBundles(true)}>取消連座</button>
+          </div>
+          <p className="small" style={{ margin: '6px 0 0' }}>目前連座：{bundleSummary || <span className="muted">無</span>}</p>
           <h3>座位編號（排-席次-區）</h3>
           <p className="small" style={{ margin: 0 }}>例：<b className="mono">03-15-L1</b> 是第3排15號、左區。VIP 排的排號為 V，輪椅席為 WC。區塊：L2 左側區、L1 左區、C0 中區、R1 右區、R2 右側區。</p>
         </div></div>

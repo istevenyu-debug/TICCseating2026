@@ -58,6 +58,8 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
+  z.object({ action: z.literal('bundle.create'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int() }),
+  z.object({ action: z.literal('bundle.clear'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5) }),
 ]);
 
 /** 寄出待寄通知，並回報這筆訂單或連結剛產生的通知結果 */
@@ -109,6 +111,8 @@ export async function POST(req: Request) {
       case 'notify.save': return saveNotifyConfig(db, who, a.values);
       case 'notify.test': return sendTest(db, a.channel, a.to);
       case 'notify.resend': return resendNotification(db, who, a.id);
+      case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);
+      case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
     }
   });
 }

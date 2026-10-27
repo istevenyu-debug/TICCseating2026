@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { bundleClass, bundleIndex } from '@/lib/bundle';
 import type { BookingState } from '@/lib/booking';
 import { inkFor } from '@/lib/color';
 
@@ -21,6 +22,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
   const [cell, setCell] = useState(22);
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
+  const { linkRight, groups } = bundleIndex(seats);
 
   const rows: { y: number; label: string }[] = [];
   if (vipInstalled) rows.push({ y: 1, label: 'VIP' });
@@ -38,6 +40,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
           <span><i style={{ background: 'var(--pending)' }} />待確認</span>
           <span><i style={{ background: 'var(--sold)' }} />已售出</span>
           <span><i style={{ borderStyle: 'dashed' }} />不開放</span>
+          {groups.size > 0 && <span><i className="pairi" />連座：按一下選整組</span>}
         </div>
         <span className="row zoom small muted">
           縮放
@@ -55,12 +58,12 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
             const z = zone[s.zoneId];
             const isSel = selected.has(s.id);
             const clickable = !locked && (s.status === 'free' || isSel);
-            const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}`;
+            const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
             return (
               <button
                 key={s.id}
                 type="button"
-                className={`seat${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}`}
+                className={`seat${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={s.status}
                 style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color, color: z && (s.status === 'free' || isSel) ? inkFor(z.color) : undefined }}
                 title={title}
@@ -76,7 +79,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
         </div>
       </div>
       <p className="small muted" style={{ margin: '10px 0 0' }}>
-        單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消。游標停在座位上可看座位編號（排-席次-區）。
+        單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消；連座（下緣有粗線、彼此相連）按一下會同時選整組。游標停在座位上可看座位編號（排-席次-區）。
       </p>
     </div>
   );

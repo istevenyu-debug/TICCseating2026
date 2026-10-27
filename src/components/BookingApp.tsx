@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookingState } from '@/lib/booking';
 import { calcAmount, comboDesc, comboProblem, comboSets } from '@/lib/pricing';
 import { autoHolders, phoneProblem } from '@/lib/validation';
+import { bundleIndex } from '@/lib/bundle';
 import PushCard from './PushCard';
 import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
@@ -157,22 +158,30 @@ export default function BookingApp({ code }: { code: string }) {
   const prices = zonesSel.map((z) => zoneBy[z]?.price ?? 0);
   const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放票種';
   const cur = st.combos.find((c) => c.id === combo) ?? st.combos.find((c) => c.isSingle) ?? st.combos[0];
-  const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets, zoneName) : '目前沒有開放的購票方式';
+  const giftZones = new Set(st.zones.filter((z) => z.price === 0).map((z) => z.id));
+  const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets, zoneName, giftZones) : '目前沒有開放的購票方式';
   const sets = cur && !cur.isSingle ? comboSets(cur, zonesSel) : 1;
   const amount = held ? held.amount : cur ? calcAmount(prices, cur, sets) : 0;
   const open = st.sale === 'open';
   const heldAuto = !!held && !!st.combos.find((c) => c.id === held.comboId)?.autoHolders;
   const autoList = held && form && heldAuto ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
 
+  const bidx = bundleIndex(st.seats);
   function toggle(id: string) {
     setMsg(null);
+    const members = bidx.membersOf(id, seatById[id]?.bundle); // 連座：整組一起選或取消
     setSel((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else if (next.size >= st!.canBuy) {
-        setMsg({ kind: 'err', text: st!.canBuy > 0 ? `此連結最多可再訂 ${st!.canBuy} 張。` : '此連結的可訂張數已用完。' });
+      if (members.some((m) => next.has(m))) { members.forEach((m) => next.delete(m)); return next; }
+      if (members.some((m) => seatById[m]?.status !== 'free')) {
+        setMsg({ kind: 'err', text: '這組連座中有座位已被訂走，請改選其他座位。' });
         return prev;
-      } else next.add(id);
+      }
+      if (next.size + members.length > st!.canBuy) {
+        setMsg({ kind: 'err', text: st!.canBuy > 0 ? `此連結最多可再訂 ${st!.canBuy} 張${members.length > 1 ? `（這組連座為 ${members.length} 位）` : ''}。` : '此連結的可訂張數已用完。' });
+        return prev;
+      }
+      members.forEach((m) => next.add(m));
       return next;
     });
   }
@@ -285,7 +294,7 @@ export default function BookingApp({ code }: { code: string }) {
               <h3>購票方式</h3>
               <div className="combos">
                 {st.combos.map((c) => {
-                  const why = comboProblem(c, zonesSel, c.usedSets, zoneName);
+                  const why = comboProblem(c, zonesSel, c.usedSets, zoneName, giftZones);
                   const dis = !!why && ids.length > 0;
                   const desc = c.isSingle ? '依各票種票價計算'
                     : `${comboDesc(c, zoneName)}・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;

@@ -43,13 +43,13 @@ export async function getAdminState(db: Db, now = new Date()) {
   const seatRows = await db.select({
     id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo,
     seatType: t.venueSeat.seatType, block: t.venueSeat.block, code: t.venueSeat.code,
-    zoneId: t.eventSeat.zoneId, usageId: t.eventSeat.usageId, status: t.eventSeat.status, orderId: t.eventSeat.orderId,
+    zoneId: t.eventSeat.zoneId, usageId: t.eventSeat.usageId, status: t.eventSeat.status, orderId: t.eventSeat.orderId, bundle: t.eventSeat.bundle,
   }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
     .where(eq(t.eventSeat.eventId, ev.id));
   const seats = seatRows.map((s) => ({
     id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, block: s.block, code: s.code,
-    row: rowKey(s), label: seatLabel(s), zoneId: s.zoneId, usageId: s.usageId, status: s.status, orderId: s.orderId,
+    row: rowKey(s), label: seatLabel(s), zoneId: s.zoneId, usageId: s.usageId, status: s.status, orderId: s.orderId, bundle: s.bundle,
     installed: s.seatType !== 'vip' || evNow.vipInstalled,
   }));
   const seatById = Object.fromEntries(seats.map((s) => [s.id, s]));
@@ -163,8 +163,12 @@ export async function publish(db: Db, actor: string, now = new Date()) {
     .from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
   const combos = await loadCombos(db, ev.id);
   const d = draftOf(ev, zones, combos);
-  const bad = zones.filter((z) => d.zoneIds.includes(z.id) && (!z.name || !(z.price > 0)));
+  const bad = zones.filter((z) => d.zoneIds.includes(z.id) && (!z.name || !(z.price >= 0)));
   if (bad.length) throw new BookingError('INVALID', '有開放的票種還沒填名稱或票價，請先補齊再發布。');
+  // 票價 0＝贈票，只能透過組合票取得；必須有開放的組合票用到它
+  const gifts = zones.filter((z) => d.zoneIds.includes(z.id) && z.price === 0);
+  const orphan = gifts.filter((z) => !combos.some((c) => d.comboIds.includes(c.id) && !c.isSingle && c.items.some((i) => i.zoneId === z.id)));
+  if (orphan.length) throw new BookingError('INVALID', `「${orphan[0].name}」票價為 0（贈票），但沒有開放的組合票包含它。請在組合票（例如功德組）加入它，或填寫票價。`);
   const badCombo = combos.filter((c) => d.comboIds.includes(c.id) && !c.isSingle && (!c.name || !(c.price > 0) || !c.items.length));
   if (badCombo.length) throw new BookingError('INVALID', `組合「${badCombo[0].name || '未命名'}」還沒填完名稱、內容或套票價格，請先補齊再發布。`);
   const published: t.Published = { ...d, at: now.toISOString() };
@@ -225,6 +229,70 @@ export async function assignZoneSeats(db: Db, actor: string, zoneId: number, sea
     .returning({ seatId: t.eventSeat.seatId });
   await audit(db, actor, 'assign_zone', `zone:${zoneId}`, { count: done.length });
   return { updated: done.length, skipped: seatIds.length - done.length };
+}
+
+/* ---------- 連座 ---------- */
+
+/**
+ * 依排數與區塊建立連座：每排每個區塊由左到右，每 size 位一組（不跨走道）。
+ * 例：第 2、3 排（左 12、中 10、右 12）兩位一組 → 每排 17 組。
+ * 這些座位原有的連座會先拆掉；有訂單的座位不能改。湊不滿一組的座位維持單人。
+ */
+export async function bundleByRule(db: Db, actor: string, rows: number[], blocks: string[], size: number) {
+  const ev = await currentEvent(db);
+  if (!rows.length) throw new BookingError('INVALID', '請選擇排數');
+  if (!Number.isInteger(size) || size < 2 || size > 10) throw new BookingError('INVALID', '每組人數請填 2–10');
+  const blk = new Set(blocks.length ? blocks : BLOCKS);
+  const vs = (await db.select().from(t.venueSeat)).filter((s) => rows.includes(rowKey(s)) && blk.has(s.block as Block));
+  if (!vs.length) throw new BookingError('INVALID', '沒有符合條件的座位');
+  return db.transaction(async (tx) => {
+    const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, vs.map((s) => s.id))));
+    const busy = es.filter((s) => s.status !== 'free');
+    if (busy.length) throw new BookingError('BUSY', `其中有 ${busy.length} 席已有訂單或暫存，不能改連座。請先處理這些訂單，或不要選這幾排。`);
+    await clearBundles(tx, ev.id, es.map((s) => s.bundle).filter((b): b is string => !!b));
+    const perRow: Record<number, number> = {};
+    const leftovers: string[] = [];
+    let groups = 0;
+    const byRowBlock = new Map<string, typeof vs>();
+    for (const s of vs) {
+      const k = `${rowKey(s)}|${s.block}`;
+      if (!byRowBlock.has(k)) byRowBlock.set(k, []);
+      byRowBlock.get(k)!.push(s);
+    }
+    const stamp = Date.now().toString(36);
+    for (const [k, list] of byRowBlock) {
+      list.sort((a, b) => a.x - b.x);
+      const row = Number(k.split('|')[0]);
+      for (let i = 0; i + size <= list.length; i += size) {
+        const g = list.slice(i, i + size);
+        await tx.update(t.eventSeat).set({ bundle: `${stamp}-${g[0].id}` })
+          .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, g.map((s) => s.id))));
+        groups++; perRow[row] = (perRow[row] ?? 0) + 1;
+      }
+      const rest = list.length % size;
+      if (rest) list.slice(-rest).forEach((s) => leftovers.push(seatLabel(s)));
+    }
+    await tx.insert(t.auditLog).values({ actor, action: 'bundle_create', target: `event:${ev.id}`, detail: JSON.stringify({ rows, blocks, size, groups }) });
+    return { groups, perRow, leftovers };
+  });
+}
+
+/** 取消連座：這些排／區塊的座位改回單人選位（整組拆開，包含組內其他位） */
+export async function unbundleByRule(db: Db, actor: string, rows: number[], blocks: string[]) {
+  const ev = await currentEvent(db);
+  if (!rows.length) throw new BookingError('INVALID', '請選擇排數');
+  const blk = new Set(blocks.length ? blocks : BLOCKS);
+  const ids = (await db.select().from(t.venueSeat)).filter((s) => rows.includes(rowKey(s)) && blk.has(s.block as Block)).map((s) => s.id);
+  if (!ids.length) return { cleared: 0 };
+  const es = await db.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
+  const keys = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];
+  await clearBundles(db, ev.id, keys);
+  await audit(db, actor, 'bundle_clear', `event:${ev.id}`, { rows, blocks, groups: keys.length });
+  return { cleared: keys.length };
+}
+
+async function clearBundles(db: Db, eventId: number, keys: string[]) {
+  if (keys.length) await db.update(t.eventSeat).set({ bundle: null }).where(and(eq(t.eventSeat.eventId, eventId), inArray(t.eventSeat.bundle, keys)));
 }
 
 /* ---------- 席位用途 ---------- */
