@@ -72,6 +72,7 @@ export default function AdminApp() {
   const [st, setSt] = useState<State | null>(null);
   const [tab, setTab] = useState<Tab>('home');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  useEffect(() => { if (msg?.kind !== 'ok') return; const id = setTimeout(() => setMsg(null), 6000); return () => clearTimeout(id); }, [msg]);
   const [busy, setBusy] = useState(false);
   const [sure, setSure] = useState<string | null>(null); // 二次確認的按鈕
   const [, tick] = useState(0);
@@ -143,7 +144,8 @@ export default function AdminApp() {
         ))}
       </nav>
 
-      {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}>{msg.text}</div>}
+      {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}
+        style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
 
       {st.stats.newOrders > 0 && (
         <div className="alertbar">
@@ -443,7 +445,7 @@ function Settings() {
 /* ---------- 專屬連結 ---------- */
 function Links() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
-  const [f, setF] = useState({ name: '', phone: '', quota: '0', expiresAt: '' });
+  const [f, setF] = useState({ name: '', phone: '', quota: '21', expiresAt: toDateInput(st.event.showAt) });
   const base = typeof window !== 'undefined' ? location.origin : '';
   const pubLink = st.links.find((l) => l.kind === 'public');
   const [pv, setPv] = useState({ start: toLocalInput(st.event.publicSaleStart), perPhone: String(st.event.publicPerPhone) });
@@ -516,7 +518,13 @@ function Links() {
         <h2>發出新連結</h2>
         <form onSubmit={async (e) => {
           e.preventDefault();
-          const r = await act({ action: 'link.create', name: f.name, phone: f.phone, quota: parseInt(f.quota) || 0, expiresAt: f.expiresAt }, `已為 ${f.name} 產生專屬連結`);
+          const miss = [!f.name.trim() && '對象姓名', !f.phone.trim() && '手機', !f.expiresAt && '有效期限'].filter(Boolean);
+          if (miss.length) { setMsg({ kind: 'err', text: `請填寫：${miss.join('、')}` }); return; }
+          const digits = f.phone.replace(/\D/g, '');
+          if (!/^09\d{8}$/.test(digits)) { setMsg({ kind: 'err', text: '手機格式應為 09 開頭的 10 位數字，例如 0912-345-678' }); return; }
+          const q = parseInt(f.quota.trim() || '0');
+          if (!Number.isInteger(q) || q < 0 || q > 200) { setMsg({ kind: 'err', text: '可購張數請填 0–200 的整數（0＝不限）' }); return; }
+          const r = await act({ action: 'link.create', name: f.name.trim(), phone: digits, quota: q, expiresAt: f.expiresAt }, `已為 ${f.name.trim()} 產生專屬連結，請在左側清單按「複製連結」`);
           if (r) setF({ name: '', phone: '', quota: f.quota, expiresAt: f.expiresAt });
         }}>
           <label className="f">對象姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
@@ -525,7 +533,7 @@ function Links() {
             <label className="f">可購張數（0＝不限）<input value={f.quota} inputMode="numeric" onChange={(e) => setF({ ...f, quota: e.target.value })} /></label>
           </div>
           <label className="f" style={{ marginTop: 8 }}>有效期限（當天 23:59 止）<input type="date" value={f.expiresAt} onChange={(e) => setF({ ...f, expiresAt: e.target.value })} /></label>
-          <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !f.name || !f.phone || !f.expiresAt}>產生專屬連結</button>
+          <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy}>{busy ? '處理中…' : '產生專屬連結'}</button>
         </form>
       </div></div>
     </div>

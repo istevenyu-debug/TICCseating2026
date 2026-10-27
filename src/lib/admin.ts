@@ -296,7 +296,7 @@ export async function createInviteLink(db: Db, actor: string, v: { name: string;
     const [l] = await db.insert(t.inviteLink).values({ eventId: ev.id, code, ...v }).returning();
     await db.insert(t.notification).values({
       linkId: l.id, channel: 'sms', template: 'invite', recipient: v.phone,
-      content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code)} 可訂 ${v.quota} 張。`,
+      content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code)} 可訂 ${v.quota || '不限'} 張。`,
     });
     await audit(db, actor, 'link_create', `link:${l.id}`, { name: v.name, quota: v.quota });
     return l;
