@@ -432,7 +432,7 @@ function Settings() {
       </div>
       <button className="btn pri" style={{ marginTop: 10 }} disabled={busy} onClick={() => act({ action: 'event.update', values: {
         name: v.name, saleStart: fromLocalInput(v.saleStart), saleEnd: fromLocalInput(v.saleEnd),
-        maxPerOrder: parseInt(v.maxPerOrder) || 6, holdMinutes: parseInt(v.holdMinutes) || 20, payHours: parseInt(v.payHours) || 48,
+        maxPerOrder: parseInt(v.maxPerOrder) || 21, holdMinutes: parseInt(v.holdMinutes) || 20, payHours: parseInt(v.payHours) || 48,
         bankName: v.bankName, bankAccount: v.bankAccount, accountName: v.accountName,
       } }, '已儲存。時間與匯款帳戶立即生效，不需發布。')}>儲存這些設定</button>
     </>

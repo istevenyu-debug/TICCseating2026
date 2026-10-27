@@ -318,11 +318,32 @@ describe('公開連結（先專屬、再公開）', () => {
     expect(b.orders).toHaveLength(1); // 只看到自己的訂單
   });
 
-  it('專屬連結張數 0 = 不限（仍受每筆上限）', async () => {
+  it('專屬連結張數 0 = 不限（仍受每筆上限 21 張）', async () => {
     await A.createInviteLink(db, who, { name: '丁', phone: '0944444444', quota: 0, expiresAt: EXP });
     const st = await A.getAdminState(db, T0);
     const code = st.links.find((l) => l.name === '丁')!.code;
     const s = await getBookingState(db, code, T0);
-    expect(s.canBuy).toBe(6);
+    expect(s.canBuy).toBe(21);
+  });
+});
+
+describe('每筆訂單上限 21 張', () => {
+  beforeEach(setup);
+
+  it('預設每筆上限 21 張；一次可訂 21 張並送出，第 22 張不行', async () => {
+    const [ev] = await db.select().from(t.event).where(eq(t.event.id, eventId));
+    expect(ev.maxPerOrder).toBe(21);
+    await createLink(db, { eventId, code: 'CCC333', name: '丙', phone: '0933333333', quota: 30, expiresAt: EXP });
+    const ids = buildSeats().filter((s) => s.seatType === 'normal' && (s.rowNo ?? 0) >= 10).map((s) => s.id);
+    await expectCode(holdSeats(db, 'CCC333', ids.slice(0, 22), SINGLE(), T0), 'QUOTA');
+    const h = await holdSeats(db, 'CCC333', ids.slice(0, 21), SINGLE(), T0);
+    await expect(submitOrder(db, 'CCC333', submitBody(h.orderId, ids.slice(0, 21), h.amount), min(1))).resolves.toBeTruthy();
+  });
+
+  it('後台可把每筆上限設為 21 以上', async () => {
+    const who = 'tester';
+    await A.updateEventSettings(db, who, { maxPerOrder: 30 });
+    const [ev] = await db.select().from(t.event).where(eq(t.event.id, eventId));
+    expect(ev.maxPerOrder).toBe(30);
   });
 });

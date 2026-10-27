@@ -37,7 +37,7 @@ export const event = pgTable('event', {
   saleOpen: boolean('sale_open').notNull().default(false),
   saleStart: timestamp('sale_start', { withTimezone: true }),
   saleEnd: timestamp('sale_end', { withTimezone: true }),
-  maxPerOrder: integer('max_per_order').notNull().default(6),
+  maxPerOrder: integer('max_per_order').notNull().default(21),
   holdMinutes: integer('hold_minutes').notNull().default(20),
   payHours: integer('pay_hours').notNull().default(48),
   bankName: text('bank_name').notNull().default(''),

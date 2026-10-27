@@ -15,9 +15,9 @@ const date = z.string().nullable().transform((s) => (s ? new Date(s) : null))
 const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('event.update'), values: z.object({
     name: z.string().trim().min(1).max(80), saleOpen: z.boolean(), saleStart: date, saleEnd: date,
-    maxPerOrder: z.number().int().min(1).max(20), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
+    maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
     bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(),
-    publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(20),
+    publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(200),
   }).partial() }),
   z.object({ action: z.literal('link.createPublic') }),
   z.object({ action: z.literal('publish') }),
@@ -37,9 +37,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('combo.delete'), id }),
   z.object({ action: z.literal('link.create'), name: z.string().trim().min(1).max(40),
     phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機格式應為 09xxxxxxxx')),
-    quota: z.number().int().min(0).max(20), expiresAt: z.string() }),
+    quota: z.number().int().min(0).max(200), expiresAt: z.string() }),
   z.object({ action: z.literal('link.update'), id, values: z.object({
-    quota: z.number().int().min(0).max(20), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
+    quota: z.number().int().min(0).max(200), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
   }).partial() }),
   z.object({ action: z.literal('order.seen'), id }),
   z.object({ action: z.literal('order.confirm'), id, date: z.string().min(1), amount: money, note: z.string().max(200).optional() }),

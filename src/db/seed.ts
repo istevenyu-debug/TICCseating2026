@@ -36,7 +36,7 @@ export async function createEvent(db: Db, input: CreateEventInput) {
       showAt: input.showAt,
       vipInstalled: input.vipInstalled ?? true,
       saleOpen: input.saleOpen ?? true,
-      maxPerOrder: input.maxPerOrder ?? 6,
+      maxPerOrder: input.maxPerOrder ?? 21,
       holdMinutes: input.holdMinutes ?? 20,
       payHours: input.payHours ?? 48,
       bankName: input.bankName ?? '',

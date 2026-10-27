@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const normalizePhone = (s: string) => s.replace(/[\s-]/g, '');
 
 export const holdInput = z.object({
-  seatIds: z.array(z.string().min(1).max(16)).min(1).max(20),
+  seatIds: z.array(z.string().min(1).max(16)).min(1).max(200),
   comboId: z.number().int().positive(),
 });
 
