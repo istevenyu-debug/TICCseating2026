@@ -67,7 +67,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     return {
       id: o.id, orderNo: o.orderNo, status: o.status, amount: o.amount, comboName: `${comboById[o.comboId]?.name ?? ''}${o.sets > 1 ? ` ×${o.sets} 組` : ''}`,
       buyerName: o.buyerName ?? linkById[o.linkId]?.name ?? '', buyerPhone: o.buyerPhone ?? '', buyerEmail: o.buyerEmail ?? '',
-      linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal',
+      linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal', linkName: linkById[o.linkId]?.name ?? '', linkNote: linkById[o.linkId]?.note ?? '',
       createdAt: o.createdAt.toISOString(), submittedAt: o.submittedAt?.toISOString() ?? null,
       holdUntil: o.holdUntil?.toISOString() ?? null, payDueAt: o.payDueAt?.toISOString() ?? null,
       isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason,
@@ -113,7 +113,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     event: {
       id: evNow.id, name: evNow.name, showAt: evNow.showAt.toISOString(), vipInstalled: evNow.vipInstalled, saleOpen: evNow.saleOpen,
       saleStart: evNow.saleStart?.toISOString() ?? null, saleEnd: evNow.saleEnd?.toISOString() ?? null,
-      maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours,
+      maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours, payFirst: evNow.payFirst,
       bankName: evNow.bankName, bankAccount: evNow.bankAccount, accountName: evNow.accountName,
       publicSaleStart: evNow.publicSaleStart?.toISOString() ?? null, publicPerPhone: evNow.publicPerPhone,
     },
@@ -124,7 +124,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     seats, orders,
     links: links.map((l) => ({
       id: l.id, code: l.code, kind: l.kind, name: l.name, phone: l.phone, quota: l.quota, used: usedByLink.get(l.id) ?? 0,
-      expiresAt: l.expiresAt.toISOString(), status: l.status,
+      expiresAt: l.expiresAt.toISOString(), status: l.status, note: l.note,
     })),
     stats,
   };
@@ -144,7 +144,7 @@ function draftOf(ev: typeof t.event.$inferSelect, zones: { id: number; open: boo
 
 export async function updateEventSettings(db: Db, actor: string, v: Partial<{
   name: string; showAt: Date; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
-  payHours: number; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
+  payHours: number; payFirst: boolean; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
   publicSaleStart: Date | null; publicPerPhone: number;
 }>) {
   const ev = await currentEvent(db);
@@ -465,14 +465,15 @@ export function linkUrl(code: string, base?: string) {
   return `${b}/t/${code}`;
 }
 
-export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date }, base?: string) {
+export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date; note?: string }, base?: string) {
   const ev = await currentEvent(db);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
     const [exists] = await db.select({ id: t.inviteLink.id }).from(t.inviteLink).where(eq(t.inviteLink.code, code));
     if (exists) continue;
-    const [l] = await db.insert(t.inviteLink).values({ eventId: ev.id, code, ...v }).returning();
-    await db.insert(t.notification).values({
+    const [l] = await db.insert(t.inviteLink).values({ eventId: ev.id, code, ...v, note: v.note ?? '' }).returning();
+    // 有填手機才寄簡訊；沒填就由主辦方自行複製連結貼給當事人
+    if (v.phone) await db.insert(t.notification).values({
       linkId: l.id, channel: 'sms', template: 'invite', recipient: v.phone,
       content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code, base)} 可訂 ${v.quota || '不限'} 張，${v.expiresAt.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' })} 前有效。`,
     });

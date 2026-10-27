@@ -6,7 +6,7 @@ import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { holdSeats, submitOrder } from '@/lib/booking';
 import { saveSubscription } from '@/lib/push';
-import { dispatchQueued, mitakeSend, publicNotifyConfig, resendNotification, saveNotifyConfig, sendTest, type Senders } from '@/lib/notify';
+import { dispatchQueued, mitakeSend, publicNotifyConfig, resendNotification, saveNotifyConfig, sendTest, type MailExtra, type Senders } from '@/lib/notify';
 
 const T0 = new Date('2026-11-15T10:00:00+08:00');
 const EXP = new Date('2026-12-10T23:59:59+08:00');
@@ -162,5 +162,38 @@ describe('App 推播', () => {
     expect(st.inbox[0]).toMatchObject({ template: 'order_confirmed' });
     expect(st.inbox[0].id).toBeGreaterThan(0);
     expect(st.inbox.filter((n) => n.template === 'order_confirmed')).toHaveLength(1); // 簡訊、Email、推播只顯示一次
+  });
+});
+
+describe('先匯款再給連結', () => {
+  it('不用填匯款資料、送出後不會逾期取消；連結只填姓名不寄簡訊、保存來帳備註', async () => {
+    const l = await A.createInviteLink(db, 'admin', { name: '陳小美', phone: '', quota: 0, expiresAt: EXP, note: '末五碼 12345、NT$3,200' });
+    expect(l.note).toBe('末五碼 12345、NT$3,200');
+    expect(await db.select().from(t.notification).where(eq(t.notification.linkId, l.id))).toHaveLength(0);
+    const h = await holdSeats(db, l.code, ['5-1'], single, T0);
+    const r = await submitOrder(db, l.code, {
+      orderId: h.orderId, buyer: { name: '陳小美', phone: '0912345678', email: 'mei@example.com' },
+      holders: [{ seatId: '5-1', name: '陳小美', id4: 'B234' }], agree: true,
+    }, T0);
+    expect(r.amountMismatch).toBe(false);
+    const { getBookingState } = await import('@/lib/booking');
+    const later = await getBookingState(db, l.code, new Date(T0.getTime() + 20 * 86400_000));
+    expect(later.orders[0].status).toBe('pending'); // 20 天後仍在，不會被取消
+    expect(later.event.bankAccount).toBe(''); // 購票頁不顯示匯款帳戶
+  });
+
+  it('劃位成功 Email 附每張票的 QR code（序號與入場券相同）', async () => {
+    await configure();
+    const id = await order();
+    await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0);
+    const mails: { subject: string; extra?: MailExtra }[] = [];
+    await dispatchQueued(db, { ...fake().s, email: async (_c, _to, subject, _text, extra) => { mails.push({ subject, extra }); } });
+    const m = mails.find((x) => x.subject === '劃位成功通知')!;
+    expect(m.extra!.attachments).toHaveLength(1);
+    expect(m.extra!.attachments![0].filename).toBe('T1-00001-01.png');
+    expect(m.extra!.attachments![0].content.subarray(1, 4).toString()).toBe('PNG');
+    expect(m.extra!.html).toContain('cid:qr0@ticket');
+    expect(m.extra!.html).toContain('T1-00001-01');
+    expect(m.extra!.html).toContain('王○明');
   });
 });

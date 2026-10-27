@@ -178,3 +178,8 @@ input.need { border-color: var(--red); }
 .seat.bl::after { content: ''; position: absolute; top: 30%; right: -5px; width: 8px; height: 40%; background: inherit; z-index: 2;
   border-top: 1px solid rgba(0, 0, 0, .3); border-bottom: 1px solid rgba(0, 0, 0, .3); pointer-events: none; }
 .legend i.pairi { width: 26px; box-shadow: inset 0 -3px 0 rgba(0, 0, 0, .3); }
+
+/* 不屬於目前購票方式的座位 */
+.seat.off { opacity: .28; cursor: not-allowed; }
+/* 送出前確認 */
+.review { border: 2px solid var(--accent); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }

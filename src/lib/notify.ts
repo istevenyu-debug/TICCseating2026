@@ -80,20 +80,22 @@ const SUBJECT: Record<string, string> = {
   test: '測試信',
 };
 
+export interface MailExtra { html?: string; attachments?: { filename: string; content: Buffer; cid: string }[] }
+
 export interface Senders {
-  email: (cfg: EmailConfig, to: string, subject: string, text: string) => Promise<void>;
+  email: (cfg: EmailConfig, to: string, subject: string, text: string, extra?: MailExtra) => Promise<void>;
   sms: (cfg: SmsConfig, phone: string, text: string) => Promise<void>;
   push?: PushSender;
 }
 
-async function smtpSend(cfg: EmailConfig, to: string, subject: string, text: string) {
+async function smtpSend(cfg: EmailConfig, to: string, subject: string, text: string, extra?: MailExtra) {
   const nodemailer = (await import('nodemailer')).default;
   const tr = nodemailer.createTransport({
     host: cfg.host, port: cfg.port, secure: cfg.port === 465, auth: { user: cfg.user, pass: cfg.pass },
     connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 30_000,
   });
   try {
-    await tr.sendMail({ from: cfg.fromName ? { name: cfg.fromName, address: cfg.user } : cfg.user, to, subject, text });
+    await tr.sendMail({ from: cfg.fromName ? { name: cfg.fromName, address: cfg.user } : cfg.user, to, subject, text, html: extra?.html, attachments: extra?.attachments });
   } catch (e) {
     const m = String((e as Error).message ?? e);
     if (/535|Username and Password not accepted|Invalid login|BadCredentials/i.test(m)) {
@@ -161,13 +163,50 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
   if (!c) return set({ status: 'simulated', error: isSms ? '尚未設定簡訊帳號，只存紀錄' : '尚未設定 Email 寄件帳號，只存紀錄' });
   try {
     if (isSms) await senders.sms(c as SmsConfig, n.recipient, n.content);
-    else await senders.email(c as EmailConfig, n.recipient, SUBJECT[n.template] ?? '通知', n.content);
+    else await senders.email(c as EmailConfig, n.recipient, SUBJECT[n.template] ?? '通知', n.content,
+      n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content) : undefined);
     await set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1 });
   } catch (e) {
     const attempts = n.attempts + 1;
     const msg = String((e as Error).message ?? e).slice(0, 300);
     await set(attempts >= MAX_ATTEMPTS ? { status: 'failed', error: msg, attempts } : { error: msg, attempts });
   }
+}
+
+const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const maskBase = (n: string) => (n.length <= 1 ? n : n.length === 2 ? `${n[0]}○` : `${n[0]}${'○'.repeat(n.length - 2)}${n[n.length - 1]}`);
+/** 王大明 → 王○明；自動編號的「王大明02」→「王○明02」 */
+const maskName = (n: string) => { const m = n.match(/^(.*?)(\d+)$/); return m && m[1] ? maskBase(m[1]) + m[2] : maskBase(n); };
+
+/** 劃位成功 Email：每張票一個 QR code（內嵌圖片，與入場券、購票頁的序號相同） */
+export async function ticketMail(db: Db, orderId: number, text: string): Promise<MailExtra> {
+  const { ticketData } = await import('./admin');
+  const QR = (await import('qrcode')).default;
+  const { event, tickets } = await ticketData(db, [orderId]);
+  const attachments: NonNullable<MailExtra['attachments']> = [];
+  const cards: string[] = [];
+  for (const [i, tk] of tickets.entries()) {
+    const cid = `qr${i}@ticket`;
+    attachments.push({ filename: `${tk.serial}.png`, content: await QR.toBuffer(`TICC|${tk.serial}`, { type: 'png', margin: 1, width: 220 }), cid });
+    cards.push(`<table role="presentation" style="border:1px solid #d6dce8;border-radius:10px;margin:0 0 12px;width:100%;max-width:520px"><tr>
+      <td style="padding:12px;width:140px"><img src="cid:${cid}" width="130" height="130" alt="入場 QR code ${esc(tk.serial)}" style="display:block"></td>
+      <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">
+        <div style="font-size:18px;font-weight:700">${esc(tk.label)}</div>
+        <div>座位編號 ${esc(tk.code)}・${esc(tk.zoneName)}</div>
+        <div>持票人 ${esc(maskName(tk.holderName))}（${tk.holderId4.length > 4 ? '證號' : '證末4碼'} ${esc(tk.holderId4)}）</div>
+        ${tk.entrance ? `<div>${esc(tk.entrance)}</div>` : ''}
+        <div style="color:#5b6579;font-family:monospace">序號 ${esc(tk.serial)}</div>
+      </td></tr></table>`);
+  }
+  const when = event.showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+  const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
+    <h2 style="margin:0 0 4px">🎉 劃位成功</h2>
+    <div style="color:#5b6579;margin-bottom:12px">${esc(event.name)}・${esc(when)}・台北國際會議中心 大會堂</div>
+    <p style="margin:0 0 14px">${esc(text)}</p>
+    <p style="margin:0 0 10px"><b>入場時請出示以下 QR code 與身分證件</b>（每張票一個，可截圖保存）：</p>
+    ${cards.join('')}
+    <p style="color:#5b6579;font-size:13px">每個 QR code 只能入場一次，請勿轉傳給他人。</p></div>`;
+  return { html, attachments };
 }
 
 const PUSH_TITLE: Record<string, string> = {

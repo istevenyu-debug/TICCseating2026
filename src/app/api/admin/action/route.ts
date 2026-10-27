@@ -23,7 +23,7 @@ const action = z.discriminatedUnion('action', [
     showAt: z.string().min(1, '請填寫演出時間').transform((s) => new Date(s)).refine((d) => !Number.isNaN(d.getTime()), '演出時間格式不正確'),
     saleOpen: z.boolean(), saleStart: date, saleEnd: date,
     maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
-    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(),
+    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), payFirst: z.boolean(),
     publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(200),
   }).partial() }),
   z.object({ action: z.literal('link.createPublic') }),
@@ -42,9 +42,9 @@ const action = z.discriminatedUnion('action', [
     items: z.array(z.object({ zoneId: id, qty: z.number().int().min(1).max(20) })).max(10),
   }).partial() }),
   z.object({ action: z.literal('combo.delete'), id }),
-  z.object({ action: z.literal('link.create'), name: z.string().trim().min(1).max(40),
-    phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678')),
-    quota: z.number().int().min(0).max(200), expiresAt: z.string() }),
+  z.object({ action: z.literal('link.create'), name: z.string().trim().min(1, '請填寫姓名').max(40),
+    phone: z.string().optional().default('').transform(normalizePhone).pipe(z.string().regex(/^(09\d{8})?$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678（不寄簡訊可留空）')),
+    quota: z.number().int().min(0).max(200), expiresAt: z.string(), note: z.string().trim().max(200).optional() }),
   z.object({ action: z.literal('link.update'), id, values: z.object({
     quota: z.number().int().min(0).max(200), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
   }).partial() }),
@@ -109,7 +109,7 @@ export async function POST(req: Request) {
       case 'combo.update': return A.updateCombo(db, who, a.id, a.values);
       case 'combo.delete': return A.deleteCombo(db, who, a.id);
       case 'link.createPublic': return A.createPublicLink(db, who);
-      case 'link.create': { const l = await A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt) }, originOf(req)); return { ...l, delivery: await deliver(db, { linkId: l.id }) }; }
+      case 'link.create': { const l = await A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt), note: a.note }, originOf(req)); return { ...l, delivery: await deliver(db, { linkId: l.id }) }; }
       case 'link.update': {
         const { expiresAt, ...rest } = a.values;
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });

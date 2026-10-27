@@ -14,11 +14,13 @@ interface Props {
   selected: Set<string>;
   onToggle: (id: string) => void;
   locked: boolean; // 暫存中：不可再改選
+  /** 目前購票方式可選的票種；其他座位變淡、不能選 */
+  allowed?: Set<number>;
 }
 
 const ROW_LABEL_COLS = [8, 45];
 
-export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, locked }: Props) {
+export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, locked, allowed }: Props) {
   const [cell, setCell] = useState(22);
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
@@ -57,13 +59,14 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
           {seats.map((s) => {
             const z = zone[s.zoneId];
             const isSel = selected.has(s.id);
-            const clickable = !locked && (s.status === 'free' || isSel);
+            const off = !!allowed && s.status === 'free' && !allowed.has(s.zoneId) && !isSel; // 不屬於目前購票方式的座位
+            const clickable = !locked && !off && (s.status === 'free' || isSel);
             const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
             return (
               <button
                 key={s.id}
                 type="button"
-                className={`seat${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
+                className={`seat${off ? ' off' : ''}${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={s.status}
                 style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color, color: z && (s.status === 'free' || isSel) ? inkFor(z.color) : undefined }}
                 title={title}

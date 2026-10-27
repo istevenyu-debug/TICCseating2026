@@ -74,6 +74,7 @@ export default function BookingApp({ code }: { code: string }) {
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
   const [lastOrder, setLastOrder] = useState<string | null>(null);
+  const [review, setReview] = useState(false); // 送出前確認畫面
   const [, tick] = useState(0);
   const offset = useRef(0); // 伺服器時間 − 本機時間
   // 主辦方發來的重要訊息（劃位成功、取消）：看過的最大通知編號存在這支手機，未看過的顯示在頁面最上方
@@ -163,6 +164,19 @@ export default function BookingApp({ code }: { code: string }) {
   const sets = cur && !cur.isSingle ? comboSets(cur, zonesSel) : 1;
   const amount = held ? held.amount : cur ? calcAmount(prices, cur, sets) : 0;
   const open = st.sale === 'open';
+  // 先選購票方式：只開放這個方式用得到的票種座位（單張購票不含贈票）
+  const allowed = new Set(cur && !cur.isSingle ? cur.items.map((i) => i.zoneId) : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
+  const need = cur && !cur.isSingle ? (() => {
+    const cnt = (z: number) => zonesSel.filter((x) => x === z).length;
+    const want = Math.max(1, ...cur.items.map((i) => Math.ceil(cnt(i.zoneId) / i.qty)));
+    return cur.items.map((i) => ({ name: zoneName(i.zoneId), have: cnt(i.zoneId), want: i.qty * want }));
+  })() : null;
+  const pickCombo = (id: number) => {
+    setCombo(id); setMsg(null);
+    const c = st.combos.find((x) => x.id === id);
+    const ok = new Set(c && !c.isSingle ? c.items.map((i) => i.zoneId) : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
+    setSel((p) => new Set([...p].filter((sid) => seatById[sid] && ok.has(seatById[sid].zoneId))));
+  };
   const heldAuto = !!held && !!st.combos.find((c) => c.id === held.comboId)?.autoHolders;
   const autoList = held && form && heldAuto ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
 
@@ -207,14 +221,34 @@ export default function BookingApp({ code }: { code: string }) {
     await load();
   }
 
-  async function doSubmit(e: React.FormEvent) {
+  /** 按「送出」：先檢查，再顯示確認畫面 */
+  function doReview(e: React.FormEvent) {
     e.preventDefault();
     if (!form || !held) return;
-    const pp = phoneProblem(form.phone);
-    if (pp) { setMsg({ kind: 'err', text: pp }); document.getElementById('b-phone')?.focus(); return; }
-    if (heldAuto && !/^[0-9A-Za-z]{4}$/.test(form.idBase.trim())) {
-      setMsg({ kind: 'err', text: '請填寫購票人身分證末 4 碼（4 個英數字）' }); document.getElementById('b-idbase')?.focus(); return;
+    const bad = (text: string, id: string) => { setMsg({ kind: 'err', text }); document.getElementById(id)?.focus(); };
+    if (!form.name.trim()) return bad('請填寫購票人姓名', 'b-name');
+    const pp = form.phone.trim() ? phoneProblem(form.phone) : '請填寫手機';
+    if (pp) return bad(pp, 'b-phone');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return bad('Email 格式不正確，劃位成功與入場 QR code 會寄到這個信箱', 'b-email');
+    if (heldAuto && !/^[0-9A-Za-z]{4}$/.test(form.idBase.trim())) return bad('請填寫購票人身分證末 4 碼（4 個英數字）', 'b-idbase');
+    if (!heldAuto) {
+      for (const id of held.seatIds) {
+        const h = form.holders[id];
+        if (!h?.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的持票人姓名`, `h-n-${id}`);
+        if (!/^[0-9A-Za-z]{4}$/.test(h.id4.trim())) return bad(`${seatById[id]?.label ?? id} 的身分證末 4 碼應為 4 個英數字`, `h-i-${id}`);
+      }
     }
+    if (!st!.event.payFirst) {
+      if (!/^\d{5}$/.test(form.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 't-last5');
+      if (!form.time) return bad('請填寫匯款時間', 't-time');
+    }
+    if (!form.agree) return bad('請勾選同意個資蒐集', 't-agree');
+    setMsg(null); setReview(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function doSubmit() {
+    if (!form || !held) return;
     setBusy(true); setMsg(null);
     const r = await api<{ orderNo: string; amountMismatch: boolean }>(`/api/t/${code}/submit`, {
       orderId: held.orderId,
@@ -223,13 +257,15 @@ export default function BookingApp({ code }: { code: string }) {
         ? held.seatIds.map((id, i) => ({ seatId: id, ...autoList[i] }))
         : held.seatIds.map((id) => ({ seatId: id, ...form.holders[id] })),
       ...(heldAuto ? { idBase: form.idBase.trim().toUpperCase() } : {}),
-      transfer: { last5: form.last5, amount: Number(form.amount.replace(/[^\d]/g, '')) || 0, time: form.time.replace('T', ' ') },
+      ...(st!.event.payFirst ? {} : { transfer: { last5: form.last5, amount: Number(form.amount.replace(/[^\d]/g, '')) || 0, time: form.time.replace('T', ' ') } }),
       agree: form.agree,
     });
     setBusy(false);
-    if (!r.ok) { setMsg({ kind: 'err', text: r.message }); if (r.code.startsWith('HOLD')) await load(); return; }
-    setLastOrder(r.data.orderNo);
-    setMsg({ kind: 'ok', text: `訂購資料已送出（訂單 ${r.data.orderNo}）。主辦方確認到帳後，會以簡訊及 Email 通知劃位結果。${r.data.amountMismatch ? '提醒：您填寫的匯款金額與應付金額不同，主辦方會再與您確認。' : ''}` });
+    if (!r.ok) { setReview(false); setMsg({ kind: 'err', text: r.message }); if (r.code.startsWith('HOLD')) await load(); return; }
+    setLastOrder(r.data.orderNo); setReview(false);
+    setMsg({ kind: 'ok', text: st!.event.payFirst
+      ? `劃位資料已送出（訂單 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
+      : `訂購資料已送出（訂單 ${r.data.orderNo}）。主辦方確認到帳後，會以簡訊及 Email 通知劃位結果。${r.data.amountMismatch ? '提醒：您填寫的匯款金額與應付金額不同，主辦方會再與您確認。' : ''}` });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
   }
@@ -267,15 +303,37 @@ export default function BookingApp({ code }: { code: string }) {
       {(st.orders.some((o) => o.status === 'pending') || !!held) && <PushCard code={code} api={api} compact={false} />}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
+      {!held && (
+        <div className="card">
+          <h2>第一步：選擇購票方式</h2>
+          <div className="combos">
+            {st.combos.map((c) => {
+              const soldOut = c.limitSets > 0 && c.usedSets >= c.limitSets;
+              const desc = c.isSingle ? '依各票種票價計算'
+                : `每組 ${comboDesc(c, zoneName)}・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
+              return (
+                <label key={c.id} className={`combo${soldOut ? ' dis' : ''}`}>
+                  <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={soldOut} onChange={() => pickCombo(c.id)} />
+                  <span><b>{c.name}</b><br /><span className="small muted">{desc}{soldOut ? '｜已售完' : ''}</span></span>
+                </label>
+              );
+            })}
+          </div>
+          {need && <p className="small" style={{ margin: '8px 0 0' }}>第二步：在座位圖上選 {need.map((n) => `${n.name} ${n.want} 位`).join('＋')}（目前 {need.map((n) => `${n.name} ${n.have}/${n.want}`).join('、')}）。連座按一下會選整組。可以選多組。</p>}
+          {cur?.isSingle && <p className="small muted" style={{ margin: '8px 0 0' }}>第二步：在座位圖上點選座位。</p>}
+        </div>
+      )}
+
       <div className="grid2">
-        <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} onToggle={toggle} locked={!!held || !open} />
+        <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} onToggle={toggle} locked={!!held || !open}
+          allowed={held ? undefined : allowed} />
 
         <div className="side">
           {msg && <div className={`note ${msg.kind}`} role="status">{msg.text}</div>}
 
           {!held && (
             <div className="card">
-              <h2>已勾選座位 <span className="small muted">{ids.length} / {st.canBuy} 張</span></h2>
+              <h2>已選座位 <span className="small muted">{ids.length} / {st.canBuy} 張</span></h2>
               {ids.length ? (
                 <div className="sellist">
                   {ids.map((id) => (
@@ -289,23 +347,9 @@ export default function BookingApp({ code }: { code: string }) {
                   ))}
                 </div>
               ) : (
-                <p className="small muted">在座位圖上按一下勾選座位（出現紅框），再按一下取消。</p>
+                <p className="small muted">先在上方選購票方式，再在座位圖上按一下勾選座位（出現紅框），再按一下取消。可選的座位會亮起，其他座位變淡。</p>
               )}
-              <h3>購票方式</h3>
-              <div className="combos">
-                {st.combos.map((c) => {
-                  const why = comboProblem(c, zonesSel, c.usedSets, zoneName, giftZones);
-                  const dis = !!why && ids.length > 0;
-                  const desc = c.isSingle ? '依各票種票價計算'
-                    : `${comboDesc(c, zoneName)}・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
-                  return (
-                    <label key={c.id} className={`combo${dis ? ' dis' : ''}`}>
-                      <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={dis} onChange={() => setCombo(c.id)} />
-                      <span><b>{c.name}</b><br /><span className="small muted">{desc}{dis ? `｜${why}` : ''}</span></span>
-                    </label>
-                  );
-                })}
-              </div>
+              <h3>{cur?.name}</h3>
               <div className="total">
                 <span className="muted">
                   {cur && !cur.isSingle && ids.length ? <>原價 {money(prices.reduce((a, b) => a + b, 0))}{sets > 0 ? <>　{cur.name} {sets} 組 × {money(cur.price)}</> : ''}<br /></> : ''}應付金額
@@ -323,7 +367,7 @@ export default function BookingApp({ code }: { code: string }) {
           {held && form && (
             <div className="card">
               <h2>座位暫存中 <span className="timer">{mmss(remain)}</span></h2>
-              <p className="small muted" style={{ margin: '0 0 8px' }}>請在時間內完成匯款並送出資料，逾時座位會自動釋放。</p>
+              <p className="small muted" style={{ margin: '0 0 8px' }}>{st.event.payFirst ? '請在時間內填好資料並送出，逾時座位會自動釋放。' : '請在時間內完成匯款並送出資料，逾時座位會自動釋放。'}</p>
               <div className="sellist">
                 {held.seatIds.map((id) => (
                   <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small muted">{zoneBy[seatById[id]?.zoneId]?.name}</span></div>
@@ -331,6 +375,7 @@ export default function BookingApp({ code }: { code: string }) {
               </div>
               <div className="total"><span className="muted">{st.combos.find((c) => c.id === held.comboId)?.name}</span><b>{money(held.amount)}</b></div>
 
+              {!st.event.payFirst && <>
               <h3>匯款帳戶</h3>
               <div className="bank">
                 <span className="muted">銀行</span><span>{st.event.bankName}</span>
@@ -342,8 +387,34 @@ export default function BookingApp({ code }: { code: string }) {
                 onClick={() => navigator.clipboard?.writeText(st.event.bankAccount.replace(/-/g, '')).then(() => setMsg({ kind: 'ok', text: '已複製帳號' }), () => undefined)}>
                 複製帳號
               </button>
+              </>}
 
-              <form onSubmit={doSubmit} noValidate>
+              {review && (
+                <div className="review">
+                  <h3>請確認您的資料</h3>
+                  <p className="small" style={{ margin: '0 0 8px' }}>送出後就不能自行修改。劃位成功通知與入場 QR code 會寄到下面的 Email，請確認正確。</p>
+                  <div className="bank">
+                    <span className="muted">姓名</span><span><b>{form.name.trim()}</b></span>
+                    <span className="muted">手機</span><span className="mono"><b>{form.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
+                    <span className="muted">Email</span><span className="mono"><b>{form.email.trim()}</b></span>
+                    <span className="muted">購票方式</span><span>{st.combos.find((c) => c.id === held.comboId)?.name}・{money(held.amount)}</span>
+                  </div>
+                  <h3>座位與持票人（{held.seatIds.length} 張）</h3>
+                  <div className="sellist">
+                    {held.seatIds.map((id, i) => {
+                      const h = heldAuto ? autoList[i] : form.holders[id];
+                      return <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small">{h?.name}・{(h?.id4 ?? '').toUpperCase()}</span></div>;
+                    })}
+                  </div>
+                  {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={doSubmit}>{busy ? '送出中…' : '資料正確，確認送出'}</button>
+                    <button className="btn" disabled={busy} onClick={() => setReview(false)}>返回修改</button>
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={doReview} noValidate style={review ? { display: 'none' } : undefined}>
                 <h3>購票人資料</h3>
                 <div className="fields">
                   <label className="f">姓名<input id="b-name" value={form.name} onChange={(e) => upd({ name: e.target.value })} autoComplete="name" /></label>
@@ -374,19 +445,21 @@ export default function BookingApp({ code }: { code: string }) {
                   </div>
                 ))}
 
+                {!st.event.payFirst && <>
                 <h3>匯款資訊</h3>
                 <div className="fields">
                   <label className="f">匯出帳號末 5 碼<input id="t-last5" value={form.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value })} /></label>
                   <label className="f">匯款金額<input id="t-amt" value={form.amount} inputMode="numeric" onChange={(e) => upd({ amount: e.target.value })} /></label>
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>匯款時間<input id="t-time" type="datetime-local" value={form.time} onChange={(e) => upd({ time: e.target.value })} /></label>
+                </>}
                 <label className="check" style={{ marginTop: 10 }}>
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />
                   我同意主辦方為售票及實名入場核對之目的，蒐集與處理上述個人資料。
                 </label>
                 {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
                 <div className="row" style={{ marginTop: 10 }}>
-                  <button className="btn pri" type="submit" style={{ flex: 1 }} disabled={busy}>{busy ? '送出中…' : '送出訂購資料'}</button>
+                  <button className="btn pri" type="submit" style={{ flex: 1 }} disabled={busy}>下一步：確認資料</button>
                   <button className="btn" type="button" disabled={busy} onClick={doRelease}>放棄座位</button>
                 </div>
               </form>
@@ -400,7 +473,7 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' && o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : ''}</div>
+                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' ? (st.event.payFirst ? '・主辦方確認後會寄出劃位成功通知與 QR code' : o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : '') : ''}</div>
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">

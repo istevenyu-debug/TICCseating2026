@@ -57,6 +57,13 @@
       "when": 1793112184417,
       "tag": "0007_seat_bundle",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793117605340,
+      "tag": "0008_pay_first",
+      "breakpoints": true
     }
   ]
 }

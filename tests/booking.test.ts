@@ -131,6 +131,7 @@ describe('購票端', () => {
   });
 
   it('送出後 48 小時未確認到帳自動取消並通知', async () => {
+    await A.updateEventSettings(db, 'tester', { payFirst: false }); // 劃位後匯款模式才會逾期取消
     const h = await holdSeats(db, 'AAA111', ['7-1', '7-2'], SINGLE(), T0);
     await submitOrder(db, 'AAA111', submitBody(h.orderId, ['7-1', '7-2'], h.amount), min(10));
     let s = await getBookingState(db, 'BBB222', min(11));

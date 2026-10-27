@@ -137,7 +137,9 @@ export async function sweepExpired(db: Db, eventId: number, now: Date) {
       .set({ status: 'expired', closedReason: 'hold_timeout', holdUntil: null })
       .where(and(eq(t.orders.eventId, eventId), eq(t.orders.status, 'held'), lt(t.orders.holdUntil, now)))
       .returning({ id: t.orders.id });
-    const pend = await tx.update(t.orders)
+    // 先匯款再給連結：已經收過款，送出後不會因「逾時未確認到帳」被取消
+    const [evp] = await tx.select({ payFirst: t.event.payFirst }).from(t.event).where(eq(t.event.id, eventId));
+    const pend = evp?.payFirst ? [] : await tx.update(t.orders)
       .set({ status: 'expired', closedReason: 'pay_timeout' })
       .where(and(eq(t.orders.eventId, eventId), eq(t.orders.status, 'pending'), lt(t.orders.payDueAt, now)))
       .returning({ id: t.orders.id, orderNo: t.orders.orderNo, linkId: t.orders.linkId, phone: t.orders.buyerPhone, email: t.orders.buyerEmail });
@@ -228,11 +230,11 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
     startsAt: sf.startsAt,
     event: {
       name: ev.name, showAt: ev.showAt.toISOString(), vipInstalled: ev.vipInstalled,
-      maxPerOrder: ev.maxPerOrder, holdMinutes: ev.holdMinutes, payHours: ev.payHours,
-      bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName,
+      maxPerOrder: ev.maxPerOrder, holdMinutes: ev.holdMinutes, payHours: ev.payHours, payFirst: ev.payFirst,
+      bankName: ev.payFirst ? '' : ev.bankName, bankAccount: ev.payFirst ? '' : ev.bankAccount, accountName: ev.payFirst ? '' : ev.accountName,
     },
     link: {
-      kind: link.kind, name: link.kind === 'public' ? '' : link.name, phoneTail: link.phone.slice(-3),
+      kind: link.kind, name: link.kind === 'public' ? '' : link.name, phoneTail: link.phone ? link.phone.slice(-3) : '',
       quota: link.kind === 'public' ? 0 : link.quota, used, expiresAt: link.expiresAt.toISOString(), perPhone: ev.publicPerPhone,
     },
     canBuy: canBuyOf(ev, link, used),
@@ -423,10 +425,11 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
       await tx.update(t.orderSeat).set({ holderName: h.name, holderId4: h.id4 })
         .where(and(eq(t.orderSeat.orderId, order.id), eq(t.orderSeat.seatId, h.seatId)));
     }
-    await tx.insert(t.payment).values({
-      orderId: order.id, reportedLast5: input.transfer.last5, reportedAmount: input.transfer.amount, reportedAt: input.transfer.time,
-    });
-    const payDueAt = new Date(now.getTime() + ev.payHours * 3_600_000);
+    if (!ev.payFirst && !input.transfer) throw new BookingError('INVALID', '請填寫匯款資訊');
+    await tx.insert(t.payment).values(input.transfer && !ev.payFirst
+      ? { orderId: order.id, reportedLast5: input.transfer.last5, reportedAmount: input.transfer.amount, reportedAt: input.transfer.time }
+      : { orderId: order.id, reportedLast5: '', reportedAmount: order.amount, reportedAt: '已先匯款' });
+    const payDueAt = new Date(now.getTime() + (ev.payFirst ? 365 * 24 : ev.payHours) * 3_600_000);
     await tx.update(t.orders).set({
       status: 'pending', buyerName: input.buyer.name, buyerPhone: input.buyer.phone, buyerEmail: input.buyer.email,
       submittedAt: now, payDueAt, holdUntil: null, seenAt: null,
@@ -436,9 +439,11 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
 
     await tx.insert(t.notification).values({
       orderId: order.id, linkId: link.id, channel: 'email', template: 'order_received', recipient: input.buyer.email,
-      content: `【${ev.name}】已收到您的訂購資料（訂單 ${order.orderNo}，NT$${order.amount.toLocaleString('en-US')}）。主辦方確認到帳後將通知劃位結果。`,
+      content: ev.payFirst
+        ? `【${ev.name}】已收到您的劃位資料（訂單 ${order.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code。`
+        : `【${ev.name}】已收到您的訂購資料（訂單 ${order.orderNo}，NT$${order.amount.toLocaleString('en-US')}）。主辦方確認到帳後將通知劃位結果。`,
     });
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'submit', target: `order:${order.id}` });
-    return { orderNo: order.orderNo!, amount: order.amount, payDueAt: payDueAt.toISOString(), amountMismatch: input.transfer.amount !== order.amount };
+    return { orderNo: order.orderNo!, amount: order.amount, payDueAt: payDueAt.toISOString(), amountMismatch: !!input.transfer && !ev.payFirst && input.transfer.amount !== order.amount };
   });
 }

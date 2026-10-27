@@ -40,6 +40,7 @@ export const event = pgTable('event', {
   maxPerOrder: integer('max_per_order').notNull().default(21),
   holdMinutes: integer('hold_minutes').notNull().default(20),
   payHours: integer('pay_hours').notNull().default(48),
+  payFirst: boolean('pay_first').notNull().default(true), // 先匯款再給連結：購票頁不填匯款資料、不逾期取消
   bankName: text('bank_name').notNull().default(''),
   bankAccount: text('bank_account').notNull().default(''),
   accountName: text('account_name').notNull().default(''),
@@ -112,6 +113,7 @@ export const inviteLink = pgTable('invite_link', {
   name: text('name').notNull(),
   phone: text('phone').notNull(),
   quota: integer('quota').notNull(), // 專屬連結可購張數，0 = 不限
+  note: text('note').notNull().default(''), // 來帳備註（例：末五碼、金額），主辦方對帳用
   kind: text('kind').notNull().default('personal'), // personal 專屬連結 / public 公開連結
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   status: text('status').notNull().default('active'), // active / disabled
