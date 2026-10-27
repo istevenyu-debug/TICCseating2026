@@ -22,3 +22,8 @@ export async function handle<T>(fn: () => Promise<T>) {
 export async function readJson(req: Request): Promise<unknown> {
   try { return await req.json(); } catch { throw new BookingError('INVALID', '資料格式不正確'); }
 }
+
+/** 公開連結的訪客代碼（由瀏覽器產生，放在 x-visitor 標頭） */
+export function visitor(req: Request): string | undefined {
+  return req.headers.get('x-visitor') ?? undefined;
+}

@@ -67,7 +67,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     return {
       id: o.id, orderNo: o.orderNo, status: o.status, amount: o.amount, comboName: comboById[o.comboId]?.name ?? '',
       buyerName: o.buyerName ?? linkById[o.linkId]?.name ?? '', buyerPhone: o.buyerPhone ?? '', buyerEmail: o.buyerEmail ?? '',
-      linkCode: linkById[o.linkId]?.code ?? '',
+      linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal',
       createdAt: o.createdAt.toISOString(), submittedAt: o.submittedAt?.toISOString() ?? null,
       holdUntil: o.holdUntil?.toISOString() ?? null, payDueAt: o.payDueAt?.toISOString() ?? null,
       isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason,
@@ -113,6 +113,7 @@ export async function getAdminState(db: Db, now = new Date()) {
       saleStart: evNow.saleStart?.toISOString() ?? null, saleEnd: evNow.saleEnd?.toISOString() ?? null,
       maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours,
       bankName: evNow.bankName, bankAccount: evNow.bankAccount, accountName: evNow.accountName,
+      publicSaleStart: evNow.publicSaleStart?.toISOString() ?? null, publicPerPhone: evNow.publicPerPhone,
     },
     published: pub, dirty,
     zones: zones.map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price, open: z.open, seatCount: inst.filter((s) => s.zoneId === z.id).length })),
@@ -120,7 +121,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     combos: combos.map((c) => ({ ...c, usedSets: sets[c.id] ?? 0 })),
     seats, orders,
     links: links.map((l) => ({
-      id: l.id, code: l.code, name: l.name, phone: l.phone, quota: l.quota, used: usedByLink.get(l.id) ?? 0,
+      id: l.id, code: l.code, kind: l.kind, name: l.name, phone: l.phone, quota: l.quota, used: usedByLink.get(l.id) ?? 0,
       expiresAt: l.expiresAt.toISOString(), status: l.status,
     })),
     stats,
@@ -142,6 +143,7 @@ function draftOf(ev: typeof t.event.$inferSelect, zones: { id: number; open: boo
 export async function updateEventSettings(db: Db, actor: string, v: Partial<{
   name: string; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
   payHours: number; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
+  publicSaleStart: Date | null; publicPerPhone: number;
 }>) {
   const ev = await currentEvent(db);
   if (v.vipInstalled === false) {
@@ -297,6 +299,24 @@ export async function createInviteLink(db: Db, actor: string, v: { name: string;
       content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code)} 可訂 ${v.quota} 張。`,
     });
     await audit(db, actor, 'link_create', `link:${l.id}`, { name: v.name, quota: v.quota });
+    return l;
+  }
+  throw new BookingError('SERVER', '產生連結代碼失敗，請再試一次。');
+}
+
+/** 公開連結：整場一條，任何人都可開啟；購票人訂購時自行填寫姓名電話 */
+export async function createPublicLink(db: Db, actor: string) {
+  const ev = await currentEvent(db);
+  const [exists] = await db.select().from(t.inviteLink).where(and(eq(t.inviteLink.eventId, ev.id), eq(t.inviteLink.kind, 'public')));
+  if (exists) return exists;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
+    const [dup] = await db.select({ id: t.inviteLink.id }).from(t.inviteLink).where(eq(t.inviteLink.code, code));
+    if (dup) continue;
+    const [l] = await db.insert(t.inviteLink).values({
+      eventId: ev.id, code, kind: 'public', name: '公開連結', phone: '', quota: 0, expiresAt: ev.showAt,
+    }).returning();
+    await audit(db, actor, 'link_create_public', `link:${l.id}`);
     return l;
   }
   throw new BookingError('SERVER', '產生連結代碼失敗，請再試一次。');

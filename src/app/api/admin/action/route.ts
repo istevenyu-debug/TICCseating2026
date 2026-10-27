@@ -17,7 +17,9 @@ const action = z.discriminatedUnion('action', [
     name: z.string().trim().min(1).max(80), saleOpen: z.boolean(), saleStart: date, saleEnd: date,
     maxPerOrder: z.number().int().min(1).max(20), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
     bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(),
+    publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(20),
   }).partial() }),
+  z.object({ action: z.literal('link.createPublic') }),
   z.object({ action: z.literal('publish') }),
   z.object({ action: z.literal('zone.create') }),
   z.object({ action: z.literal('zone.update'), id, values: z.object({
@@ -35,9 +37,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('combo.delete'), id }),
   z.object({ action: z.literal('link.create'), name: z.string().trim().min(1).max(40),
     phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機格式應為 09xxxxxxxx')),
-    quota: z.number().int().min(1).max(20), expiresAt: z.string() }),
+    quota: z.number().int().min(0).max(20), expiresAt: z.string() }),
   z.object({ action: z.literal('link.update'), id, values: z.object({
-    quota: z.number().int().min(1).max(20), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
+    quota: z.number().int().min(0).max(20), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
   }).partial() }),
   z.object({ action: z.literal('order.seen'), id }),
   z.object({ action: z.literal('order.confirm'), id, date: z.string().min(1), amount: money, note: z.string().max(200).optional() }),
@@ -70,6 +72,7 @@ export async function POST(req: Request) {
       case 'combo.create': return A.createCombo(db, who);
       case 'combo.update': return A.updateCombo(db, who, a.id, a.values);
       case 'combo.delete': return A.deleteCombo(db, who, a.id);
+      case 'link.createPublic': return A.createPublicLink(db, who);
       case 'link.create': return A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt) });
       case 'link.update': {
         const { expiresAt, ...rest } = a.values;

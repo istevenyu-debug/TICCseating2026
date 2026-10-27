@@ -8,11 +8,28 @@ import SeatMap from './SeatMap';
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; code: string; message: string; detail: unknown };
 
+/** 訪客代碼：公開連結用來區分不同的購票者（存在這台裝置的瀏覽器） */
+let memVisitor = '';
+function visitorId(): string {
+  try {
+    const v = localStorage.getItem('ticc_vid');
+    if (v) return v;
+  } catch { /* 無痕或封鎖儲存時改用記憶體 */ }
+  if (!memVisitor) {
+    const b = new Uint8Array(18);
+    crypto.getRandomValues(b);
+    memVisitor = btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  try { localStorage.setItem('ticc_vid', memVisitor); } catch { /* 忽略 */ }
+  return memVisitor;
+}
+
 async function api<T>(url: string, body?: unknown): Promise<ApiOk<T> | ApiErr> {
   try {
+    const vid = visitorId();
     const res = await fetch(url, body === undefined
-      ? { cache: 'no-store' }
-      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      ? { cache: 'no-store', headers: { 'x-visitor': vid } }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-visitor': vid }, body: JSON.stringify(body) });
     return await res.json();
   } catch {
     return { ok: false, code: 'NETWORK', message: '網路連線異常，請確認後再試。', detail: null };
@@ -183,10 +200,12 @@ export default function BookingApp({ code }: { code: string }) {
         <h1>{st.event.name}</h1>
         <div className="muted">{fmtDate(st.event.showAt)}・台北國際會議中心 大會堂</div>
         <div className="small" style={{ marginTop: 6 }}>
-          {st.link.name} 您好，此專屬連結可訂購 <b>{st.link.quota}</b> 張（已訂 {st.link.used} 張），有效至 {fmtDate(st.link.expiresAt)}。
+          {st.link.kind === 'public'
+            ? <>歡迎訂購。每筆訂單最多 <b>{st.event.maxPerOrder}</b> 張{st.link.perPhone ? `，每支手機最多 ${st.link.perPhone} 張` : ''}。</>
+            : <>{st.link.name} 您好，{st.link.quota ? <>此專屬連結可訂購 <b>{st.link.quota}</b> 張（已訂 {st.link.used} 張）</> : <>此專屬連結張數不限（每筆最多 {st.event.maxPerOrder} 張）</>}，有效至 {fmtDate(st.link.expiresAt)}。</>}
         </div>
       </div>
-      {!open && <div className="note err">{SALE_LABEL[st.sale]}</div>}
+      {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
       <div className="grid2">
         <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} onToggle={toggle} locked={!!held || !open} />
@@ -264,7 +283,7 @@ export default function BookingApp({ code }: { code: string }) {
                 <h3>購票人資料</h3>
                 <div className="fields">
                   <label className="f">姓名<input id="b-name" value={form.name} onChange={(e) => upd({ name: e.target.value })} autoComplete="name" /></label>
-                  <label className="f">手機<input id="b-phone" value={form.phone} onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder={`09xxxxx${st.link.phoneTail}`} autoComplete="tel" /></label>
+                  <label className="f">手機<input id="b-phone" value={form.phone} onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder={st.link.kind === 'public' ? '09xxxxxxxx' : `09xxxxx${st.link.phoneTail}`} autoComplete="tel" /></label>
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
 

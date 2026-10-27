@@ -44,6 +44,8 @@ export const event = pgTable('event', {
   bankAccount: text('bank_account').notNull().default(''),
   accountName: text('account_name').notNull().default(''),
   published: jsonb('published').$type<Published>(),
+  publicSaleStart: timestamp('public_sale_start', { withTimezone: true }), // 公開連結開始時間；未設定時同 saleStart
+  publicPerPhone: integer('public_per_phone').notNull().default(0), // 公開連結每支手機上限，0 = 不限
 });
 
 /** 票種（票區）：名稱、票價、座位底色由主辦方自訂；open 為後台勾選的開放狀態（發布後生效） */
@@ -107,7 +109,8 @@ export const inviteLink = pgTable('invite_link', {
   code: text('code').notNull(),
   name: text('name').notNull(),
   phone: text('phone').notNull(),
-  quota: integer('quota').notNull(),
+  quota: integer('quota').notNull(), // 專屬連結可購張數，0 = 不限
+  kind: text('kind').notNull().default('personal'), // personal 專屬連結 / public 公開連結
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   status: text('status').notNull().default('active'), // active / disabled
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -131,6 +134,7 @@ export const orders = pgTable('orders', {
   submittedAt: timestamp('submitted_at', { withTimezone: true }),
   closedReason: text('closed_reason'),
   seenAt: timestamp('seen_at', { withTimezone: true }), // 後台已看過（新訂單提示用）
+  visitorId: text('visitor_id'), // 公開連結：區分同一連結的不同訪客（瀏覽器）
 }, (t) => ({
   orderNo: uniqueIndex('orders_order_no_idx').on(t.orderNo),
   byLink: index('orders_link_idx').on(t.linkId),

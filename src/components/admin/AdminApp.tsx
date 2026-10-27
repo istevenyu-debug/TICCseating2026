@@ -442,19 +442,50 @@ function Settings() {
 /* ---------- 專屬連結 ---------- */
 function Links() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
-  const [f, setF] = useState({ name: '', phone: '', quota: '4', expiresAt: '' });
+  const [f, setF] = useState({ name: '', phone: '', quota: '0', expiresAt: '' });
   const base = typeof window !== 'undefined' ? location.origin : '';
+  const pubLink = st.links.find((l) => l.kind === 'public');
+  const [pv, setPv] = useState({ start: toLocalInput(st.event.publicSaleStart), perPhone: String(st.event.publicPerPhone) });
+  const copy = (code: string) => navigator.clipboard?.writeText(`${base}/t/${code}`)
+    .then(() => setMsg({ kind: 'ok', text: `已複製 ${base}/t/${code}` }), () => setMsg({ kind: 'ok', text: `${base}/t/${code}` }));
+  const generalStart = st.event.saleStart ? tw(st.event.saleStart) : '開放後立即';
   return (
+    <div className="pstack">
+    <div className="card">
+      <h2>公開連結 <span className="small muted">整場一條，發給所有人（例如貼在 LINE 群組）；購票人訂購時自己填姓名電話</span></h2>
+      {pubLink ? (
+        <>
+          <div className="row">
+            <span className="mono" style={{ fontSize: 15 }}>{base}/t/{pubLink.code}</span>
+            {pubLink.status === 'active' ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn pri" onClick={() => copy(pubLink.code)}>複製公開連結</button>
+            <a className="btn" href={`/t/${pubLink.code}`} target="_blank" rel="noreferrer">開啟購票頁</a>
+            <button className="btn" disabled={busy} onClick={() => act({ action: 'link.update', id: pubLink.id, values: { status: pubLink.status === 'active' ? 'disabled' : 'active' } })}>{pubLink.status === 'active' ? '停用' : '啟用'}</button>
+          </div>
+        </>
+      ) : (
+        <button className="btn pri" disabled={busy} onClick={() => act({ action: 'link.createPublic' }, '已建立公開連結')}>建立公開連結</button>
+      )}
+      <h3>先專屬、再公開</h3>
+      <div className="fields">
+        <label className="f">公開連結開始時間（台北）<input type="datetime-local" value={pv.start} onChange={(e) => setPv({ ...pv, start: e.target.value })} /></label>
+        <label className="f">公開連結每支手機上限（0＝不限）<input value={pv.perPhone} inputMode="numeric" onChange={(e) => setPv({ ...pv, perPhone: e.target.value })} /></label>
+      </div>
+      <p className="small muted">專屬連結從 {generalStart} 開始可訂；公開連結從上面的時間開始，空白代表與專屬連結相同。時間到之前打開公開連結，可以看座位但不能訂。</p>
+      <button className="btn" disabled={busy} onClick={() => act({ action: 'event.update', values: { publicSaleStart: fromLocalInput(pv.start), publicPerPhone: parseInt(pv.perPhone) || 0 } }, '已儲存公開連結設定（立即生效）')}>儲存公開連結設定</button>
+    </div>
     <div className="grid2">
       <div className="card">
         <h2>已發出的專屬購票連結</h2>
         <div className="tbl"><table>
           <thead><tr><th>代碼</th><th>對象</th><th>手機</th><th>可購／已訂</th><th>有效至</th><th>狀態</th><th></th></tr></thead>
           <tbody>
-            {st.links.map((l) => (
+            {st.links.filter((l) => l.kind !== 'public').map((l) => (
               <tr key={l.id}>
                 <td className="mono">{l.code}</td><td>{l.name}</td><td className="mono small">{l.phone}</td>
-                <td className="mono">{l.quota} / {l.used}</td><td className="small">{tw(l.expiresAt)}</td>
+                <td className="mono">{l.quota || '不限'} / {l.used}</td><td className="small">{tw(l.expiresAt)}</td>
                 <td>{l.status === 'active' ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}</td>
                 <td><div className="row">
                   <button className="btn small" onClick={() => navigator.clipboard?.writeText(`${base}/t/${l.code}`).then(() => setMsg({ kind: 'ok', text: `已複製 ${base}/t/${l.code}` }), () => setMsg({ kind: 'ok', text: `${base}/t/${l.code}` }))}>複製連結</button>
@@ -472,17 +503,18 @@ function Links() {
         <form onSubmit={async (e) => {
           e.preventDefault();
           const r = await act({ action: 'link.create', name: f.name, phone: f.phone, quota: parseInt(f.quota) || 0, expiresAt: f.expiresAt }, `已為 ${f.name} 產生專屬連結`);
-          if (r) setF({ name: '', phone: '', quota: '4', expiresAt: f.expiresAt });
+          if (r) setF({ name: '', phone: '', quota: f.quota, expiresAt: f.expiresAt });
         }}>
           <label className="f">對象姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
           <div className="fields" style={{ marginTop: 8 }}>
             <label className="f">手機<input value={f.phone} inputMode="tel" placeholder="09xx-xxx-xxx" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
-            <label className="f">可購張數<input value={f.quota} inputMode="numeric" onChange={(e) => setF({ ...f, quota: e.target.value })} /></label>
+            <label className="f">可購張數（0＝不限）<input value={f.quota} inputMode="numeric" onChange={(e) => setF({ ...f, quota: e.target.value })} /></label>
           </div>
           <label className="f" style={{ marginTop: 8 }}>有效期限（當天 23:59 止）<input type="date" value={f.expiresAt} onChange={(e) => setF({ ...f, expiresAt: e.target.value })} /></label>
           <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !f.name || !f.phone || !f.expiresAt}>產生專屬連結</button>
         </form>
       </div></div>
+    </div>
     </div>
   );
 }
@@ -505,7 +537,7 @@ function Orders() {
           <tbody>
             {list.map((x) => (
               <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} onClick={() => openOrder(x)}>
-                <td className="mono">{x.orderNo}</td><td>{x.buyerName}</td>
+                <td className="mono">{x.orderNo}</td><td>{x.buyerName}<br /><span className="small muted">{x.linkKind === 'public' ? '公開連結' : '專屬連結'}</span></td>
                 <td className="small">{x.seats.map((s) => s.code).join('、')}</td>
                 <td className="mono">{money(x.amount)}</td>
                 <td className="mono">{x.payment?.last5 ?? '—'}</td>

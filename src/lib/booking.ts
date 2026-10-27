@@ -38,6 +38,35 @@ async function loadLink(db: Exec, code: string, now: Date) {
   return { link, ev };
 }
 
+type LinkRow = typeof t.inviteLink.$inferSelect;
+type EventRow = typeof t.event.$inferSelect;
+
+/** 公開連結由多位訪客共用，以瀏覽器產生的訪客代碼區分各自的暫存與訂單 */
+function checkVisitor(link: LinkRow, visitorId?: string) {
+  if (link.kind !== 'public') return null;
+  if (!visitorId || !/^[A-Za-z0-9_-]{16,64}$/.test(visitorId)) {
+    throw new BookingError('INVALID', '請重新整理頁面後再試。');
+  }
+  return visitorId;
+}
+
+/** 這位訪客擁有的訂單：專屬連結看整條連結；公開連結只看自己的訪客代碼 */
+function ownedBy(link: LinkRow, visitorId: string | null) {
+  return link.kind === 'public'
+    ? and(eq(t.orders.linkId, link.id), eq(t.orders.visitorId, visitorId ?? '-'))
+    : eq(t.orders.linkId, link.id);
+}
+
+/** 依連結種類判斷開放狀態：公開連結另有開始時間（先專屬、再公開） */
+export function saleStateFor(ev: EventRow, link: LinkRow, now: Date): { state: ReturnType<typeof saleState>; startsAt: string | null } {
+  const base = saleState(ev, now);
+  if (base !== 'open') return { state: base, startsAt: base === 'not_started' && ev.saleStart ? ev.saleStart.toISOString() : null };
+  if (link.kind === 'public' && ev.publicSaleStart && now < ev.publicSaleStart) {
+    return { state: 'not_started', startsAt: ev.publicSaleStart.toISOString() };
+  }
+  return { state: 'open', startsAt: null };
+}
+
 /** 購票端看到的開放狀態，依已發布的設定與開賣時間判斷 */
 export function saleState(ev: typeof t.event.$inferSelect, now: Date): 'open' | 'closed' | 'not_started' | 'ended' {
   if (!ev.published?.open) return 'closed';
@@ -47,6 +76,12 @@ export function saleState(ev: typeof t.event.$inferSelect, now: Date): 'open' | 
 }
 
 const SALE_MSG = { closed: '目前未開放訂購。', not_started: '尚未開始訂購。', ended: '訂購已截止。' } as const;
+
+/** 這次最多可勾幾張：每筆訂單上限，再加上專屬連結的剩餘張數（0 = 不限） */
+function canBuyOf(ev: EventRow, link: LinkRow, used: number) {
+  if (link.kind === 'public' || link.quota === 0) return ev.maxPerOrder;
+  return Math.max(0, Math.min(ev.maxPerOrder, link.quota - used));
+}
 
 async function usedQuota(db: Exec, linkId: number): Promise<number> {
   const [r] = await db.select({ n: sql<number>`count(*)::int` })
@@ -119,8 +154,9 @@ export async function sweepExpired(db: Db, eventId: number, now: Date) {
 
 export type ViewSeatStatus = 'free' | 'mine' | 'held' | 'pending' | 'sold' | 'blocked';
 
-export async function getBookingState(db: Db, code: string, now = new Date()) {
+export async function getBookingState(db: Db, code: string, now = new Date(), visitorIdIn?: string) {
   const { link, ev } = await loadLink(db, code, now);
+  const visitorId = checkVisitor(link, visitorIdIn);
   await sweepExpired(db, ev.id, now);
 
   const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
@@ -131,7 +167,7 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
   const combos = (await loadCombos(db, ev.id)).filter((c) => openCombos.has(c.id));
   const sets = await usedComboSets(db, ev.id);
 
-  const myOrders = await db.select().from(t.orders).where(eq(t.orders.linkId, link.id)).orderBy(t.orders.id);
+  const myOrders = await db.select().from(t.orders).where(ownedBy(link, visitorId)).orderBy(t.orders.id);
   const myHeld = myOrders.find((o) => o.status === 'held') ?? null;
 
   const seatRows = await db.select({
@@ -160,11 +196,12 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
       .from(t.orderSeat).where(inArray(t.orderSeat.orderId, myOrders.map((o) => o.id)))
     : [];
   const seatById = Object.fromEntries(seatRows.map((s) => [s.id, s]));
-  const used = await usedQuota(db, link.id);
+  const used = link.kind === 'public' ? 0 : await usedQuota(db, link.id);
 
-  const notes = await db.select().from(t.notification)
-    .where(or(eq(t.notification.linkId, link.id)))
-    .orderBy(t.notification.id);
+  const myIds = myOrders.map((o) => o.id);
+  const notes = link.kind === 'public'
+    ? (myIds.length ? await db.select().from(t.notification).where(inArray(t.notification.orderId, myIds)).orderBy(t.notification.id) : [])
+    : await db.select().from(t.notification).where(or(eq(t.notification.linkId, link.id))).orderBy(t.notification.id);
   // 同一則訊息可能同時以簡訊與 Email 發送，購票頁只顯示一次
   const seen = new Set<string>();
   const inbox = notes.filter((n) => {
@@ -174,16 +211,21 @@ export async function getBookingState(db: Db, code: string, now = new Date()) {
     return true;
   }).reverse().map((n) => ({ at: n.createdAt.toISOString(), content: n.content }));
 
+  const sf = saleStateFor(ev, link, now);
   return {
     now: now.toISOString(),
-    sale: saleState(ev, now),
+    sale: sf.state,
+    startsAt: sf.startsAt,
     event: {
       name: ev.name, showAt: ev.showAt.toISOString(), vipInstalled: ev.vipInstalled,
       maxPerOrder: ev.maxPerOrder, holdMinutes: ev.holdMinutes, payHours: ev.payHours,
       bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName,
     },
-    link: { name: link.name, phoneTail: link.phone.slice(-3), quota: link.quota, used, expiresAt: link.expiresAt.toISOString() },
-    canBuy: Math.max(0, Math.min(ev.maxPerOrder, link.quota - used)),
+    link: {
+      kind: link.kind, name: link.kind === 'public' ? '' : link.name, phoneTail: link.phone.slice(-3),
+      quota: link.kind === 'public' ? 0 : link.quota, used, expiresAt: link.expiresAt.toISOString(), perPhone: ev.publicPerPhone,
+    },
+    canBuy: canBuyOf(ev, link, used),
     zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price })),
     combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0 })),
     seats,
@@ -207,25 +249,26 @@ export type BookingState = Awaited<ReturnType<typeof getBookingState>>;
 
 /* ---------- 暫存 ---------- */
 
-export async function holdSeats(db: Db, code: string, seatIdsIn: string[], comboId: number, now = new Date()) {
+export async function holdSeats(db: Db, code: string, seatIdsIn: string[], comboId: number, now = new Date(), visitorIdIn?: string) {
   const seatIds = [...new Set(seatIdsIn)];
   const pre = await loadLink(db, code, now);
+  const visitorId = checkVisitor(pre.link, visitorIdIn);
   await sweepExpired(db, pre.ev.id, now);
 
   return db.transaction(async (tx) => {
     // 鎖住連結，讓同一連結的請求依序處理
     const [link] = await tx.select().from(t.inviteLink).where(eq(t.inviteLink.id, pre.link.id)).for('update');
     const [ev] = await tx.select().from(t.event).where(eq(t.event.id, link.eventId));
-    const st = saleState(ev, now);
+    const st = saleStateFor(ev, link, now).state;
     if (st !== 'open') throw new BookingError('SALE_CLOSED', SALE_MSG[st]);
     const pub = ev.published!;
 
-    // 同一連結只能有一筆暫存：先放掉舊的
+    // 同一位購票者只能有一筆暫存：先放掉舊的
     const old = await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'replaced', holdUntil: null })
-      .where(and(eq(t.orders.linkId, link.id), eq(t.orders.status, 'held'))).returning({ id: t.orders.id });
+      .where(and(ownedBy(link, visitorId), eq(t.orders.status, 'held'))).returning({ id: t.orders.id });
     await freeSeatsOf(tx, old.map((o) => o.id));
 
-    const canBuy = Math.min(ev.maxPerOrder, link.quota - (await usedQuota(tx, link.id)));
+    const canBuy = canBuyOf(ev, link, link.kind === 'public' ? 0 : await usedQuota(tx, link.id));
     if (seatIds.length > canBuy) {
       throw new BookingError('QUOTA', canBuy > 0 ? `此連結最多可再訂 ${canBuy} 張。` : '此連結的可訂張數已用完。');
     }
@@ -257,8 +300,8 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const amount = calcAmount(valid.map((r) => r.price), cb);
     const holdUntil = new Date(now.getTime() + ev.holdMinutes * 60_000);
     const [order] = await tx.insert(t.orders).values({
-      eventId: ev.id, linkId: link.id, comboId: cb.id, status: 'held', amount, holdUntil, createdAt: now,
-      buyerName: link.name, buyerPhone: link.phone,
+      eventId: ev.id, linkId: link.id, comboId: cb.id, status: 'held', amount, holdUntil, createdAt: now, visitorId,
+      buyerName: link.kind === 'public' ? '（公開連結・填寫中）' : link.name, buyerPhone: link.kind === 'public' ? null : link.phone,
     }).returning();
     const orderNo = `T${ev.id}-${String(order.id).padStart(5, '0')}`;
     await tx.update(t.orders).set({ orderNo }).where(eq(t.orders.id, order.id));
@@ -287,28 +330,30 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
 
 /* ---------- 放棄暫存 ---------- */
 
-export async function releaseHold(db: Db, code: string, now = new Date()) {
+export async function releaseHold(db: Db, code: string, now = new Date(), visitorIdIn?: string) {
   const { link } = await loadLink(db, code, now);
+  const visitorId = checkVisitor(link, visitorIdIn);
   await db.transaction(async (tx) => {
     const old = await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'abandoned', holdUntil: null })
-      .where(and(eq(t.orders.linkId, link.id), eq(t.orders.status, 'held'))).returning({ id: t.orders.id });
+      .where(and(ownedBy(link, visitorId), eq(t.orders.status, 'held'))).returning({ id: t.orders.id });
     await freeSeatsOf(tx, old.map((o) => o.id));
   });
 }
 
 /* ---------- 送出訂購資料 ---------- */
 
-export async function submitOrder(db: Db, code: string, raw: unknown, now = new Date()) {
+export async function submitOrder(db: Db, code: string, raw: unknown, now = new Date(), visitorIdIn?: string) {
   const parsed = submitInput.safeParse(raw);
   if (!parsed.success) {
     throw new BookingError('INVALID', parsed.error.issues[0]?.message ?? '資料格式不正確', parsed.error.issues);
   }
   const input: SubmitInput = parsed.data;
   const { link, ev } = await loadLink(db, code, now);
+  const visitorId = checkVisitor(link, visitorIdIn);
 
   return db.transaction(async (tx) => {
     const [order] = await tx.select().from(t.orders)
-      .where(and(eq(t.orders.id, input.orderId), eq(t.orders.linkId, link.id))).for('update');
+      .where(and(eq(t.orders.id, input.orderId), ownedBy(link, visitorId))).for('update');
     if (!order || order.status !== 'held') {
       throw new BookingError('HOLD_GONE', '找不到暫存中的座位，可能已逾時、已送出或已被主辦方取消，請重新選位。');
     }
@@ -321,6 +366,16 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     const given = new Set(input.holders.map((h) => h.seatId));
     if (want.size !== given.size || [...want].some((s) => !given.has(s))) {
       throw new BookingError('INVALID', '每個座位都需要填寫一位持票人。');
+    }
+
+    // 公開連結：同一支手機的累計張數上限（0 = 不限）
+    if (link.kind === 'public' && ev.publicPerPhone > 0) {
+      const [r] = await tx.select({ n: sql<number>`count(*)::int` }).from(t.orderSeat)
+        .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId))
+        .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.buyerPhone, input.buyer.phone), inArray(t.orders.status, COUNTED_ORDER)));
+      if ((r?.n ?? 0) + seats.length > ev.publicPerPhone) {
+        throw new BookingError('QUOTA', `每支手機最多可訂 ${ev.publicPerPhone} 張，這支手機已訂 ${r?.n ?? 0} 張。`);
+      }
     }
 
     for (const h of input.holders) {

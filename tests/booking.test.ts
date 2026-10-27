@@ -259,3 +259,59 @@ describe('後台', () => {
     expect(s.link.quota).toBe(2);
   });
 });
+
+describe('公開連結（先專屬、再公開）', () => {
+  beforeEach(setup);
+  const who = 'tester';
+  const VA = 'visitorAAAAAAAAAAAAAA';
+  const VB = 'visitorBBBBBBBBBBBBBB';
+
+  it('同一條公開連結，不同訪客各自暫存，互不取消', async () => {
+    const pub = await A.createPublicLink(db, who);
+    await holdSeats(db, pub.code, ['3-1'], SINGLE(), T0, VA);
+    await holdSeats(db, pub.code, ['3-2'], SINGLE(), T0, VB);
+    const a = await getBookingState(db, pub.code, T0, VA);
+    const b = await getBookingState(db, pub.code, T0, VB);
+    expect(a.seats.find((x) => x.id === '3-1')!.status).toBe('mine');
+    expect(a.seats.find((x) => x.id === '3-2')!.status).toBe('held');
+    expect(b.seats.find((x) => x.id === '3-2')!.status).toBe('mine');
+    expect(a.held?.seatIds).toEqual(['3-1']);
+  });
+
+  it('沒有訪客代碼不能操作公開連結', async () => {
+    const pub = await A.createPublicLink(db, who);
+    await expectCode(holdSeats(db, pub.code, ['3-1'], SINGLE(), T0), 'INVALID');
+  });
+
+  it('公開連結開始時間之前不能訂，專屬連結可以', async () => {
+    const pub = await A.createPublicLink(db, who);
+    await A.updateEventSettings(db, who, { publicSaleStart: min(60) });
+    const s = await getBookingState(db, pub.code, T0, VA);
+    expect(s.sale).toBe('not_started');
+    expect(s.seats.length).toBeGreaterThan(0); // 仍可看座位
+    await expectCode(holdSeats(db, pub.code, ['3-1'], SINGLE(), T0, VA), 'SALE_CLOSED');
+    await expect(holdSeats(db, 'AAA111', ['3-1'], SINGLE(), T0)).resolves.toBeTruthy();
+    await expect(holdSeats(db, pub.code, ['3-3'], SINGLE(), min(61), VA)).resolves.toBeTruthy();
+  });
+
+  it('公開連結每支手機上限（0 = 不限）', async () => {
+    const pub = await A.createPublicLink(db, who);
+    const h1 = await holdSeats(db, pub.code, ['4-1', '4-2'], SINGLE(), T0, VA);
+    await submitOrder(db, pub.code, submitBody(h1.orderId, ['4-1', '4-2'], h1.amount), min(1), VA);
+    await A.updateEventSettings(db, who, { publicPerPhone: 3 });
+    const h2 = await holdSeats(db, pub.code, ['4-3', '4-5'], SINGLE(), min(2), VB);
+    await expectCode(submitOrder(db, pub.code, submitBody(h2.orderId, ['4-3', '4-5'], h2.amount), min(3), VB), 'QUOTA');
+    await A.updateEventSettings(db, who, { publicPerPhone: 0 });
+    await expect(submitOrder(db, pub.code, submitBody(h2.orderId, ['4-3', '4-5'], h2.amount), min(3), VB)).resolves.toBeTruthy();
+    const b = await getBookingState(db, pub.code, min(4), VB);
+    expect(b.orders).toHaveLength(1); // 只看到自己的訂單
+  });
+
+  it('專屬連結張數 0 = 不限（仍受每筆上限）', async () => {
+    await A.createInviteLink(db, who, { name: '丁', phone: '0944444444', quota: 0, expiresAt: EXP });
+    const st = await A.getAdminState(db, T0);
+    const code = st.links.find((l) => l.name === '丁')!.code;
+    const s = await getBookingState(db, code, T0);
+    expect(s.canBuy).toBe(6);
+  });
+});
