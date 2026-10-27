@@ -390,3 +390,13 @@ describe('手機檢查', () => {
     expect(phoneProblem('091234567')).toContain('9 碼');
   });
 });
+
+describe('場次資料', () => {
+  beforeEach(setup);
+  it('後台可修改演出名稱與演出時間，購票頁跟著更新', async () => {
+    await A.updateEventSettings(db, 'tester', { name: '2027 新春祈福法會', showAt: new Date('2027-02-10T14:00:00+08:00') });
+    const s = await getBookingState(db, 'AAA111', T0);
+    expect(s.event.name).toBe('2027 新春祈福法會');
+    expect(s.event.showAt).toBe('2027-02-10T06:00:00.000Z');
+  });
+});

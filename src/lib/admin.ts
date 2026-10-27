@@ -141,7 +141,7 @@ function draftOf(ev: typeof t.event.$inferSelect, zones: { id: number; open: boo
 /* ---------- 開放訂購與發布 ---------- */
 
 export async function updateEventSettings(db: Db, actor: string, v: Partial<{
-  name: string; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
+  name: string; showAt: Date; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
   payHours: number; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
   publicSaleStart: Date | null; publicPerPhone: number;
 }>) {

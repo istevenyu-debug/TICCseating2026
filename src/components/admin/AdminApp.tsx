@@ -443,7 +443,7 @@ function Settings() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   const e = st.event;
   const [v, setV] = useState({
-    name: e.name, saleStart: toLocalInput(e.saleStart), saleEnd: toLocalInput(e.saleEnd), maxPerOrder: String(e.maxPerOrder),
+    name: e.name, showAt: toLocalInput(e.showAt), saleStart: toLocalInput(e.saleStart), saleEnd: toLocalInput(e.saleEnd), maxPerOrder: String(e.maxPerOrder),
     holdMinutes: String(e.holdMinutes), payHours: String(e.payHours), bankName: e.bankName, bankAccount: e.bankAccount, accountName: e.accountName,
   });
   const f = (k: keyof typeof v, label: string, type = 'text') => (
@@ -453,13 +453,14 @@ function Settings() {
     <>
       <h3>時間、限制與匯款帳戶</h3>
       <div className="fields">
-        {f('name', '演出名稱')}{f('maxPerOrder', '每筆訂單上限（張）')}
+        {f('name', '演出名稱')}{f('showAt', '演出時間（台北）', 'datetime-local')}
+        {f('maxPerOrder', '每筆訂單上限（張）')}
         {f('saleStart', '開始時間（台北）', 'datetime-local')}{f('saleEnd', '截止時間（台北）', 'datetime-local')}
         {f('holdMinutes', '選位暫存（分鐘）')}{f('payHours', '待確認到帳保留（小時）')}
         {f('bankName', '銀行（含代碼）')}{f('bankAccount', '帳號')}{f('accountName', '戶名')}
       </div>
       <button className="btn pri" style={{ marginTop: 10 }} disabled={busy} onClick={() => act({ action: 'event.update', values: {
-        name: v.name, saleStart: fromLocalInput(v.saleStart), saleEnd: fromLocalInput(v.saleEnd),
+        name: v.name, ...(v.showAt ? { showAt: fromLocalInput(v.showAt) } : {}), saleStart: fromLocalInput(v.saleStart), saleEnd: fromLocalInput(v.saleEnd),
         maxPerOrder: parseInt(v.maxPerOrder) || 21, holdMinutes: parseInt(v.holdMinutes) || 20, payHours: parseInt(v.payHours) || 48,
         bankName: v.bankName, bankAccount: v.bankAccount, accountName: v.accountName,
       } }, '已儲存。時間與匯款帳戶立即生效，不需發布。')}>儲存這些設定</button>

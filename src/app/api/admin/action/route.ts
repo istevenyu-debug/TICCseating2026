@@ -19,7 +19,9 @@ const date = z.string().nullable().transform((s) => (s ? new Date(s) : null))
 
 const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('event.update'), values: z.object({
-    name: z.string().trim().min(1).max(80), saleOpen: z.boolean(), saleStart: date, saleEnd: date,
+    name: z.string().trim().min(1, '請填寫演出名稱').max(80),
+    showAt: z.string().min(1, '請填寫演出時間').transform((s) => new Date(s)).refine((d) => !Number.isNaN(d.getTime()), '演出時間格式不正確'),
+    saleOpen: z.boolean(), saleStart: date, saleEnd: date,
     maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
     bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(),
     publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(200),
