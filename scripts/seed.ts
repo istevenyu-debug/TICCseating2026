@@ -1,10 +1,10 @@
 /**
- * 建立示範資料：一個場次、兩條測試用專屬連結。
- * 用法：npm run db:seed
- * 已有場次時不重複建立。
+ * 準備資料庫：場館座位、一個空白場次（名稱與匯款帳戶請在後台填寫）。
+ * 不再建立示範連結或示範場次；舊版留下的示範資料（DEMO26、DEMO27）會自動移除。
+ * 用法：npm run db:seed（啟動測試站時會自動執行）
  */
 import { getDb } from '../src/db/client';
-import { createEvent, createLink, seedVenue } from '../src/db/seed';
+import { createEvent, PLACEHOLDER_EVENT_NAME, removeDemoData, seedVenue } from '../src/db/seed';
 import * as t from '../src/db/schema';
 
 async function main() {
@@ -12,20 +12,17 @@ async function main() {
   await seedVenue(db);
   const existing = await db.select().from(t.event).limit(1);
   if (existing.length) {
-    console.log(`已有場次（id ${existing[0].id}），未重複建立。`);
+    const r = await removeDemoData(db);
+    if (r.links.length) console.log(`已移除舊版示範連結 ${r.links.join('、')}（含其下 ${r.orders} 筆訂單與通知）。`);
+    if (r.renamed) console.log(`場次名稱原為示範文字，已改為「${PLACEHOLDER_EVENT_NAME}」，請到後台填寫。`);
+    if (r.bankCleared) console.log('匯款帳戶原為範例資料，已清空，請到後台填寫。');
+    console.log(`使用既有場次（id ${existing[0].id}）。`);
     process.exit(0);
   }
-  const ev = await createEvent(db, {
-    name: '2026 冬季音樂會（示範）',
-    showAt: new Date('2026-12-20T19:30:00+08:00'),
-    bankName: '範例銀行（代碼 000）',
-    bankAccount: '000-00-0000000',
-    accountName: '範例主辦單位',
-  });
-  const exp = new Date('2026-12-10T23:59:59+08:00');
-  await createLink(db, { eventId: ev.id, code: 'DEMO26', name: '測試購票人', phone: '0900000000', quota: 6, expiresAt: exp });
-  await createLink(db, { eventId: ev.id, code: 'DEMO27', name: '第二位測試者', phone: '0900000001', quota: 4, expiresAt: exp });
-  console.log(`已建立場次 ${ev.id}。測試連結：/t/DEMO26、/t/DEMO27`);
+  const showAt = new Date(Date.now() + 60 * 86400_000);
+  showAt.setUTCHours(11, 30, 0, 0); // 台北 19:30；請在後台改成實際演出時間
+  const ev = await createEvent(db, { name: PLACEHOLDER_EVENT_NAME, showAt });
+  console.log(`已建立空白場次（id ${ev.id}）。請到後台填寫演出名稱、演出時間與匯款帳戶。`);
   process.exit(0);
 }
 

@@ -167,6 +167,12 @@ export default function AdminApp() {
       {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}
         style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
 
+      {(st.event.name === '請在後台填寫演出名稱' || !st.event.bankAccount) && (
+        <div className="alertbar">
+          <span><b>請先填寫場次資料</b>：{[st.event.name === '請在後台填寫演出名稱' && '演出名稱與時間', !st.event.bankAccount && '匯款帳戶'].filter(Boolean).join('、')}尚未設定，消費者的購票頁會顯示空白。</span>
+          <button className="btn pri" onClick={() => go('price')}>前往填寫</button>
+        </div>
+      )}
       {st.stats.newOrders > 0 && (
         <div className="alertbar">
           <span><b>有 {st.stats.newOrders} 筆新訂單已送出</b>，消費者已填好匯款資料，請核對入帳後按「確認到帳」。</span>
@@ -736,7 +742,7 @@ function Notify() {
             <label className="f">寄件 Email<input value={e.user} placeholder="例：ticket.yourname@gmail.com" autoComplete="off" onChange={(x) => setE({ ...e, user: x.target.value })} /></label>
             <label className="f" style={{ marginTop: 8 }}>應用程式密碼（16 碼）<input type="password" value={e.pass} autoComplete="new-password"
               placeholder={ne.passSet ? '已設定；要更換才需要填' : 'Google 帳戶 → 安全性 → 應用程式密碼'} onChange={(x) => setE({ ...e, pass: x.target.value })} /></label>
-            <label className="f" style={{ marginTop: 8 }}>寄件人名稱（消費者看到的）<input value={e.fromName} placeholder="例：冬季音樂會主辦單位" onChange={(x) => setE({ ...e, fromName: x.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>寄件人名稱（消費者看到的）<input value={e.fromName} placeholder="例：主辦單位名稱" onChange={(x) => setE({ ...e, fromName: x.target.value })} /></label>
             <label className="switch small" style={{ marginTop: 8 }}><input type="checkbox" checked={adv} onChange={(x) => setAdv(x.target.checked)} />不是用 Gmail（自訂寄信伺服器）</label>
             {adv && <div className="fields" style={{ marginTop: 6 }}>
               <label className="f">SMTP 主機<input value={e.host} onChange={(x) => setE({ ...e, host: x.target.value })} /></label>

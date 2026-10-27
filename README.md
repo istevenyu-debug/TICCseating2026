@@ -44,8 +44,8 @@
 
 ```bash
 npm install
-npm run db:seed     # 建立示範場次與測試連結 DEMO26、DEMO27
-npm run dev         # 後台 http://localhost:3000/admin，購票頁 http://localhost:3000/t/DEMO26
+npm run db:seed     # 建立場館座位與空白場次（名稱、時間、匯款帳戶在後台填寫）
+npm run dev         # 後台 http://localhost:3000/admin；購票連結在後台「三、專屬連結」產生
 npm test            # 執行 21 項訂位與後台流程測試
 ```
 
