@@ -59,6 +59,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
   z.object({ action: z.literal('bundle.create'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int() }),
+  z.object({ action: z.literal('bundle.auto'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int(),
+    shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600) }),
+  z.object({ action: z.literal('bundle.manual'), seatIds: z.array(z.string()).max(40) }),
+  z.object({ action: z.literal('bundle.remove'), seatIds: z.array(z.string()).max(600) }),
   z.object({ action: z.literal('bundle.clear'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5) }),
 ]);
 
@@ -113,6 +117,9 @@ export async function POST(req: Request) {
       case 'notify.resend': return resendNotification(db, who, a.id);
       case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);
       case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
+      case 'bundle.auto': return A.bundleAuto(db, who, { rows: a.rows, blocks: a.blocks, size: a.size, shape: a.shape, crossAisle: a.crossAisle, skip: a.skip });
+      case 'bundle.manual': return A.bundleManual(db, who, a.seatIds);
+      case 'bundle.remove': return A.bundleRemove(db, who, a.seatIds);
     }
   });
 }

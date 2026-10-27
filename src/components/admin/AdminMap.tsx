@@ -5,7 +5,7 @@ import type { AdminState } from '@/lib/admin';
 import { bundleClass, bundleIndex } from '@/lib/bundle';
 
 type Seat = AdminState['seats'][number];
-export interface SeatLook { bg?: string; ink?: string; kind: 'free' | 'held' | 'pending' | 'sold' | 'blocked'; title: string; dim?: boolean }
+export interface SeatLook { bg?: string; ink?: string; kind: 'free' | 'held' | 'pending' | 'sold' | 'blocked'; title: string; dim?: boolean; sel?: boolean }
 
 interface Props {
   seats: Seat[];
@@ -58,7 +58,7 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
           )))}
           {seats.filter((s) => s.installed).map((s) => {
             const L = look(s);
-            const hot = preview.has(s.id);
+            const hot = preview.has(s.id) || !!L.sel;
             return (
               <button
                 key={s.id}

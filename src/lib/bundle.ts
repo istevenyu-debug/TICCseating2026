@@ -7,8 +7,12 @@ export function bundleIndex<T extends BundleSeat>(seats: T[]) {
   for (const s of seats) if (s.bundle) (groups.get(s.bundle) ?? groups.set(s.bundle, []).get(s.bundle)!).push(s);
   groups.forEach((g) => g.sort((a, b) => a.x - b.x));
   /** 右邊還接著同組座位的（畫連接線） */
+  // 同排、緊鄰右邊也是同組的座位，畫連接線（多排的組、跨走道的不畫橋）
   const linkRight = new Set<string>();
-  groups.forEach((g) => g.slice(0, -1).forEach((s) => linkRight.add(s.id)));
+  groups.forEach((g) => {
+    const at = new Set(g.map((s) => `${s.x},${s.y}`));
+    g.forEach((s) => { if (at.has(`${s.x + 1},${s.y}`)) linkRight.add(s.id); });
+  });
   const membersOf = (id: string, bundle?: string | null) => (bundle ? (groups.get(bundle) ?? []).map((s) => s.id) : [id]);
   return { groups, linkRight, membersOf };
 }

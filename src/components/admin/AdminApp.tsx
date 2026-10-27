@@ -29,10 +29,10 @@ function deliveryText(d: Delivery | undefined) {
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
-type Tab = 'home' | 'usage' | 'price' | 'links' | 'orders' | 'tickets' | 'notify';
+type Tab = 'home' | 'usage' | 'price' | 'groups' | 'links' | 'orders' | 'tickets' | 'notify';
 
 const TABS: [Tab, string][] = [
-  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['links', '三、專屬連結'], ['orders', '三、訂單與到帳'], ['tickets', '四、紙本入場券'], ['notify', '五、通知設定'],
+  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '連座分組'], ['links', '三、專屬連結'], ['orders', '三、訂單與到帳'], ['tickets', '四、紙本入場券'], ['notify', '五、通知設定'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -200,6 +200,7 @@ export default function AdminApp() {
       {tab === 'home' && <Home />}
       {tab === 'usage' && <Usage />}
       {tab === 'price' && <Price />}
+      {tab === 'groups' && <Groups />}
       {tab === 'links' && <Links />}
       {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
@@ -272,21 +273,6 @@ function Price() {
   const [blks, setBlks] = useState<Set<string>>(new Set());
   const [rowText, setRowText] = useState('');
   const [ruleNote, setRuleNote] = useState<{ err: boolean; text: string } | null>(null);
-  const [bsize, setBsize] = useState('2');
-  const bidx = bundleIndex(st.seats);
-  const bundleSummary = (() => {
-    const per = new Map<number, number>();
-    bidx.groups.forEach((g) => { const r = st.seats.find((x) => x.id === g[0].id)!.row; per.set(r, (per.get(r) ?? 0) + 1); });
-    return [...per].sort((a, b) => a[0] - b[0]).map(([r, n]) => `${r === 0 ? 'VIP' : r === -1 ? '輪椅' : `第${r}排`} ${n} 組`).join('、');
-  })();
-  async function makeBundles(clear: boolean) {
-    const r = await act(clear ? { action: 'bundle.clear', rows: [...rows], blocks: [...blks] } : { action: 'bundle.create', rows: [...rows], blocks: [...blks], size: parseInt(bsize) || 2 });
-    if (!r) return;
-    if (clear) { const d = r as { cleared: number }; setRuleNote({ err: false, text: d.cleared ? `已取消 ${d.cleared} 組連座（第 ${rowsText(rows)} 排），改回單人選位` : '這些座位原本就沒有連座' }); return; }
-    const d = r as { groups: number; perRow: Record<string, number>; leftovers: string[] };
-    const per = Object.entries(d.perRow).map(([k, n]) => `${k === '0' ? 'VIP' : `第${k}排`} ${n} 組`).join('、');
-    setRuleNote({ err: false, text: `已建立 ${d.groups} 組連座（${per}），${parseInt(bsize) || 2} 位一組${d.leftovers.length ? `；湊不滿一組、維持單人：${d.leftovers.join('、')}` : ''}` });
-  }
   const zoneName = (id: number) => zoneById[id]?.name || '（未命名）';
   const toggle = <T,>(set: Set<T>, v: T) => { const n = new Set(set); if (n.has(v)) n.delete(v); else n.add(v); return n; };
 
@@ -372,14 +358,8 @@ function Price() {
           </div>
           {ruleNote && <div className={`note ${ruleNote.err ? 'err' : 'ok'}`} style={{ marginTop: 8 }}>{ruleNote.text}</div>}
           <p className="small muted">也可以直接在座位圖上點按或拖曳，把座位改成上面選的票種。</p>
-          <h3>連座（按一下選整組）</h3>
-          <p className="small muted" style={{ margin: '0 0 6px' }}>用上面選的排與區塊，由左到右每幾位綁成一組，不會跨走道。例：贈票區第 2、3 排兩位一組 → 每排 17 組。消費者按其中一位就會選到整組。</p>
-          <div className="row">
-            <label className="f" style={{ width: 90 }}>每組幾位<input value={bsize} inputMode="numeric" onChange={(e) => setBsize(e.target.value.replace(/\D/g, ''))} /></label>
-            <button className="btn pri" style={{ alignSelf: 'flex-end' }} disabled={busy || !rows.size} onClick={() => makeBundles(false)}>建立連座</button>
-            <button className="btn" style={{ alignSelf: 'flex-end' }} disabled={busy || !rows.size} onClick={() => makeBundles(true)}>取消連座</button>
-          </div>
-          <p className="small" style={{ margin: '6px 0 0' }}>目前連座：{bundleSummary || <span className="muted">無</span>}</p>
+          <h3>連座分組（按一下選整組）</h3>
+          <p className="small" style={{ margin: '0 0 6px' }}>兩位一組、十位一組等設定，請到「<a href="#groups" onClick={(e) => { e.preventDefault(); go('groups'); }}>連座分組</a>」頁。</p>
           <h3>座位編號（排-席次-區）</h3>
           <p className="small" style={{ margin: 0 }}>例：<b className="mono">03-15-L1</b> 是第3排15號、左區。VIP 排的排號為 V，輪椅席為 WC。區塊：L2 左側區、L1 左區、C0 中區、R1 右區、R2 右側區。</p>
         </div></div>
@@ -836,6 +816,126 @@ function Notify() {
             {!list.length && <tr><td colSpan={6} className="muted">沒有通知</td></tr>}
           </tbody>
         </table></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 連座分組 ---------- */
+const GROUP_COLORS = ['#9fd8c8', '#c9c2f0', '#ffd29d', '#b8ccf3', '#f5c4c4', '#d9e7a8'];
+
+function Groups() {
+  const { st, act, busy, setMsg } = useAdmin();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [rows, setRows] = useState<Set<number>>(new Set());
+  const [blks, setBlks] = useState<Set<string>>(new Set());
+  const [rowText, setRowText] = useState('');
+  const [size, setSize] = useState('10');
+  const [shape, setShape] = useState<'row' | 'band2' | 'band3'>('band2');
+  const [cross, setCross] = useState(true);
+  const [useSkip, setUseSkip] = useState(true);
+  const [note, setNote] = useState<{ err: boolean; text: string } | null>(null);
+  const toggle = <T,>(set: Set<T>, v: T) => { const n = new Set(set); if (n.has(v)) n.delete(v); else n.add(v); return n; };
+
+  const { groups } = bundleIndex(st.seats);
+  // 依位置編號（前排、左邊優先），相鄰組用不同顏色
+  const ordered = [...groups.entries()].sort((a, b) => Math.min(...a[1].map((s) => s.y)) - Math.min(...b[1].map((s) => s.y)) || Math.min(...a[1].map((s) => s.x)) - Math.min(...b[1].map((s) => s.x)));
+  const info = new Map(ordered.map(([k, g], i) => [k, { no: i + 1, size: g.length, color: GROUP_COLORS[i % GROUP_COLORS.length] }]));
+  const sizes = new Map<number, number>();
+  ordered.forEach(([, g]) => sizes.set(g.length, (sizes.get(g.length) ?? 0) + 1));
+  const sizeText = [...sizes].sort((a, b) => b[0] - a[0]).map(([n, c]) => `${n} 位 × ${c} 組`).join('、');
+  const selSeats = st.seats.filter((s) => sel.has(s.id));
+
+  const look = (s: Seat): SeatLook => {
+    const g = s.bundle ? info.get(s.bundle) : undefined;
+    return {
+      kind: 'free', bg: g ? g.color : '#ffffff', ink: '#18213a', dim: s.status !== 'free', sel: sel.has(s.id),
+      title: `${s.label}・${s.code}・${g ? `第 ${g.no} 組（${g.size} 位）` : '單人'}${s.status !== 'free' ? '・已有訂單' : ''}`,
+    };
+  };
+  const paint = (ids: string[]) => {
+    setNote(null);
+    setSel((p) => { const n = new Set(p); const allOn = ids.every((i) => n.has(i)); ids.forEach((i) => (allOn ? n.delete(i) : n.add(i))); return n; });
+  };
+  const selectWholeGroups = () => {
+    const keys = new Set(selSeats.map((s) => s.bundle).filter(Boolean));
+    setSel(new Set(st.seats.filter((s) => s.bundle && keys.has(s.bundle)).map((s) => s.id)));
+  };
+
+  async function auto() {
+    const r = await act({ action: 'bundle.auto', rows: [...rows], blocks: [...blks], size: parseInt(size) || 0, shape, crossAisle: cross, skip: useSkip ? [...sel] : [] }) as
+      { groups: number; leftovers: string[]; skipped: number; crossAisle: number } | null;
+    if (!r) return;
+    setNote({ err: r.leftovers.length > 0, text: `已建立 ${r.groups} 組（每組 ${size} 位）${r.crossAisle ? `，其中 ${r.crossAisle} 組跨走道` : ''}${r.skipped ? `；略過 ${r.skipped} 席維持單人` : ''}${r.leftovers.length ? `；湊不滿一組、維持單人 ${r.leftovers.length} 席：${r.leftovers.slice(0, 12).join('、')}${r.leftovers.length > 12 ? '…' : ''}` : ''}` });
+    setSel(new Set());
+  }
+
+  return (
+    <div className="grid2">
+      <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
+        caption="同一顏色＝同一組；白色＝單人。點按或拖曳可選取座位（紅框），再按一次取消" />
+      <div className="side">
+        <div className="card">
+          <h2>目前分組</h2>
+          <p style={{ margin: 0 }}>{sizeText || <span className="muted">尚未分組</span>}</p>
+          <p className="small muted" style={{ margin: '4px 0 0' }}>消費者按組內任一位，就會選到整組；只能整組一起訂。游標停在座位上可看第幾組。</p>
+        </div>
+
+        <div className="card">
+          <h2>手動調整 <span className="small muted">已選取 {sel.size} 位</span></h2>
+          <div className="row">
+            <button className="btn pri" disabled={busy || sel.size < 2} onClick={async () => {
+              const r = await act({ action: 'bundle.manual', seatIds: [...sel] }) as { size: number } | null;
+              if (r) { setMsg({ kind: 'ok', text: `已把 ${r.size} 位設為一組` }); setSel(new Set()); }
+            }}>設為一組</button>
+            <button className="btn" disabled={busy || !sel.size} onClick={async () => {
+              const r = await act({ action: 'bundle.remove', seatIds: [...sel] }) as { removed: number } | null;
+              if (r) { setMsg({ kind: 'ok', text: `已把 ${r.removed} 位改回單人` }); setSel(new Set()); }
+            }}>改回單人</button>
+            <button className="btn" disabled={!selSeats.some((s) => s.bundle)} onClick={selectWholeGroups}>選取整組</button>
+            <button className="btn" disabled={!sel.size} onClick={() => setSel(new Set())}>清除選取</button>
+          </div>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>例：要把某一組換掉一位，先選那一組的 9 位加新的一位，按「設為一組」；被換掉的那位會自動改回單人或留在原組。</p>
+        </div>
+
+        <div className="card">
+          <h2>自動分組</h2>
+          <h3>排（點選，或直接輸入）</h3>
+          <div className="chips">
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, -1].map((r) => (
+              <button key={r} className={`chip${rows.has(r) ? ' on' : ''}`} onClick={() => { const n = toggle(rows, r); setRows(n); setRowText(rowsText(n)); }}>
+                {r === 0 ? 'VIP' : r === -1 ? '輪椅' : r}
+              </button>
+            ))}
+          </div>
+          <input value={rowText} placeholder="例：4-12" style={{ marginTop: 6 }} onChange={(e) => setRowText(e.target.value)}
+            onBlur={() => { const p = parseRows(rowText); setRows(p.set); setNote(p.bad.length ? { err: true, text: `看不懂「${p.bad.join('、')}」，例如 4-12` } : null); }} />
+          <h3>區塊 <span className="small muted">（不選＝全部區塊）</span></h3>
+          <div className="chips">
+            {BLOCKS.map(([b, n]) => <button key={b} className={`chip${blks.has(b) ? ' on' : ''}`} onClick={() => setBlks(toggle(blks, b))}>{b} {n}</button>)}
+          </div>
+          <div className="fields" style={{ marginTop: 8 }}>
+            <label className="f">每組人數<input value={size} inputMode="numeric" onChange={(e) => setSize(e.target.value.replace(/\D/g, ''))} /></label>
+            <label className="f">形狀
+              <select value={shape} onChange={(e) => setShape(e.target.value as typeof shape)}>
+                <option value="row">同一排左右（例：兩位一組）</option>
+                <option value="band2">兩排一起（例：5 位寬 × 2 排）</option>
+                <option value="band3">三排一起</option>
+              </select>
+            </label>
+          </div>
+          <label className="switch small" style={{ marginTop: 8 }}><input type="checkbox" checked={cross} onChange={(e) => setCross(e.target.checked)} />可跨走道（座位數不是人數的倍數時，才能全部分完）</label>
+          <label className="switch small"><input type="checkbox" checked={useSkip} onChange={(e) => setUseSkip(e.target.checked)} />略過座位圖上選取的 {sel.size} 位（維持單人）</label>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn pri" disabled={busy || !rows.size} onClick={auto}>自動分組</button>
+            <button className="btn" disabled={busy || !rows.size} onClick={async () => {
+              const r = await act({ action: 'bundle.clear', rows: [...rows], blocks: [...blks] }) as { cleared: number } | null;
+              if (r) setNote({ err: false, text: r.cleared ? `已取消 ${r.cleared} 組，這些排改回單人選位` : '這些座位原本就沒有分組' });
+            }}>取消這些排的分組</button>
+          </div>
+          {note && <div className={`note ${note.err ? 'warn' : 'ok'}`} style={{ marginTop: 8 }}>{note.text}</div>}
+          <p className="small muted" style={{ margin: '8px 0 0' }}>選定範圍原有的分組會先拆掉再重新分；已有訂單的座位不能改。自動分完可再用「手動調整」微調。</p>
+        </div>
       </div>
     </div>
   );

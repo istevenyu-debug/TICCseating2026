@@ -33,7 +33,7 @@ const code = (e: unknown) => (e instanceof BookingError ? e.code : String(e));
 describe('連座', () => {
   it('第 2、3 排兩位一組：每排 17 組，不跨走道', async () => {
     const r = await A.bundleByRule(db, 'admin', [2, 3], [], 2);
-    expect(r).toEqual({ groups: 34, perRow: { 2: 17, 3: 17 }, leftovers: [] });
+    expect(r).toMatchObject({ groups: 34, perRow: { 2: 17, 3: 17 }, leftovers: [], crossAisle: 0 });
     const s = await getBookingState(db, 'AAA111', T0);
     const row2 = s.seats.filter((x) => x.label.startsWith('第2排'));
     const groups = new Map<string, string[]>();
@@ -87,5 +87,52 @@ describe('贈票（票價 0）', () => {
   it('票價 0 的票種若沒有開放的組合票包含它，不能發布', async () => {
     await A.updateCombo(db, 'admin', merit, { active: false });
     await expect(A.publish(db, 'admin', T0)).rejects.toThrow('沒有開放的組合票包含它');
+  });
+});
+
+describe('10 位一組（第 4–12 排左中右區，略過 6 席）', () => {
+  const SIX = ['4-33', '4-31', '4-29', '4-27', '4-32', '4-34'];
+  const groupsOf = async () => {
+    const s = await getBookingState(db, 'AAA111', T0);
+    const m = new Map<string, typeof s.seats>();
+    s.seats.forEach((x) => { if (x.bundle) m.set(x.bundle, [...(m.get(x.bundle) ?? []), x]); });
+    return { m, s };
+  };
+  for (const shape of ['row', 'band2', 'band3'] as const) {
+    it(`形狀 ${shape}、可跨走道：剛好 30 組，6 席維持單人`, async () => {
+      const r = await A.bundleAuto(db, 'admin', { rows: [4, 5, 6, 7, 8, 9, 10, 11, 12], blocks: ['L1', 'C0', 'R1'], size: 10, shape, crossAisle: true, skip: SIX });
+      if (shape === 'row') { expect(r.groups).toBeLessThan(30); return; } // 同一排不接排：每排 28/34 席分不完
+      expect(r).toMatchObject({ groups: 30, leftovers: [], skipped: 6 });
+      const { m, s } = await groupsOf();
+      expect(m.size).toBe(30);
+      expect([...m.values()].every((g) => g.length === 10)).toBe(true);
+      expect(s.seats.filter((x) => SIX.includes(x.id)).every((x) => !x.bundle)).toBe(true);
+    });
+  }
+  it('不跨走道時做不到 30 組（左右區不是 10 的倍數），剩下的維持單人並列出', async () => {
+    const r = await A.bundleAuto(db, 'admin', { rows: [4, 5, 6, 7, 8, 9, 10, 11, 12], blocks: ['L1', 'C0', 'R1'], size: 10, shape: 'band2', crossAisle: false, skip: SIX });
+    expect(r.groups).toBe(29);
+    expect(r.leftovers).toHaveLength(10);
+  });
+  it('手動：選 10 位設為一組；從原組移出後原組人數減少；改回單人', async () => {
+    await A.bundleAuto(db, 'admin', { rows: [5, 6], blocks: ['C0'], size: 10, shape: 'band2', crossAisle: false, skip: [] });
+    let { m } = await groupsOf();
+    expect([...m.values()].map((g) => g.length)).toEqual([10, 10]);
+    const pick = ['7-1', '7-2', '7-3', '7-4', '7-5', '7-6', '7-7', '7-8', '7-9', '5-1'];
+    await A.bundleManual(db, 'admin', pick);
+    ({ m } = await groupsOf());
+    expect([...m.values()].map((g) => g.length).sort((a, b) => a - b)).toEqual([9, 10, 10]);
+    await A.bundleRemove(db, 'admin', ['7-1']);
+    ({ m } = await groupsOf());
+    expect([...m.values()].map((g) => g.length).sort((a, b) => a - b)).toEqual([9, 9, 10]);
+    await expect(A.bundleManual(db, 'admin', ['7-1'])).rejects.toThrow('至少要 2 位');
+  });
+  it('訂購：只能整組 10 位一起訂', async () => {
+    await A.bundleAuto(db, 'admin', { rows: [5, 6], blocks: ['C0'], size: 10, shape: 'band2', crossAisle: false, skip: [] });
+    const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
+    const { m } = await groupsOf();
+    const g = [...m.values()][0].map((x) => x.id);
+    await expect(holdSeats(db, 'AAA111', g.slice(0, 9), single, T0)).rejects.toThrow('整組');
+    await expect(holdSeats(db, 'AAA111', g, single, T0)).resolves.toBeTruthy();
   });
 });

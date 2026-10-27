@@ -231,50 +231,116 @@ export async function assignZoneSeats(db: Db, actor: string, zoneId: number, sea
   return { updated: done.length, skipped: seatIds.length - done.length };
 }
 
-/* ---------- 連座 ---------- */
+/* ---------- 連座（分組） ---------- */
+
+export type BundleShape = 'row' | 'band2' | 'band3';
 
 /**
- * 依排數與區塊建立連座：每排每個區塊由左到右，每 size 位一組（不跨走道）。
- * 例：第 2、3 排（左 12、中 10、右 12）兩位一組 → 每排 17 組。
- * 這些座位原有的連座會先拆掉；有訂單的座位不能改。湊不滿一組的座位維持單人。
+ * 自動分組：把選定排數與區塊的座位，每 size 位綁成一組（按一下選整組）。
+ * - shape 'row'：同一排左右連續，不跨排（例：贈票區兩位一組 → 第 2、3 排各 17 組）
+ * - shape 'band2' / 'band3'：兩排／三排一起，由左到右一欄一欄往下排（例：10 位一組 → 5 位寬 × 2 排）
+ * - crossAisle：可跨走道（座位數不是 size 的倍數時，讓組延伸到走道另一側，才能全部分完）
+ * - skip：略過的座位（維持單人，例如保留給散客）
+ * 這些座位原有的分組會先拆掉；有訂單的座位不能改。湊不滿一組的座位維持單人。
  */
-export async function bundleByRule(db: Db, actor: string, rows: number[], blocks: string[], size: number) {
+export async function bundleAuto(db: Db, actor: string, o: { rows: number[]; blocks: string[]; size: number; shape: BundleShape; crossAisle: boolean; skip: string[] }) {
   const ev = await currentEvent(db);
-  if (!rows.length) throw new BookingError('INVALID', '請選擇排數');
-  if (!Number.isInteger(size) || size < 2 || size > 10) throw new BookingError('INVALID', '每組人數請填 2–10');
-  const blk = new Set(blocks.length ? blocks : BLOCKS);
-  const vs = (await db.select().from(t.venueSeat)).filter((s) => rows.includes(rowKey(s)) && blk.has(s.block as Block));
+  if (!o.rows.length) throw new BookingError('INVALID', '請選擇排數');
+  if (!Number.isInteger(o.size) || o.size < 2 || o.size > 40) throw new BookingError('INVALID', '每組人數請填 2–40');
+  const blk = new Set(o.blocks.length ? o.blocks : BLOCKS);
+  const skip = new Set(o.skip);
+  const area = (await db.select().from(t.venueSeat)).filter((s) => o.rows.includes(rowKey(s)) && blk.has(s.block as Block));
+  const vs = area.filter((s) => !skip.has(s.id));
   if (!vs.length) throw new BookingError('INVALID', '沒有符合條件的座位');
   return db.transaction(async (tx) => {
-    const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, vs.map((s) => s.id))));
+    const touch = [...new Set([...area.map((s) => s.id), ...skip])];
+    const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, touch)));
     const busy = es.filter((s) => s.status !== 'free');
-    if (busy.length) throw new BookingError('BUSY', `其中有 ${busy.length} 席已有訂單或暫存，不能改連座。請先處理這些訂單，或不要選這幾排。`);
+    if (busy.length) throw new BookingError('BUSY', `其中有 ${busy.length} 席已有訂單或暫存，不能改分組。請先處理這些訂單，或不要選這幾排。`);
     await clearBundles(tx, ev.id, es.map((s) => s.bundle).filter((b): b is string => !!b));
-    const perRow: Record<number, number> = {};
-    const leftovers: string[] = [];
-    let groups = 0;
-    const byRowBlock = new Map<string, typeof vs>();
-    for (const s of vs) {
-      const k = `${rowKey(s)}|${s.block}`;
-      if (!byRowBlock.has(k)) byRowBlock.set(k, []);
-      byRowBlock.get(k)!.push(s);
+
+    const depth = o.shape === 'band3' ? 3 : o.shape === 'band2' ? 2 : 1;
+    const ys = [...new Set(vs.map((s) => s.y))].sort((a, b) => a - b);
+    const parts = o.crossAisle ? [vs] : [...new Set(vs.map((s) => s.block))].map((b) => vs.filter((s) => s.block === b));
+    const groups: (typeof vs)[] = [];
+    const singles: typeof vs = [];
+    for (const part of parts) {
+      let cur: typeof vs = [];
+      let dir = 1;
+      for (let i = 0; i < ys.length; i += depth) {
+        const band = new Set(ys.slice(i, i + depth));
+        const inBand = part.filter((s) => band.has(s.y));
+        const xs = [...new Set(inBand.map((s) => s.x))].sort((a, b) => (a - b) * dir);
+        for (const x of xs) {
+          for (const s of inBand.filter((v) => v.x === x).sort((a, b) => a.y - b.y)) {
+            cur.push(s);
+            if (cur.length === o.size) { groups.push(cur); cur = []; }
+          }
+        }
+        if (depth === 1) { singles.push(...cur); cur = []; } // 同一排：不接到下一排
+        else dir = -dir; // 多排：蛇形，下一段從同一側接回來，組才會連在一起
+      }
+      singles.push(...cur);
     }
     const stamp = Date.now().toString(36);
-    for (const [k, list] of byRowBlock) {
-      list.sort((a, b) => a.x - b.x);
-      const row = Number(k.split('|')[0]);
-      for (let i = 0; i + size <= list.length; i += size) {
-        const g = list.slice(i, i + size);
-        await tx.update(t.eventSeat).set({ bundle: `${stamp}-${g[0].id}` })
-          .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, g.map((s) => s.id))));
-        groups++; perRow[row] = (perRow[row] ?? 0) + 1;
-      }
-      const rest = list.length % size;
-      if (rest) list.slice(-rest).forEach((s) => leftovers.push(seatLabel(s)));
+    for (const g of groups) {
+      await tx.update(t.eventSeat).set({ bundle: `${stamp}-${g[0].id}` })
+        .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, g.map((s) => s.id))));
     }
-    await tx.insert(t.auditLog).values({ actor, action: 'bundle_create', target: `event:${ev.id}`, detail: JSON.stringify({ rows, blocks, size, groups }) });
-    return { groups, perRow, leftovers };
+    const perRow: Record<number, number> = {};
+    for (const g of groups) { const r = rowKey(g[0]); perRow[r] = (perRow[r] ?? 0) + 1; }
+    const crossAisle = groups.filter((g) => new Set(g.map((s) => s.block)).size > 1).length;
+    await tx.insert(t.auditLog).values({ actor, action: 'bundle_auto', target: `event:${ev.id}`, detail: JSON.stringify({ ...o, skip: o.skip.length, groups: groups.length }) });
+    return { groups: groups.length, perRow, leftovers: singles.map(seatLabel), skipped: skip.size, crossAisle };
   });
+}
+
+/** 舊版介面相容：同一排左右分組、不跨走道 */
+export function bundleByRule(db: Db, actor: string, rows: number[], blocks: string[], size: number) {
+  return bundleAuto(db, actor, { rows, blocks, size, shape: 'row', crossAisle: false, skip: [] });
+}
+
+/** 手動：把選取的座位設為一組。這些座位會從原本的組移出；原組只剩一位時改回單人 */
+export async function bundleManual(db: Db, actor: string, seatIds: string[]) {
+  const ev = await currentEvent(db);
+  const ids = [...new Set(seatIds)];
+  if (ids.length < 2) throw new BookingError('INVALID', '一組至少要 2 位，請在座位圖上選取座位');
+  if (ids.length > 40) throw new BookingError('INVALID', '一組最多 40 位');
+  return db.transaction(async (tx) => {
+    const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
+    if (es.length !== ids.length) throw new BookingError('INVALID', '有座位不存在');
+    if (es.some((s) => s.status !== 'free')) throw new BookingError('BUSY', '選取的座位中有已訂或暫存的，不能改分組。');
+    const old = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];
+    const key = `${Date.now().toString(36)}-m-${ids[0]}`;
+    await tx.update(t.eventSeat).set({ bundle: key }).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
+    await dissolveTiny(tx, ev.id, old);
+    await tx.insert(t.auditLog).values({ actor, action: 'bundle_manual', target: `event:${ev.id}`, detail: JSON.stringify({ seats: ids }) });
+    return { size: ids.length };
+  });
+}
+
+/** 手動：把選取座位改回單人（只移出這些座位；原組只剩一位時也改回單人） */
+export async function bundleRemove(db: Db, actor: string, seatIds: string[]) {
+  const ev = await currentEvent(db);
+  const ids = [...new Set(seatIds)];
+  if (!ids.length) throw new BookingError('INVALID', '請先在座位圖上選取座位');
+  return db.transaction(async (tx) => {
+    const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
+    if (es.some((s) => s.status !== 'free' && s.bundle)) throw new BookingError('BUSY', '選取的座位中有已訂或暫存的，不能改分組。');
+    const old = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];
+    await tx.update(t.eventSeat).set({ bundle: null }).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
+    await dissolveTiny(tx, ev.id, old);
+    await tx.insert(t.auditLog).values({ actor, action: 'bundle_remove', target: `event:${ev.id}`, detail: JSON.stringify({ seats: ids }) });
+    return { removed: es.filter((s) => s.bundle).length };
+  });
+}
+
+/** 組員只剩一位的組，改回單人 */
+async function dissolveTiny(db: Db, eventId: number, keys: string[]) {
+  if (!keys.length) return;
+  const left = await db.select({ b: t.eventSeat.bundle, n: sql<number>`count(*)::int` }).from(t.eventSeat)
+    .where(and(eq(t.eventSeat.eventId, eventId), inArray(t.eventSeat.bundle, keys))).groupBy(t.eventSeat.bundle);
+  await clearBundles(db, eventId, left.filter((r) => r.n < 2).map((r) => r.b!));
 }
 
 /** 取消連座：這些排／區塊的座位改回單人選位（整組拆開，包含組內其他位） */
