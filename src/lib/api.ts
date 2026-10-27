@@ -1,0 +1,24 @@
+import { NextResponse } from 'next/server';
+import { BookingError } from './booking';
+
+const STATUS: Record<string, number> = {
+  LINK_NOT_FOUND: 404, LINK_DISABLED: 403, LINK_EXPIRED: 410, SALE_CLOSED: 409,
+  SEAT_TAKEN: 409, SEAT_UNAVAILABLE: 409, QUOTA: 409, COMBO: 422, INVALID: 422,
+  HOLD_GONE: 409, HOLD_EXPIRED: 410,
+};
+
+export async function handle<T>(fn: () => Promise<T>) {
+  try {
+    return NextResponse.json({ ok: true, data: await fn() }, { headers: { 'Cache-Control': 'no-store' } });
+  } catch (e) {
+    if (e instanceof BookingError) {
+      return NextResponse.json({ ok: false, code: e.code, message: e.message, detail: e.detail ?? null }, { status: STATUS[e.code] ?? 400 });
+    }
+    console.error(e);
+    return NextResponse.json({ ok: false, code: 'SERVER', message: '系統忙碌中，請稍後再試。' }, { status: 500 });
+  }
+}
+
+export async function readJson(req: Request): Promise<unknown> {
+  try { return await req.json(); } catch { throw new BookingError('INVALID', '資料格式不正確'); }
+}
