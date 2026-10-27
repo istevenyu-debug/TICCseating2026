@@ -58,7 +58,16 @@ const env = Object.fromEntries(readFileSync('.env.local', 'utf8').split(/\r?\n/)
 say('建置網站（約 1–2 分鐘）'); run(npm, ['run', 'build']);
 say('準備資料庫'); run(npm, ['run', 'db:seed']);
 
-/* 3. 啟動網站 */
+/* 3. 啟動網站：先確認連接埠沒被上一次的網站佔用 */
+try {
+  const r = await fetch(`http://localhost:${PORT}/`);
+  if (r) {
+    console.error(`\n✖ 連接埠 ${PORT} 已被佔用，可能是上一次的網站還在背景執行。`);
+    console.error(isWin ? '  請關掉所有黑色視窗，開一個新的命令提示字元輸入：taskkill /F /IM node.exe，再重新啟動。' : `  請執行：lsof -ti :${PORT} | xargs kill，再重新啟動。`);
+    process.exit(1);
+  }
+} catch { /* 沒有回應代表連接埠可用 */ }
+
 say(`啟動網站（本機 http://localhost:${PORT}）`);
 const web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env } });
 for (let i = 0; i < 60; i++) {
@@ -98,7 +107,14 @@ tunnel.stdout.on('data', onOut);
 tunnel.stderr.on('data', onOut);
 setTimeout(() => { if (!shown) console.log('\n⚠ 30 秒內沒有取得網址。請確認網路正常，或按 Ctrl + C 後重新執行。'); }, 30_000);
 
-const stop = () => { tunnel.kill(); web.kill(); process.exit(0); };
+// Windows 上 kill 只會停掉外層的 cmd，要用 taskkill /T 連同子程序一起停掉
+const killTree = (p) => {
+  if (!p.pid) return;
+  if (isWin) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
+  else p.kill();
+};
+const stop = () => { killTree(tunnel); killTree(web); process.exit(0); };
+process.on('exit', () => { killTree(tunnel); killTree(web); });
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
 web.on('exit', (c) => { console.log(`網站已停止（${c}）`); tunnel.kill(); process.exit(c ?? 0); });
