@@ -253,7 +253,7 @@ export async function createCombo(db: Db, actor: string) {
 }
 
 export async function updateCombo(db: Db, actor: string, id: number, v: Partial<{
-  name: string; price: number; limitSets: number; active: boolean; items: { zoneId: number; qty: number }[];
+  name: string; price: number; limitSets: number; active: boolean; autoHolders: boolean; items: { zoneId: number; qty: number }[];
 }>) {
   const [c] = await db.select().from(t.combo).where(eq(t.combo.id, id));
   if (!c) throw new BookingError('NOT_FOUND', '找不到此購票方式');

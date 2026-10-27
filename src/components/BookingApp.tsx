@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookingState } from '@/lib/booking';
 import { calcAmount, comboDesc, comboProblem, comboSets } from '@/lib/pricing';
+import { autoHolders, phoneProblem } from '@/lib/validation';
 import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
 
@@ -52,6 +53,7 @@ function mmss(ms: number) {
 interface Form {
   name: string; phone: string; email: string;
   holders: Record<string, { name: string; id4: string }>;
+  idBase: string;
   last5: string; amount: string; time: string; agree: boolean;
 }
 
@@ -90,7 +92,7 @@ export default function BookingApp({ code }: { code: string }) {
       setSel(new Set(held.seatIds));
       setCombo(held.comboId);
       setForm((f) => f ?? {
-        name: st.link.name, phone: '', email: '',
+        name: st.link.name, phone: '', email: '', idBase: '',
         holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.link.name : '', id4: '' }])),
         last5: '', amount: String(held.amount), time: '', agree: false,
       });
@@ -138,6 +140,8 @@ export default function BookingApp({ code }: { code: string }) {
   const sets = cur && !cur.isSingle ? comboSets(cur, zonesSel) : 1;
   const amount = held ? held.amount : cur ? calcAmount(prices, cur, sets) : 0;
   const open = st.sale === 'open';
+  const heldAuto = !!held && !!st.combos.find((c) => c.id === held.comboId)?.autoHolders;
+  const autoList = held && form && heldAuto ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
 
   function toggle(id: string) {
     setMsg(null);
@@ -176,11 +180,19 @@ export default function BookingApp({ code }: { code: string }) {
   async function doSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form || !held) return;
+    const pp = phoneProblem(form.phone);
+    if (pp) { setMsg({ kind: 'err', text: pp }); document.getElementById('b-phone')?.focus(); return; }
+    if (heldAuto && !/^[0-9A-Za-z]{4}$/.test(form.idBase.trim())) {
+      setMsg({ kind: 'err', text: '請填寫購票人身分證末 4 碼（4 個英數字）' }); document.getElementById('b-idbase')?.focus(); return;
+    }
     setBusy(true); setMsg(null);
     const r = await api<{ orderNo: string; amountMismatch: boolean }>(`/api/t/${code}/submit`, {
       orderId: held.orderId,
       buyer: { name: form.name, phone: form.phone, email: form.email },
-      holders: held.seatIds.map((id) => ({ seatId: id, ...form.holders[id] })),
+      holders: heldAuto
+        ? held.seatIds.map((id, i) => ({ seatId: id, ...autoList[i] }))
+        : held.seatIds.map((id) => ({ seatId: id, ...form.holders[id] })),
+      ...(heldAuto ? { idBase: form.idBase.trim().toUpperCase() } : {}),
       transfer: { last5: form.last5, amount: Number(form.amount.replace(/[^\d]/g, '')) || 0, time: form.time.replace('T', ' ') },
       agree: form.agree,
     });
@@ -289,12 +301,27 @@ export default function BookingApp({ code }: { code: string }) {
                 <h3>購票人資料</h3>
                 <div className="fields">
                   <label className="f">姓名<input id="b-name" value={form.name} onChange={(e) => upd({ name: e.target.value })} autoComplete="name" /></label>
-                  <label className="f">手機<input id="b-phone" value={form.phone} onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder={st.link.kind === 'public' ? '09xxxxxxxx' : `09xxxxx${st.link.phoneTail}`} autoComplete="tel" /></label>
+                  <label className="f">手機<input id="b-phone" value={form.phone} maxLength={13} aria-invalid={!!phoneProblem(form.phone)} style={phoneProblem(form.phone) ? { borderColor: 'var(--red)' } : undefined}
+                    onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder={st.link.kind === 'public' ? '09xxxxxxxx' : `09xxxxx${st.link.phoneTail}`} autoComplete="tel" />
+                    {phoneProblem(form.phone) && <span className="small" style={{ color: 'var(--red)' }}>{phoneProblem(form.phone)}</span>}</label>
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
 
                 <h3>持票人實名（每張一位）</h3>
-                {held.seatIds.map((id) => (
+                {heldAuto ? (
+                  <>
+                    <label className="f">購票人身分證末 4 碼<input id="b-idbase" value={form.idBase} maxLength={4} autoCapitalize="characters" onChange={(e) => upd({ idBase: e.target.value })} /></label>
+                    <p className="small muted" style={{ margin: '6px 0' }}>此購票方式的持票人由系統自動編號：第 1 張為購票人本名，之後依序為「姓名02、姓名03…」，證號為末 4 碼加序號。</p>
+                    <div className="sellist">
+                      {held.seatIds.map((id, i) => (
+                        <div className="selitem" key={id}>
+                          <span>{seatById[id]?.label ?? id}</span>
+                          <span className="mono small">{autoList[i]?.name || '（請先填姓名）'}・{form.idBase.trim().length === 4 ? autoList[i]?.id4 : '（請填證末 4 碼）'}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : held.seatIds.map((id) => (
                   <div className="fields" key={id} style={{ marginBottom: 6 }}>
                     <label className="f">{seatById[id]?.label ?? id} 姓名<input id={`h-n-${id}`} value={form.holders[id]?.name ?? ''} onChange={(e) => updHolder(id, { name: e.target.value })} /></label>
                     <label className="f">身分證末 4 碼<input id={`h-i-${id}`} value={form.holders[id]?.id4 ?? ''} maxLength={4} onChange={(e) => updHolder(id, { id4: e.target.value })} /></label>
@@ -311,6 +338,7 @@ export default function BookingApp({ code }: { code: string }) {
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />
                   我同意主辦方為售票及實名入場核對之目的，蒐集與處理上述個人資料。
                 </label>
+                {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
                 <div className="row" style={{ marginTop: 10 }}>
                   <button className="btn pri" type="submit" style={{ flex: 1 }} disabled={busy}>{busy ? '送出中…' : '送出訂購資料'}</button>
                   <button className="btn" type="button" disabled={busy} onClick={doRelease}>放棄座位</button>
@@ -339,7 +367,7 @@ export default function BookingApp({ code }: { code: string }) {
                           <div className="etk-seat">{s.label}</div>
                           <div className="mono">座位編號 {s.code}</div>
                           <div>{s.zoneName}</div>
-                          <div>持票人 {s.holder}（證末4碼 {s.holderId4}）</div>
+                          <div>持票人 {s.holder}（{(s.holderId4 ?? '').length > 4 ? '證號' : '證末4碼'} {s.holderId4}）</div>
                           <div className="mono muted">序號 {s.serial}</div>
                         </div>
                       </div>

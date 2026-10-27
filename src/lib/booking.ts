@@ -13,7 +13,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { seatLabel } from './layout';
 import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
-import { submitInput, type SubmitInput } from './validation';
+import { autoHolders, submitInput, type SubmitInput } from './validation';
 
 export class BookingError extends Error {
   constructor(public code: string, message: string, public detail?: unknown) {
@@ -100,13 +100,13 @@ export async function usedComboSets(db: Exec, eventId: number): Promise<Record<n
 }
 
 /** 場次的購票方式（含組合內容） */
-export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number })[]> {
+export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean })[]> {
   const combos = await db.select().from(t.combo).where(eq(t.combo.eventId, eventId)).orderBy(asc(t.combo.sort), asc(t.combo.id));
   const items = combos.length
     ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
     : [];
   return combos.map((c) => ({
-    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort,
+    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
 }
@@ -230,7 +230,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
     },
     canBuy: canBuyOf(ev, link, used),
     zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price })),
-    combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0 })),
+    combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0, autoHolders: c.autoHolders })),
     seats,
     held: myHeld && {
       orderId: myHeld.id, orderNo: myHeld.orderNo, holdUntil: myHeld.holdUntil!.toISOString(), amount: myHeld.amount,
@@ -389,7 +389,18 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
       }
     }
 
-    for (const h of input.holders) {
+    // 持票人自動編號（例如功德組）：由伺服器依購票人姓名與證末 4 碼產生，不採用前端送來的持票人
+    const [cb] = await tx.select().from(t.combo).where(eq(t.combo.id, order.comboId));
+    let holders = input.holders;
+    if (cb?.autoHolders) {
+      if (!input.idBase) throw new BookingError('INVALID', '請填寫購票人身分證末 4 碼。');
+      const gen = autoHolders(input.buyer.name, input.idBase, input.holders.length);
+      holders = input.holders.map((h, i) => ({ seatId: h.seatId, ...gen[i] }));
+    } else if (input.holders.some((h) => h.id4.length !== 4)) {
+      throw new BookingError('INVALID', '身分證末 4 碼應為 4 個英數字');
+    }
+
+    for (const h of holders) {
       await tx.update(t.orderSeat).set({ holderName: h.name, holderId4: h.id4 })
         .where(and(eq(t.orderSeat.orderId, order.id), eq(t.orderSeat.seatId, h.seatId)));
     }

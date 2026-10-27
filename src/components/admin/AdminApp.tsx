@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
 import { comboDesc, comboQty } from '@/lib/pricing';
+import { phoneProblem } from '@/lib/validation';
 import AdminMap, { type SeatLook } from './AdminMap';
 
 type State = AdminState & { user: { username: string; displayName: string; role: string } };
@@ -369,6 +370,10 @@ function Price() {
                   <label className="f">限量組數（0＝不限）<input key={`cl${c.id}-${c.limitSets}`} defaultValue={c.limitSets} inputMode="numeric"
                     onBlur={(e) => { const v = parseInt(e.target.value) || 0; if (v !== c.limitSets) save({ limitSets: v }); }} /></label>
                 </div>
+                <label className="switch small">
+                  <input type="checkbox" checked={c.autoHolders} disabled={busy} onChange={(e) => save({ autoHolders: e.target.checked })} />
+                  持票人自動編號：只填購票人一次，第 1 張為本名、之後為「姓名02、03…」；證末 4 碼依序加 01、02…（例 523401、523402）
+                </label>
                 <p className="small muted" style={{ margin: 0 }}>
                   {comboDesc(c, zoneName)}，共 {comboQty(c)} 張・原價合計 {money(list)}{c.price && list ? `・約 ${(c.price / list * 10).toFixed(1)} 折` : ''}{c.limitSets ? `・已售 ${c.usedSets} 組` : ''}
                 </p>
@@ -520,8 +525,9 @@ function Links() {
           e.preventDefault();
           const miss = [!f.name.trim() && '對象姓名', !f.phone.trim() && '手機', !f.expiresAt && '有效期限'].filter(Boolean);
           if (miss.length) { setMsg({ kind: 'err', text: `請填寫：${miss.join('、')}` }); return; }
+          const pp = phoneProblem(f.phone);
+          if (pp) { setMsg({ kind: 'err', text: pp }); document.getElementById('l-phone')?.focus(); return; }
           const digits = f.phone.replace(/\D/g, '');
-          if (!/^09\d{8}$/.test(digits)) { setMsg({ kind: 'err', text: '手機格式應為 09 開頭的 10 位數字，例如 0912-345-678' }); return; }
           const q = parseInt(f.quota.trim() || '0');
           if (!Number.isInteger(q) || q < 0 || q > 200) { setMsg({ kind: 'err', text: '可購張數請填 0–200 的整數（0＝不限）' }); return; }
           const r = await act({ action: 'link.create', name: f.name.trim(), phone: digits, quota: q, expiresAt: f.expiresAt }, `已為 ${f.name.trim()} 產生專屬連結，請在左側清單按「複製連結」`);
@@ -529,7 +535,9 @@ function Links() {
         }}>
           <label className="f">對象姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
           <div className="fields" style={{ marginTop: 8 }}>
-            <label className="f">手機<input value={f.phone} inputMode="tel" placeholder="09xx-xxx-xxx" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
+            <label className="f">手機<input id="l-phone" value={f.phone} inputMode="tel" maxLength={13} placeholder="09xx-xxx-xxx" aria-invalid={!!phoneProblem(f.phone)}
+              style={phoneProblem(f.phone) ? { borderColor: 'var(--red)' } : undefined} onChange={(e) => setF({ ...f, phone: e.target.value })} />
+              {phoneProblem(f.phone) && <span className="small" style={{ color: 'var(--red)' }}>{phoneProblem(f.phone)}</span>}</label>
             <label className="f">可購張數（0＝不限）<input value={f.quota} inputMode="numeric" onChange={(e) => setF({ ...f, quota: e.target.value })} /></label>
           </div>
           <label className="f" style={{ marginTop: 8 }}>有效期限（當天 23:59 止）<input type="date" value={f.expiresAt} onChange={(e) => setF({ ...f, expiresAt: e.target.value })} /></label>

@@ -93,6 +93,7 @@ export const combo = pgTable('combo', {
   limitSets: integer('limit_sets').notNull().default(0), // 0 = 不限量
   active: boolean('active').notNull().default(true), // 後台勾選的開放狀態（發布後生效）
   sort: integer('sort').notNull().default(0),
+  autoHolders: boolean('auto_holders').notNull().default(false), // 持票人自動編號：本名、本名02…；證末4碼+01、02…
 });
 
 /** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */

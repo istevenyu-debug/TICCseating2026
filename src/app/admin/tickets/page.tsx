@@ -34,7 +34,7 @@ export default async function TicketsPage({ searchParams }: { searchParams: { id
               <div className="tk-seat">{t.label}</div>
               <div className="tk-code">座位編號 {t.code}</div>
               <div className="tk-sub">{t.zoneName}・{t.comboName}</div>
-              <div className="tk-sub">持票人 <b>{mask(t.holderName)}</b>（證末4碼 {t.holderId4}）</div>
+              <div className="tk-sub">持票人 <b>{mask(t.holderName)}</b>（{t.holderId4.length > 4 ? '證號' : '證末4碼'} {t.holderId4}）</div>
               <div className="tk-note">入口：{t.entrance}。入場時請出示身分證件核對實名，本券遺失不補發。</div>
             </div>
             <div className="tk-stub">

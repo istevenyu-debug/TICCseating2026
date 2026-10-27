@@ -29,6 +29,13 @@
       "when": 1793098132817,
       "tag": "0003_max_per_order_21",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793100853798,
+      "tag": "0004_combo_auto_holders",
+      "breakpoints": true
     }
   ]
 }

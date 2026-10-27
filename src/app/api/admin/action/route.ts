@@ -31,12 +31,12 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('usage.assignSeats'), usageId: id, seatIds: z.array(z.string().max(16)).min(1).max(600) }),
   z.object({ action: z.literal('combo.create') }),
   z.object({ action: z.literal('combo.update'), id, values: z.object({
-    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(),
+    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(),
     items: z.array(z.object({ zoneId: id, qty: z.number().int().min(1).max(20) })).max(10),
   }).partial() }),
   z.object({ action: z.literal('combo.delete'), id }),
   z.object({ action: z.literal('link.create'), name: z.string().trim().min(1).max(40),
-    phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機格式應為 09xxxxxxxx')),
+    phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678')),
     quota: z.number().int().min(0).max(200), expiresAt: z.string() }),
   z.object({ action: z.literal('link.update'), id, values: z.object({
     quota: z.number().int().min(0).max(200), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
