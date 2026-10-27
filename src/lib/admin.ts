@@ -106,7 +106,9 @@ export async function getAdminState(db: Db, now = new Date()) {
     || [...pub.zoneIds].sort((a, b) => a - b).join() !== draft.zoneIds.join()
     || [...pub.comboIds].sort((a, b) => a - b).join() !== draft.comboIds.join();
 
+  const bundlePresets = await getBundlePresets(db);
   return {
+    bundlePresets,
     now: now.toISOString(),
     event: {
       id: evNow.id, name: evNow.name, showAt: evNow.showAt.toISOString(), vipInstalled: evNow.vipInstalled, saleOpen: evNow.saleOpen,
@@ -293,6 +295,47 @@ export async function bundleAuto(db: Db, actor: string, o: { rows: number[]; blo
     await tx.insert(t.auditLog).values({ actor, action: 'bundle_auto', target: `event:${ev.id}`, detail: JSON.stringify({ ...o, skip: o.skip.length, groups: groups.length }) });
     return { groups: groups.length, perRow, leftovers: singles.map(seatLabel), skipped: skip.size, crossAisle };
   });
+}
+
+/* ---------- 預設分組（可修改） ---------- */
+
+export interface BundlePreset { name: string; rows: number[]; blocks: string[]; size: number; shape: BundleShape; crossAisle: boolean; skip: string[] }
+
+/** 系統預設：贈票區兩位一組、金額區十位一組、金區（左右側區）兩位一組 */
+export const DEFAULT_BUNDLE_PRESETS: BundlePreset[] = [
+  { name: '贈票區（功德組送 2）', rows: [2, 3], blocks: [], size: 2, shape: 'row', crossAisle: false, skip: [] },
+  { name: '金額區（10 位一組）', rows: [4, 5, 6, 7, 8, 9, 10, 11, 12], blocks: ['L1', 'C0', 'R1'], size: 10, shape: 'band2', crossAisle: true,
+    skip: ['4-33', '4-31', '4-29', '4-27', '4-32', '4-34'] },
+  { name: '金區（買 10 送 2）', rows: [4, 5, 6, 7, 8, 9, 10, 11, 12], blocks: ['L2', 'R2'], size: 2, shape: 'row', crossAisle: false, skip: [] },
+];
+
+export async function getBundlePresets(db: Db): Promise<BundlePreset[]> {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'bundle.presets'));
+  if (!r) return DEFAULT_BUNDLE_PRESETS;
+  try { return JSON.parse(r.value) as BundlePreset[]; } catch { return DEFAULT_BUNDLE_PRESETS; }
+}
+
+export async function saveBundlePresets(db: Db, actor: string, presets: BundlePreset[] | null) {
+  if (presets === null) await db.delete(t.appSetting).where(eq(t.appSetting.key, 'bundle.presets')); // 恢復預設
+  else {
+    const value = JSON.stringify(presets);
+    await db.insert(t.appSetting).values({ key: 'bundle.presets', value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  }
+  await audit(db, actor, 'bundle_presets', 'app_setting', presets ? { count: presets.length } : { reset: true });
+  return getBundlePresets(db);
+}
+
+/** 套用預設分組：依序執行每一條（index 不給＝全部） */
+export async function applyBundlePresets(db: Db, actor: string, index?: number) {
+  const all = await getBundlePresets(db);
+  const list = index === undefined ? all : [all[index]].filter(Boolean);
+  if (!list.length) throw new BookingError('NOT_FOUND', '找不到這條預設');
+  const results = [];
+  for (const p of list) {
+    const r = await bundleAuto(db, actor, p);
+    results.push({ name: p.name, groups: r.groups, size: p.size, leftovers: r.leftovers.length, skipped: r.skipped, crossAisle: r.crossAisle });
+  }
+  return results;
 }
 
 /** 舊版介面相容：同一排左右分組、不跨走道 */

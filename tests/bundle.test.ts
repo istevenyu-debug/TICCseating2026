@@ -136,3 +136,41 @@ describe('10 位一組（第 4–12 排左中右區，略過 6 席）', () => {
     await expect(holdSeats(db, 'AAA111', g, single, T0)).resolves.toBeTruthy();
   });
 });
+
+describe('預設分組與買 10 送 2', () => {
+  it('系統預設全部套用：贈票區 34 組、金額區 10 位 × 30 組、金區 36 組', async () => {
+    const r = await A.applyBundlePresets(db, 'admin');
+    expect(r.map((x) => [x.groups, x.size])).toEqual([[34, 2], [30, 10], [36, 2]]);
+    expect(r[1]).toMatchObject({ skipped: 6, leftovers: 0 });
+    expect(r[2].leftovers).toBe(4); // 第 9、11 排左右側區是奇數
+  });
+
+  it('修改預設會保存；恢復預設回到系統值', async () => {
+    const p = await A.getBundlePresets(db);
+    const changed = await A.saveBundlePresets(db, 'admin', [{ ...p[1], size: 9 }]);
+    expect(changed).toHaveLength(1);
+    expect((await A.getBundlePresets(db))[0].size).toBe(9);
+    expect(await A.saveBundlePresets(db, 'admin', null)).toEqual(A.DEFAULT_BUNDLE_PRESETS);
+  });
+
+  it('買 10 送 2：一組金額區 10 位＋一組金區 2 位；只選 1 位金區會擋下', async () => {
+    const gold = await A.createZone(db, 'admin');
+    await A.updateZone(db, 'admin', gold.id, { name: '金額區', price: 1000, open: true });
+    await A.assignZoneByRule(db, 'admin', gold.id, [4, 5, 6, 7, 8, 9, 10, 11, 12], ['L1', 'C0', 'R1']);
+    const side = await A.createZone(db, 'admin');
+    await A.updateZone(db, 'admin', side.id, { name: '金區', price: 0, open: true });
+    await A.assignZoneByRule(db, 'admin', side.id, [4, 5, 6, 7, 8, 9, 10, 11, 12], ['L2', 'R2']);
+    const c = await A.createCombo(db, 'admin');
+    await A.updateCombo(db, 'admin', c.id, { name: '買10送2', price: 10000, items: [{ zoneId: gold.id, qty: 10 }, { zoneId: side.id, qty: 2 }] });
+    await A.publish(db, 'admin', T0);
+    await A.applyBundlePresets(db, 'admin');
+    const s = await getBookingState(db, 'AAA111', T0);
+    const byB = new Map<string, string[]>();
+    s.seats.forEach((x) => { if (x.bundle) byB.set(x.bundle, [...(byB.get(x.bundle) ?? []), x.id]); });
+    const ten = [...byB.values()].find((g) => g.length === 10)!;
+    const pair = [...byB.values()].find((g) => g.length === 2 && s.seats.find((x) => x.id === g[0])!.zoneId === side.id)!;
+    await expect(holdSeats(db, 'AAA111', [...ten, pair[0]], c.id, T0)).rejects.toThrow('整組');
+    const h = await holdSeats(db, 'AAA111', [...ten, ...pair], c.id, T0);
+    expect(h.amount).toBe(10000);
+  });
+});

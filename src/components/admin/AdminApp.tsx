@@ -875,6 +875,7 @@ function Groups() {
       <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
         caption="同一顏色＝同一組；白色＝單人。點按或拖曳可選取座位（紅框），再按一次取消" />
       <div className="side">
+        <Presets sel={sel} setSel={setSel} />
         <div className="card">
           <h2>目前分組</h2>
           <p style={{ margin: 0 }}>{sizeText || <span className="muted">尚未分組</span>}</p>
@@ -937,6 +938,82 @@ function Groups() {
           <p className="small muted" style={{ margin: '8px 0 0' }}>選定範圍原有的分組會先拆掉再重新分；已有訂單的座位不能改。自動分完可再用「手動調整」微調。</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* 預設分組：系統先放好常用規則，主辦方可修改、新增、刪除，按一下套用 */
+type Preset = State['bundlePresets'][number];
+const SHAPE_NAME: Record<string, string> = { row: '同一排左右', band2: '兩排一起', band3: '三排一起' };
+
+function Presets({ sel, setSel }: { sel: Set<string>; setSel: (s: Set<string>) => void }) {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const [list, setList] = useState<Preset[]>(st.bundlePresets);
+  const [dirty, setDirty] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  const label = Object.fromEntries(st.seats.map((s) => [s.id, s.label]));
+  const upd = (i: number, v: Partial<Preset>) => { setList(list.map((p, k) => (k === i ? { ...p, ...v } : p))); setDirty(true); };
+  const save = async () => {
+    const r = await act({ action: 'bundle.presets.save', presets: list }, '已儲存預設分組') as Preset[] | null;
+    if (r) { setList(r); setDirty(false); }
+    return !!r;
+  };
+  const apply = async (index?: number) => {
+    if (dirty && !(await save())) return;
+    const r = await act({ action: 'bundle.presets.apply', ...(index === undefined ? {} : { index }) }) as
+      { name: string; groups: number; size: number; leftovers: number; skipped: number; crossAisle: number }[] | null;
+    if (r) setMsg({ kind: r.some((x) => x.leftovers) ? 'err' : 'ok', text: '已套用：' + r.map((x) => `${x.name} ${x.groups} 組（${x.size} 位一組${x.crossAisle ? `，${x.crossAisle} 組跨走道` : ''}${x.skipped ? `，略過 ${x.skipped} 席` : ''}${x.leftovers ? `，${x.leftovers} 席湊不滿維持單人` : ''}）`).join('；') });
+  };
+  const blockChip = (i: number, p: Preset, b: string) => (
+    <button key={b} className={`chip${p.blocks.includes(b) ? ' on' : ''}`} style={{ padding: '2px 8px' }}
+      onClick={() => upd(i, { blocks: p.blocks.includes(b) ? p.blocks.filter((x) => x !== b) : [...p.blocks, b] })}>{b}</button>
+  );
+  return (
+    <div className="card">
+      <h2>預設分組 <span className="small muted">可修改，按一下套用</span></h2>
+      {list.map((p, i) => (
+        <div key={i} className="note" style={{ marginBottom: 8 }}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <b>{p.name || '（未命名）'}</b>
+            <span className="row">
+              <button className="btn small pri" disabled={busy} onClick={() => apply(i)}>套用</button>
+              <button className="btn small" onClick={() => setOpen(open === i ? null : i)}>{open === i ? '收起' : '修改'}</button>
+            </span>
+          </div>
+          <div className="small muted">
+            第 {rowsText(new Set(p.rows))} 排・{p.blocks.length ? p.blocks.join('、') : '全部區塊'}・{p.size} 位一組・{SHAPE_NAME[p.shape]}{p.crossAisle ? '・可跨走道' : ''}{p.skip.length ? `・略過 ${p.skip.length} 席` : ''}
+          </div>
+          {open === i && (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label className="f">名稱<input value={p.name} onChange={(e) => upd(i, { name: e.target.value })} /></label>
+              <label className="f">排（例：4-12）<input key={`r${i}-${p.rows.join()}`} defaultValue={rowsText(new Set(p.rows))}
+                onBlur={(e) => { const q = parseRows(e.target.value); if (q.bad.length) setMsg({ kind: 'err', text: `看不懂「${q.bad.join('、')}」` }); else upd(i, { rows: [...q.set].sort((a, b) => a - b) }); }} /></label>
+              <div><span className="small muted">區塊（不選＝全部）</span><div className="chips">{BLOCKS.map(([b]) => blockChip(i, p, b))}</div></div>
+              <div className="fields">
+                <label className="f">每組人數<input value={p.size} inputMode="numeric" onChange={(e) => upd(i, { size: parseInt(e.target.value.replace(/\D/g, '')) || 0 })} /></label>
+                <label className="f">形狀<select value={p.shape} onChange={(e) => upd(i, { shape: e.target.value as Preset['shape'] })}>
+                  {Object.entries(SHAPE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+                </select></label>
+              </div>
+              <label className="switch small"><input type="checkbox" checked={p.crossAisle} onChange={(e) => upd(i, { crossAisle: e.target.checked })} />可跨走道</label>
+              <div className="small">略過（維持單人）：{p.skip.length ? p.skip.map((id) => label[id] ?? id).join('、') : <span className="muted">無</span>}</div>
+              <div className="row">
+                <button className="btn small" disabled={!sel.size} onClick={() => { upd(i, { skip: [...sel] }); setSel(new Set()); }}>改成圖上選取的 {sel.size} 位</button>
+                <button className="btn small" disabled={!p.skip.length} onClick={() => setSel(new Set(p.skip))}>在圖上顯示</button>
+                <button className="btn small" disabled={!p.skip.length} onClick={() => upd(i, { skip: [] })}>清空略過</button>
+                <button className="btn small danger" onClick={() => confirm2(`pdel${i}`, () => { setList(list.filter((_, k) => k !== i)); setDirty(true); setOpen(null); })}>{sure === `pdel${i}` ? '再按一次確認' : '刪除這條'}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <div className="row">
+        <button className="btn pri" disabled={busy || !list.length} onClick={() => apply()}>全部套用</button>
+        {dirty && <button className="btn" disabled={busy} onClick={save}>儲存修改</button>}
+        <button className="btn" onClick={() => { setList([...list, { name: `新的分組 ${list.length + 1}`, rows: [], blocks: [], size: 2, shape: 'row', crossAisle: false, skip: [] }]); setOpen(list.length); setDirty(true); }}>＋新增一條</button>
+        <button className="btn" disabled={busy} onClick={() => confirm2('preset-reset', async () => { const r = await act({ action: 'bundle.presets.save', presets: null }, '已恢復系統預設') as Preset[] | null; if (r) { setList(r); setDirty(false); setOpen(null); } })}>{sure === 'preset-reset' ? '再按一次確認' : '恢復預設'}</button>
+      </div>
+      <p className="small muted" style={{ margin: '6px 0 0' }}>套用時，該條範圍原有的分組會先拆掉重分；已有訂單的座位不能改。改完記得按「儲存修改」（按「套用」也會先自動儲存）。</p>
     </div>
   );
 }

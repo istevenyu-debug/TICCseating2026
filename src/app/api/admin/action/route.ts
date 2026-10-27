@@ -62,6 +62,12 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('bundle.auto'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int(),
     shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600) }),
   z.object({ action: z.literal('bundle.manual'), seatIds: z.array(z.string()).max(40) }),
+  z.object({ action: z.literal('bundle.presets.save'), presets: z.array(z.object({
+    name: z.string().trim().min(1, '請填寫預設名稱').max(40), rows: z.array(z.number().int()).min(1, '每條預設都要選排數').max(20),
+    blocks: z.array(z.string()).max(5), size: z.number().int().min(2, '每組至少 2 位').max(40),
+    shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600),
+  })).max(20).nullable() }),
+  z.object({ action: z.literal('bundle.presets.apply'), index: z.number().int().min(0).optional() }),
   z.object({ action: z.literal('bundle.remove'), seatIds: z.array(z.string()).max(600) }),
   z.object({ action: z.literal('bundle.clear'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5) }),
 ]);
@@ -119,6 +125,8 @@ export async function POST(req: Request) {
       case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
       case 'bundle.auto': return A.bundleAuto(db, who, { rows: a.rows, blocks: a.blocks, size: a.size, shape: a.shape, crossAisle: a.crossAisle, skip: a.skip });
       case 'bundle.manual': return A.bundleManual(db, who, a.seatIds);
+      case 'bundle.presets.save': return A.saveBundlePresets(db, who, a.presets);
+      case 'bundle.presets.apply': return A.applyBundlePresets(db, who, a.index);
       case 'bundle.remove': return A.bundleRemove(db, who, a.seatIds);
     }
   });
