@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BookingState } from '@/lib/booking';
-import { calcAmount, comboDesc, comboProblem } from '@/lib/pricing';
+import { calcAmount, comboDesc, comboProblem, comboSets } from '@/lib/pricing';
+import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
 
 type ApiOk<T> = { ok: true; data: T };
@@ -134,7 +135,8 @@ export default function BookingApp({ code }: { code: string }) {
   const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放票種';
   const cur = st.combos.find((c) => c.id === combo) ?? st.combos.find((c) => c.isSingle) ?? st.combos[0];
   const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets, zoneName) : '目前沒有開放的購票方式';
-  const amount = held ? held.amount : cur ? calcAmount(prices, cur) : 0;
+  const sets = cur && !cur.isSingle ? comboSets(cur, zonesSel) : 1;
+  const amount = held ? held.amount : cur ? calcAmount(prices, cur, sets) : 0;
   const open = st.sale === 'open';
 
   function toggle(id: string) {
@@ -247,9 +249,13 @@ export default function BookingApp({ code }: { code: string }) {
                 })}
               </div>
               <div className="total">
-                <span className="muted">{cur && !cur.isSingle && ids.length ? `原價 ${money(prices.reduce((a, b) => a + b, 0))}　` : ''}應付金額</span>
-                <b>{money(ids.length ? amount : 0)}</b>
+                <span className="muted">
+                  {cur && !cur.isSingle && ids.length ? <>原價 {money(prices.reduce((a, b) => a + b, 0))}{sets > 0 ? <>　{cur.name} {sets} 組 × {money(cur.price)}</> : ''}<br /></> : ''}應付金額
+                </span>
+                <b>{money(ids.length && (cur?.isSingle || sets > 0) ? amount : 0)}</b>
               </div>
+              {ids.length > 0 && curProblem && <div className="note err" style={{ marginTop: 8 }}>還不能暫存：{curProblem}</div>}
+              {!open && <div className="note err" style={{ marginTop: 8 }}>目前不能訂購，請見頁面上方說明。</div>}
               <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={!open || busy || !ids.length || !!curProblem} onClick={doHold}>
                 {busy ? '處理中…' : `暫存座位（保留 ${st.event.holdMinutes} 分鐘）`}
               </button>
@@ -320,10 +326,26 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>
-                <div className="small muted">
-                  {money(o.amount)}{o.status === 'pending' && o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : ''}
-                </div>
+                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' && o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : ''}</div>
+                {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
+                {o.status === 'paid' && (
+                  <div className="eticket">
+                    <div className="small"><b>劃位成功</b>。入場時請出示下方 QR code 與身分證件。</div>
+                    <div className="small muted">購票人：{o.buyerName}・{o.buyerPhone}・{o.buyerEmail}</div>
+                    {o.seats.map((s) => (
+                      <div key={s.code} className="etk">
+                        {s.serial && <TicketQR serial={s.serial} size={104} />}
+                        <div className="small">
+                          <div className="etk-seat">{s.label}</div>
+                          <div className="mono">座位編號 {s.code}</div>
+                          <div>{s.zoneName}</div>
+                          <div>持票人 {s.holder}（證末4碼 {s.holderId4}）</div>
+                          <div className="mono muted">序號 {s.serial}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )) : <p className="small muted" style={{ margin: 0 }}>尚無訂單。送出訂購資料後會顯示在這裡。</p>}
           </div>

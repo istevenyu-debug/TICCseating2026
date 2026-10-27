@@ -65,7 +65,7 @@ export async function getAdminState(db: Db, now = new Date()) {
   const orders = orderRows.map((o) => {
     const p = pays.find((x) => x.orderId === o.id);
     return {
-      id: o.id, orderNo: o.orderNo, status: o.status, amount: o.amount, comboName: comboById[o.comboId]?.name ?? '',
+      id: o.id, orderNo: o.orderNo, status: o.status, amount: o.amount, comboName: `${comboById[o.comboId]?.name ?? ''}${o.sets > 1 ? ` ×${o.sets} 組` : ''}`,
       buyerName: o.buyerName ?? linkById[o.linkId]?.name ?? '', buyerPhone: o.buyerPhone ?? '', buyerEmail: o.buyerEmail ?? '',
       linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal',
       createdAt: o.createdAt.toISOString(), submittedAt: o.submittedAt?.toISOString() ?? null,
@@ -331,7 +331,7 @@ export async function updateInviteLink(db: Db, actor: string, id: number, v: Par
 
 export function confirmMessage(eventName: string, o: { buyerName: string | null; orderNo: string | null }, amount: number, seatText: string, showAt: Date) {
   const when = showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  return `【${eventName}】${o.buyerName ?? ''} 您好，已確認收到您的匯款 NT$${amount.toLocaleString('en-US')}。劃位成功：${seatText}。訂單編號 ${o.orderNo}，演出時間 ${when}。入場時請攜帶身分證件核對實名。`;
+  return `【${eventName}】${o.buyerName ?? ''} 您好，已確認收到您的匯款 NT$${amount.toLocaleString('en-US')}。劃位成功：${seatText}。訂單編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至購票頁「我的訂單」查看，入場時請出示 QR code 與身分證件。`;
 }
 
 export async function markOrderSeen(db: Db, id: number, now = new Date()) {
@@ -349,9 +349,9 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
     await tx.update(t.eventSeat).set({ status: 'sold', version: sql`${t.eventSeat.version} + 1` }).where(eq(t.eventSeat.orderId, id));
     await tx.update(t.payment).set({ confirmedDate: v.date, confirmedAmount: v.amount, confirmedBy: actor, note: v.note ?? null, confirmedAt: now })
       .where(eq(t.payment.orderId, id));
-    const seats = await tx.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code })
+    const seats = await tx.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, holder: t.orderSeat.holderName })
       .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(eq(t.orderSeat.orderId, id));
-    const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}）`).join('、');
+    const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}，持票人 ${s.holder ?? ''}）`).join('、');
     const content = confirmMessage(ev.name, o, v.amount, seatText, ev.showAt);
     await tx.insert(t.notification).values([
       { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_confirmed', recipient: o.buyerPhone ?? '', content },

@@ -123,6 +123,7 @@ export const orders = pgTable('orders', {
   eventId: integer('event_id').notNull().references(() => event.id),
   linkId: integer('link_id').notNull().references(() => inviteLink.id),
   comboId: integer('combo_id').notNull().references(() => combo.id),
+  sets: integer('sets').notNull().default(1), // 組合票買了幾組
   status: text('status').notNull(),
   amount: integer('amount').notNull(),
   buyerName: text('buyer_name'),

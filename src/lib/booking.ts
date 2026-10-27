@@ -12,7 +12,7 @@ import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { seatLabel } from './layout';
-import { calcAmount, comboProblem, type ComboRule } from './pricing';
+import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
 import { submitInput, type SubmitInput } from './validation';
 
 export class BookingError extends Error {
@@ -92,7 +92,7 @@ async function usedQuota(db: Exec, linkId: number): Promise<number> {
 }
 
 export async function usedComboSets(db: Exec, eventId: number): Promise<Record<number, number>> {
-  const rows = await db.select({ comboId: t.orders.comboId, n: sql<number>`count(*)::int` })
+  const rows = await db.select({ comboId: t.orders.comboId, n: sql<number>`coalesce(sum(${t.orders.sets}), 0)::int` })
     .from(t.orders)
     .where(and(eq(t.orders.eventId, eventId), inArray(t.orders.status, ACTIVE_ORDER)))
     .groupBy(t.orders.comboId);
@@ -164,7 +164,8 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
   const openCombos = new Set(pub.comboIds);
 
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
-  const combos = (await loadCombos(db, ev.id)).filter((c) => openCombos.has(c.id));
+  const combosAll = await loadCombos(db, ev.id);
+  const combos = combosAll.filter((c) => openCombos.has(c.id));
   const sets = await usedComboSets(db, ev.id);
 
   const myOrders = await db.select().from(t.orders).where(ownedBy(link, visitorId)).orderBy(t.orders.id);
@@ -192,8 +193,10 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
     });
 
   const orderSeats = myOrders.length
-    ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName })
-      .from(t.orderSeat).where(inArray(t.orderSeat.orderId, myOrders.map((o) => o.id)))
+    ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName, holderId4: t.orderSeat.holderId4 })
+      .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId))
+      .where(inArray(t.orderSeat.orderId, myOrders.map((o) => o.id)))
+      .orderBy(asc(t.venueSeat.y), asc(t.venueSeat.x))
     : [];
   const seatById = Object.fromEntries(seatRows.map((s) => [s.id, s]));
   const used = link.kind === 'public' ? 0 : await usedQuota(db, link.id);
@@ -236,9 +239,16 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
     },
     orders: myOrders.filter((o) => o.status !== 'held' && o.submittedAt).reverse().map((o) => ({
       orderNo: o.orderNo, status: o.status, amount: o.amount, payDueAt: o.payDueAt?.toISOString() ?? null,
-      seats: orderSeats.filter((s) => s.orderId === o.id).map((s) => {
+      comboName: combosAll.find((c) => c.id === o.comboId)?.name ?? '', sets: o.sets,
+      buyerName: o.buyerName, buyerPhone: o.buyerPhone, buyerEmail: o.buyerEmail,
+      // 劃位成功後才提供入場憑證（序號與入場券列印頁一致）
+      seats: orderSeats.filter((s) => s.orderId === o.id).map((s, i) => {
         const v = seatById[s.seatId];
-        return { label: v ? seatLabel(v) : s.seatId, code: v?.code ?? '', holder: s.holderName };
+        return {
+          label: v ? seatLabel(v) : s.seatId, code: v?.code ?? '', holder: s.holderName, holderId4: s.holderId4,
+          zoneName: zones.find((z) => z.id === v?.zoneId)?.name ?? '',
+          serial: o.status === 'paid' ? `${o.orderNo}-${String(i + 1).padStart(2, '0')}` : null,
+        };
       }),
     })),
     inbox,
@@ -293,14 +303,15 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
 
     const zones = await tx.select({ id: t.priceZone.id, name: t.priceZone.name }).from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
     const zoneName = (id: number) => zones.find((z) => z.id === id)?.name ?? '';
-    const sets = (await usedComboSets(tx, ev.id))[cb.id] ?? 0;
-    const problem = comboProblem(cb, valid.map((r) => r.zoneId), sets, zoneName);
+    const usedSets = (await usedComboSets(tx, ev.id))[cb.id] ?? 0;
+    const problem = comboProblem(cb, valid.map((r) => r.zoneId), usedSets, zoneName);
     if (problem) throw new BookingError('COMBO', problem);
 
-    const amount = calcAmount(valid.map((r) => r.price), cb);
+    const sets = cb.isSingle ? 1 : comboSets(cb, valid.map((r) => r.zoneId));
+    const amount = calcAmount(valid.map((r) => r.price), cb, sets);
     const holdUntil = new Date(now.getTime() + ev.holdMinutes * 60_000);
     const [order] = await tx.insert(t.orders).values({
-      eventId: ev.id, linkId: link.id, comboId: cb.id, status: 'held', amount, holdUntil, createdAt: now, visitorId,
+      eventId: ev.id, linkId: link.id, comboId: cb.id, sets, status: 'held', amount, holdUntil, createdAt: now, visitorId,
       buyerName: link.kind === 'public' ? '（公開連結・填寫中）' : link.name, buyerPhone: link.kind === 'public' ? null : link.phone,
     }).returning();
     const orderNo = `T${ev.id}-${String(order.id).padStart(5, '0')}`;

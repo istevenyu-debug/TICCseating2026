@@ -108,6 +108,15 @@ describe('購票端', () => {
     expect(units.reduce((a, u) => a + u.unitPrice, 0)).toBe(3200);
   });
 
+  it('組合票可買多組：金額為套票價 × 組數，張數須為整組倍數', async () => {
+    const id = combo['買一A送二B'];
+    await expectCode(holdSeats(db, 'AAA111', ['3-1', '3-2', '8-11', '8-13', '8-15'], id, T0), 'COMBO'); // A×2＋B×3 不成組
+    const r = await holdSeats(db, 'AAA111', ['3-1', '3-2', '8-11', '8-13', '8-15', '8-17'], id, T0); // A×2＋B×4 = 2 組
+    expect(r.amount).toBe(6400);
+    const [o] = await db.select().from(t.orders).where(eq(t.orders.id, r.orderId));
+    expect(o.sets).toBe(2);
+  });
+
   it('不可訂保留席與未加裝的 VIP 排', async () => {
     await setUsage(db, eventId, 'hold-pr', ['6-1']);
     await expectCode(holdSeats(db, 'AAA111', ['6-1'], SINGLE(), T0), 'SEAT_UNAVAILABLE');
@@ -227,6 +236,8 @@ describe('後台', () => {
 
     const buyer = await getBookingState(db, 'AAA111', min(31));
     expect(buyer.orders[0].status).toBe('paid');
+    expect(buyer.orders[0].seats.map((x) => x.serial)).toEqual([`${buyer.orders[0].orderNo}-01`, `${buyer.orders[0].orderNo}-02`]);
+    expect(buyer.orders[0].seats[0].holderId4).toBe('12A4');
     expect(buyer.inbox[0].content).toContain('劃位成功');
     expect(buyer.inbox[0].content).toContain('02-01-C0');
 

@@ -157,3 +157,10 @@ input.need { border-color: var(--red); }
   .no-print { display: none !important; }
   @page { size: A4; margin: 8mm; }
 }
+
+/* ---------- 購票端：電子入場憑證 ---------- */
+.eticket { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.etk { display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.etk-seat { font-family: var(--f-mono); font-size: 16px; color: var(--accent); }
+.qrbox { background: #fff; border-radius: 4px; flex: none; }
+.qrbox svg { width: 100%; height: 100%; display: block; }

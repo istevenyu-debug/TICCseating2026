@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "sets" integer DEFAULT 1 NOT NULL;
