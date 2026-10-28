@@ -249,7 +249,57 @@ function Home() {
         <button key={k} className={`hcard${i === 0 ? ' main' : ''}`} onClick={() => go(k)}><b>{t}</b><span>{d}</span><em>{m}</em></button>
       ))}
       {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放訂購」按「發布到購票頁」。</div>}
+      <ResetCard />
     </div>
+  );
+}
+
+/* 清除測試資料：回到未開賣，保留設定與志工席 */
+type Preview = { links: { id: number; code: string; name: string; note: string; seats: number }[]; linkCount: number; orders: number; preorders: number;
+  checkins: number; occupied: number; reserved: { name: string; seats: number }[]; saleOpen: boolean; preorderOpen: boolean };
+function ResetCard() {
+  const { act, busy, setMsg } = useAdmin();
+  const [pv, setPv] = useState<Preview | null>(null);
+  const [keep, setKeep] = useState<Set<number>>(new Set());
+  const [close, setClose] = useState(true);
+  const [word, setWord] = useState('');
+  const load = async () => { const r = await act({ action: 'reset.preview' }) as Preview | null; if (r) { setPv(r); setKeep(new Set()); setWord(''); } };
+  return (
+    <details className="card" style={{ gridColumn: '1 / -1', borderColor: 'var(--red)' }} onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !pv) load(); }}>
+      <summary style={{ cursor: 'pointer' }}><b style={{ color: 'var(--red)' }}>清除測試資料（回到未開賣）</b> <span className="small muted">刪除劃位連結、訂單、劃位與入場紀錄，座位全部釋放；設定與志工席保留</span></summary>
+      {pv && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div className="bank">
+            <span className="muted">會刪除</span>
+            <span>劃位連結 {pv.links.length - keep.size} 條、訂單（預購單送出）{pv.preorders} 張、劃位 {pv.orders} 筆、入場紀錄 {pv.checkins} 筆、通知紀錄；釋放座位 {pv.occupied - pv.links.filter((l) => keep.has(l.id)).reduce((a, l) => a + l.seats, 0)} 席</span>
+            <span className="muted">會保留</span>
+            <span>場次資料、票種與票價、組合票、連座分組、驗票門口、Email 設定、後台帳號；
+              席位用途{pv.reserved.length ? `（${pv.reserved.map((r) => `${r.name} ${r.seats} 席`).join('、')}）` : ''}</span>
+          </div>
+          {pv.links.some((l) => l.seats > 0) && <>
+            <div className="small"><b>要保留的劃位連結</b>（例如志工是用連結訂下的座位，勾選後該連結與座位都會保留）：</div>
+            <div className="tbl" style={{ maxHeight: 220, overflow: 'auto' }}><table><tbody>
+              {pv.links.filter((l) => l.seats > 0).map((l) => (
+                <tr key={l.id}><td><label className="switch small"><input type="checkbox" checked={keep.has(l.id)}
+                  onChange={(e) => { const n = new Set(keep); if (e.target.checked) n.add(l.id); else n.delete(l.id); setKeep(n); }} />保留</label></td>
+                  <td>{l.name}</td><td className="mono small">{l.code}</td><td className="small muted">{l.note}</td><td className="mono">{l.seats} 席</td></tr>
+              ))}
+            </tbody></table></div>
+          </>}
+          <label className="switch small"><input type="checkbox" checked={close} onChange={(e) => setClose(e.target.checked)} />
+            同時關閉預購單與購票頁（未開賣）{pv.saleOpen || pv.preorderOpen ? '' : '（目前已是關閉）'}</label>
+          <p className="small" style={{ margin: 0, color: 'var(--red)' }}>刪除後無法復原。已寄出的測試 QR code 會全部失效。</p>
+          <div className="row">
+            <input value={word} placeholder="輸入「清除」確認" style={{ width: 160 }} onChange={(e) => setWord(e.target.value)} />
+            <button className="btn danger" disabled={busy || word.trim() !== '清除'} onClick={async () => {
+              const r = await act({ action: 'reset.run', confirm: word.trim(), keepLinkIds: [...keep], close }) as { links: number; orders: number; seats: number; preorders: number; kept: number; closed: boolean } | null;
+              if (r) { setMsg({ kind: 'ok', text: `已清除：劃位連結 ${r.links} 條、劃位 ${r.orders} 筆、訂單 ${r.preorders} 張，釋放 ${r.seats} 席${r.kept ? `；保留 ${r.kept} 條連結` : ''}${r.closed ? '；已關閉預購單與購票頁' : ''}。` }); await load(); }
+            }}>清除</button>
+            <button className="btn" disabled={busy} onClick={load}>重新整理數字</button>
+          </div>
+        </div>
+      )}
+    </details>
   );
 }
 

@@ -11,6 +11,7 @@ import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '
 import { rememberOrigin } from '@/lib/push';
 import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
+import { resetPreview, resetSales } from '@/lib/reset';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,6 +65,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
   z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
   z.object({ action: z.literal('checkin.undo'), id }),
+  z.object({ action: z.literal('reset.preview') }),
+  z.object({ action: z.literal('reset.run'), confirm: z.literal('清除', { errorMap: () => ({ message: '請輸入「清除」兩個字確認' }) }),
+    keepLinkIds: z.array(id).max(500), close: z.boolean() }),
   z.object({ action: z.literal('bundle.create'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int() }),
   z.object({ action: z.literal('bundle.auto'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int(),
     shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600) }),
@@ -136,6 +140,8 @@ export async function POST(req: Request) {
       case 'gate.create': return createGates(db, who, a.names);
       case 'gate.update': return updateGate(db, who, a.id, a.values);
       case 'checkin.undo': return undoCheckin(db, who, a.id);
+      case 'reset.preview': return resetPreview(db);
+      case 'reset.run': return resetSales(db, who, { keepLinkIds: a.keepLinkIds, close: a.close });
       case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);
       case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
       case 'bundle.auto': return A.bundleAuto(db, who, { rows: a.rows, blocks: a.blocks, size: a.size, shape: a.shape, crossAisle: a.crossAisle, skip: a.skip });
