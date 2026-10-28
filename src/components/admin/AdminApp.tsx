@@ -27,10 +27,16 @@ const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', 
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };
-  const order = ['push', 'sms', 'email'];
-  const parts = [...d].sort((a, b) => order.indexOf(a.channel) - order.indexOf(b.channel)).map((x) =>
-    `${CH[x.channel] ?? x.channel}${nStatus(x.channel, x.status)}${x.error && x.status === 'failed' ? `（${x.error}）` : ''}`);
-  return { text: `訊息已顯示在訂購人的購票頁；${parts.join('、')}`, bad: d.some((x) => x.status === 'failed') };
+  const email = d.find((x) => x.channel === 'email');
+  const sms = d.find((x) => x.channel === 'sms');
+  const push = d.find((x) => x.channel === 'push');
+  const line = (x: { status: string; error: string | null } | undefined, name: string) => !x ? '' :
+    x.status === 'sent' ? `✓ ${name}已寄出` : x.status === 'simulated' ? `✗ ${name}沒有寄出（${name === 'Email' ? '尚未設定 Gmail' : '尚未設定簡訊帳號'}）`
+      : x.status === 'failed' ? `✗ ${name}寄送失敗：${x.error ?? ''}` : `${name}寄送中`;
+  const parts = [line(email, 'Email'), line(sms, '簡訊'), push?.status === 'sent' ? '✓ 手機通知已送達' : ''].filter(Boolean);
+  // Email 沒寄出就以紅色提醒（簡訊未設定不算，可能本來就不用）
+  const bad = !!email && email.status !== 'sent';
+  return { text: `${parts.join('；')}。${bad ? '請到「八、通知設定」設定 Gmail 後，在通知紀錄按「重寄」。' : ''}（訊息也已顯示在對方的購票頁）`, bad };
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
@@ -697,6 +703,7 @@ function OrderDetail({ o }: { o: Order }) {
 
       {o.status === 'pending' && <>
         <h3>{st.event.payFirst ? '確認劃位' : '確認到帳'}</h3>
+        {!st.notify.email.ready && <div className="note err" style={{ margin: '0 0 8px' }}>尚未設定 Gmail：按下後<b>不會寄出 Email</b>，只會顯示在對方的購票頁。請先到「八、通知設定」設定。</div>}
         <p className="small muted" style={{ margin: '0 0 6px' }}>{st.event.payFirst
           ? '核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 會寄出劃位成功通知並附每張票的入場 QR code，購票頁也會顯示。'
           : <>核對銀行入帳無誤後按下方按鈕：座位改為已售出，並以簡訊與 Email 通知消費者劃位成功（Email 附入場 QR code）。請於 {tw(o.payDueAt)} 前確認，逾時系統會自動取消。</>}</p>
@@ -708,7 +715,7 @@ function OrderDetail({ o }: { o: Order }) {
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
             const r = await act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }) as { delivery?: Delivery } | null;
-            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。${d.text || '訊息已顯示在訂購人的購票頁'}。${d.bad ? '可到「八、通知設定」查看原因或重寄。' : ''}` }); }
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認，訂單改為劃位成功。${d.text}` }); }
           }}>{st.event.payFirst ? '確認劃位，寄出劃位成功與 QR code' : '確認到帳，通知消費者劃位成功'}</button>
           <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。${d.text || '訊息已顯示在訂購人的購票頁'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
         </div>
@@ -1125,10 +1132,11 @@ function Preorders() {
                       {p.note && <><span className="muted">備註</span><span>{p.note}</span></>}
                     </div>
                     <div className="row" style={{ marginTop: 10 }}>
+                      {p.status === 'submitted' && !st.notify.email.ready && <div className="note err" style={{ width: '100%' }}>尚未設定 Gmail：確認收訖後劃位連結<b>不會寄出</b>，需手動複製傳給對方。請先到「八、通知設定」設定。</div>}
                       {p.status === 'submitted' && <>
                         <button className="btn pri" disabled={busy} onClick={async () => {
                           const r = await act({ action: 'preorder.confirm', id: p.id }) as { code: string; delivery?: Delivery } | null;
-                          if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}。${d.text.replace('訊息已顯示在訂購人的購票頁；', '')}` }); }
+                          if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}。${d.text}` }); }
                         }}>確認收訖，寄出劃位連結</button>
                         <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消訂單 ${p.no}，並寄信通知`)) setOpenId(null); })}>
                           {sure === `pc${p.id}` ? '再按一次確認取消' : '取消訂單'}</button>

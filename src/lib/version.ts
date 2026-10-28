@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-10-28c 版（九、驗票）';
+export const APP_VERSION = '2026-10-28d 版（九、驗票）';
