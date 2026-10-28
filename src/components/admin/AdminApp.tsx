@@ -16,7 +16,9 @@ type NotifyPublic = {
 type Notice = { id: number; orderId: number | null; channel: string; template: string; recipient: string; content: string; status: string; error: string | null; attempts: number; createdAt: string; sentAt: string | null };
 type Pre = { id: number; no: string; items: { kind: string; id: number; name: string; price: number; qty: number }[]; amount: number; name: string; phone: string; email: string;
   paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; notifications: Notice[]; preorders: Pre[] };
+type Gate = { id: number; name: string; token: string; active: boolean; count: number };
+type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -32,11 +34,11 @@ function deliveryText(d: Delivery | undefined) {
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
-type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify';
+type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates';
 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單（收款）'],
-  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'],
+  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -213,6 +215,7 @@ export default function AdminApp() {
       {tab === 'price' && <Price />}
       {tab === 'groups' && <Groups />}
       {tab === 'pre' && <Preorders />}
+      {tab === 'gates' && <Gates />}
       {tab === 'links' && <Links />}
       {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
@@ -1139,6 +1142,76 @@ function Preorders() {
             {!list.length && <tr><td colSpan={7} className="muted">沒有訂單</td></tr>}
           </tbody>
         </table></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 九、驗票 ---------- */
+function Gates() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const [name, setName] = useState('');
+  const base = typeof window !== 'undefined' ? location.origin : '';
+  const link = (g: Gate) => `${base}/scan/${g.token}`;
+  const c = st.checkins;
+  const pct = c.total ? Math.round((c.entered / c.total) * 100) : 0;
+  const copy = (g: Gate, withText: boolean) => navigator.clipboard?.writeText(withText
+    ? `【${st.event.name}】${g.name} 驗票連結（請用手機 Chrome 或 Safari 開啟，允許使用相機）：\n${link(g)}\n此連結只能驗票，請勿外流。`
+    : link(g)).then(() => setMsg({ kind: 'ok', text: `已複製 ${g.name} 的驗票連結` }), () => undefined);
+  return (
+    <div className="pstack">
+      <div className="stats">
+        <div className="stat"><b style={{ color: 'var(--ok)' }}>{c.entered}</b><span>已入場</span></div>
+        <div className="stat"><b>{c.total}</b><span>已售票數</span></div>
+        <div className="stat"><b>{c.total - c.entered}</b><span>未入場</span></div>
+        <div className="stat"><b>{pct}%</b><span>入場率</span></div>
+      </div>
+      <div className="grid2">
+        <div className="card">
+          <h2>驗票門口 <span className="small muted">每個門一條連結，傳給該門工作人員，用手機打開就能掃描</span></h2>
+          {!st.gates.length && (
+            <div className="note" style={{ marginBottom: 10 }}>
+              尚未建立。會堂左右各 4 個門，可以一次建立：
+              <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => act({ action: 'gate.create', names: ['左1', '左2', '左3', '左4', '右1', '右2', '右3', '右4'] }, '已建立左1–左4、右1–右4 共 8 個門口')}>建立 左1–左4、右1–右4</button>
+            </div>
+          )}
+          <div className="tbl"><table>
+            <thead><tr><th>門口</th><th>已驗</th><th>狀態</th><th></th></tr></thead>
+            <tbody>
+              {st.gates.map((g) => (
+                <tr key={g.id}>
+                  <td><b>{g.name}</b></td>
+                  <td className="mono">{g.count}</td>
+                  <td>{g.active ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}</td>
+                  <td><div className="row">
+                    <button className="btn small pri" disabled={!g.active} onClick={() => copy(g, true)}>複製連結＋說明</button>
+                    <button className="btn small" disabled={!g.active} onClick={() => copy(g, false)}>只複製連結</button>
+                    <a className={`btn small${g.active ? '' : ' disabled'}`} href={g.active ? `/scan/${g.token}` : undefined} target="_blank" rel="noreferrer">開啟</a>
+                    <button className="btn small" disabled={busy} onClick={() => act({ action: 'gate.update', id: g.id, values: { active: !g.active } }, g.active ? `已停用 ${g.name}` : `已啟用 ${g.name}`)}>{g.active ? '停用' : '啟用'}</button>
+                    <button className="btn small" disabled={busy} onClick={() => confirm2(`gr${g.id}`, () => act({ action: 'gate.update', id: g.id, values: { renewToken: true } }, `已更換 ${g.name} 的連結，舊連結立即失效，請把新連結傳給工作人員`))}>{sure === `gr${g.id}` ? '再按一次確認' : '換新連結'}</button>
+                  </div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+          <form className="row" style={{ marginTop: 10 }} onSubmit={async (e) => { e.preventDefault(); if (name.trim() && await act({ action: 'gate.create', names: [name.trim()] }, `已新增 ${name.trim()}`)) setName(''); }}>
+            <input value={name} placeholder="新增門口，例：大門、貴賓入口" style={{ flex: 1 }} onChange={(e) => setName(e.target.value)} />
+            <button className="btn" disabled={busy || !name.trim()}>新增</button>
+          </form>
+          <p className="small muted" style={{ marginBottom: 0 }}>
+            驗票連結只能驗票，看不到其他資料，也不需要後台帳號。手機遺失或連結外流時，按「換新連結」，舊連結立即失效。
+            測試站的網址每次重新啟動都會改變，正式上線前請改用固定網址。
+          </p>
+        </div>
+        <div className="side"><div className="card">
+          <h2>最近入場 <span className="small muted">最近 50 筆，每 15 秒更新</span></h2>
+          {c.recent.length ? c.recent.map((x) => (
+            <div key={x.id} className="selitem">
+              <span><b>{x.holder ?? ''}</b> <span className="mono small muted">{x.serial}</span><br /><span className="small muted">{tw(x.at)}・{x.gate}{x.manual ? '・手動' : ''}</span></span>
+              <button className="btn small" disabled={busy} onClick={() => confirm2(`cu${x.id}`, () => act({ action: 'checkin.undo', id: x.id }, `已撤銷 ${x.serial} 的入場，這張票可以再掃一次`))}>{sure === `cu${x.id}` ? '確認撤銷' : '撤銷'}</button>
+            </div>
+          )) : <p className="small muted" style={{ margin: 0 }}>尚無入場紀錄</p>}
+        </div></div>
       </div>
     </div>
   );

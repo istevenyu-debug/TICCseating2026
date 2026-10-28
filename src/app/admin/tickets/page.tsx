@@ -5,6 +5,7 @@ import { getDb } from '@/db/client';
 import { SESSION_COOKIE, sessionUser } from '@/lib/auth';
 import { ticketData } from '@/lib/admin';
 import PrintButton from '@/components/admin/PrintButton';
+import { qrSecret, qrValue } from '@/lib/qr';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: '入場券列印' };
@@ -18,7 +19,8 @@ export default async function TicketsPage({ searchParams }: { searchParams: { id
   const ids = (searchParams.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
   const { event, tickets } = await ticketData(db, ids);
   const when = event.showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-  const qrs = await Promise.all(tickets.map((t) => QRCode.toString(`TICC|${t.serial}`, { type: 'svg', margin: 0, width: 84 })));
+  const secret = await qrSecret(db);
+  const qrs = await Promise.all(tickets.map((t) => QRCode.toString(qrValue(secret, t.serial), { type: 'svg', margin: 0, width: 84 })));
   return (
     <main className="print-wrap">
       <div className="no-print row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>

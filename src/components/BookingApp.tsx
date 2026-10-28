@@ -489,7 +489,7 @@ export default function BookingApp({ code }: { code: string }) {
                     <div className="small muted">購票人：{o.buyerName}・{o.buyerPhone}・{o.buyerEmail}</div>
                     {o.seats.map((s) => (
                       <div key={s.code} className="etk">
-                        {s.serial && <TicketQR serial={s.serial} size={104} />}
+                        {s.serial && s.qr && <TicketQR serial={s.serial} value={s.qr} size={104} />}
                         <div className="small">
                           <div className="etk-seat">{s.label}</div>
                           <div className="mono">座位編號 {s.code}</div>

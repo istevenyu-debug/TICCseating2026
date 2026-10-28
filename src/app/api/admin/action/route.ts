@@ -10,6 +10,7 @@ import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
 import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
+import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,6 +63,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.confirm'), id }),
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
+  z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
+  z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
+  z.object({ action: z.literal('checkin.undo'), id }),
   z.object({ action: z.literal('bundle.create'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int() }),
   z.object({ action: z.literal('bundle.auto'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5), size: z.number().int(),
     shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600) }),
@@ -132,6 +136,9 @@ export async function POST(req: Request) {
       }
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);
+      case 'gate.create': return createGates(db, who, a.names);
+      case 'gate.update': return updateGate(db, who, a.id, a.values);
+      case 'checkin.undo': return undoCheckin(db, who, a.id);
       case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);
       case 'bundle.clear': return A.unbundleByRule(db, who, a.rows, a.blocks);
       case 'bundle.auto': return A.bundleAuto(db, who, { rows: a.rows, blocks: a.blocks, size: a.size, shape: a.shape, crossAisle: a.crossAisle, skip: a.skip });

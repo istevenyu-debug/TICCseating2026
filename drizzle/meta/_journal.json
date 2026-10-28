@@ -71,6 +71,13 @@
       "when": 1793119797913,
       "tag": "0009_preorder",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793183984254,
+      "tag": "0010_checkin",
+      "breakpoints": true
     }
   ]
 }

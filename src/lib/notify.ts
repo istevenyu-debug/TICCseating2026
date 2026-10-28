@@ -186,11 +186,13 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
   const { ticketData } = await import('./admin');
   const QR = (await import('qrcode')).default;
   const { event, tickets } = await ticketData(db, [orderId]);
+  const { qrSecret, qrValue } = await import('./qr');
+  const secret = await qrSecret(db);
   const attachments: NonNullable<MailExtra['attachments']> = [];
   const cards: string[] = [];
   for (const [i, tk] of tickets.entries()) {
     const cid = `qr${i}@ticket`;
-    attachments.push({ filename: `${tk.serial}.png`, content: await QR.toBuffer(`TICC|${tk.serial}`, { type: 'png', margin: 1, width: 220 }), cid });
+    attachments.push({ filename: `${tk.serial}.png`, content: await QR.toBuffer(qrValue(secret, tk.serial), { type: 'png', margin: 1, width: 260 }), cid });
     cards.push(`<table role="presentation" style="border:1px solid #d6dce8;border-radius:10px;margin:0 0 12px;width:100%;max-width:520px"><tr>
       <td style="padding:12px;width:140px"><img src="cid:${cid}" width="130" height="130" alt="入場 QR code ${esc(tk.serial)}" style="display:block"></td>
       <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">

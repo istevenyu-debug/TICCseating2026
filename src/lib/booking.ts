@@ -14,6 +14,7 @@ import * as t from '@/db/schema';
 import { seatLabel } from './layout';
 import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
 import { autoHolders, submitInput, type SubmitInput } from './validation';
+import { qrSecret, qrValue } from './qr';
 
 export class BookingError extends Error {
   constructor(public code: string, message: string, public detail?: unknown) {
@@ -224,6 +225,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
   }).reverse().map((n) => ({ id: n.id, at: n.createdAt.toISOString(), template: n.template, content: n.content }));
 
   const sf = saleStateFor(ev, link, now);
+  const secret = await qrSecret(db);
   // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
   const [po] = link.kind === 'public' ? [] : await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
   const comboItem = po?.items.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
@@ -264,6 +266,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
           label: v ? seatLabel(v) : s.seatId, code: v?.code ?? '', holder: s.holderName, holderId4: s.holderId4,
           zoneName: zones.find((z) => z.id === v?.zoneId)?.name ?? '',
           serial: o.status === 'paid' ? `${o.orderNo}-${String(i + 1).padStart(2, '0')}` : null,
+          qr: o.status === 'paid' ? qrValue(secret, `${o.orderNo}-${String(i + 1).padStart(2, '0')}`) : null,
         };
       }),
     })),

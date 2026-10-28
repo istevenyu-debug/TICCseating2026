@@ -183,3 +183,33 @@ input.need { border-color: var(--red); }
 .seat.off { opacity: .28; cursor: not-allowed; }
 /* 送出前確認 */
 .review { border: 2px solid var(--accent); border-radius: 10px; padding: 12px 14px; margin-top: 12px; }
+
+/* ---------- 手機驗票頁 ---------- */
+.scan { min-height: 100dvh; background: #111827; color: #f3f4f6; display: flex; flex-direction: column; font-size: 16px; }
+.scan-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; }
+.scan-head b { font-size: 18px; }
+.scan-count { text-align: right; } .scan-count b { font-size: 22px; }
+.scan-sub { font-size: 13px; color: #9ca3af; }
+.scan-cam { position: relative; background: #000; aspect-ratio: 3 / 4; max-height: 62dvh; width: 100%; overflow: hidden; }
+.scan-cam video { width: 100%; height: 100%; object-fit: cover; }
+.scan-frame { position: absolute; inset: 18% 14%; border: 3px solid rgba(255, 255, 255, .85); border-radius: 16px; pointer-events: none; }
+.scan-start { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 16px; text-align: center; }
+.scan-err { color: #fca5a5; margin: 0; }
+.scan-btn { background: #2563eb; color: #fff; border: 0; border-radius: 12px; font: 600 18px/1 inherit; padding: 16px 28px; cursor: pointer; }
+.scan-btn.small { font-size: 15px; padding: 12px 16px; border-radius: 10px; white-space: nowrap; }
+.scan-btn.ghost { background: #374151; }
+.scan-btn:disabled { opacity: .5; }
+.scan-result { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 20px; cursor: pointer; }
+.scan-result.good { background: #15803d; } .scan-result.bad { background: #b91c1c; }
+.scan-result .scan-sub { color: rgba(255, 255, 255, .8); }
+.scan-big { font-size: 40px; font-weight: 800; }
+.scan-seat { font-size: 30px; font-weight: 700; }
+.scan-holder { font-size: 19px; }
+.scan-tools { padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 10px; }
+.scan-row { display: flex; gap: 8px; }
+.scan-row input { flex: 1; min-width: 0; font-size: 16px; padding: 12px; border-radius: 10px; border: 1px solid #374151; background: #1f2937; color: #f3f4f6; }
+.scan-found { background: #1f2937; border-radius: 10px; padding: 6px 10px; }
+.scan-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #374151; }
+.scan-item:last-child { border-bottom: 0; }
+.scan-card { margin: 24px 16px; padding: 24px; border-radius: 14px; background: #1f2937; }
+.scan-card.bad { background: #b91c1c; }

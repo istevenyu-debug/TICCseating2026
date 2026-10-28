@@ -605,7 +605,7 @@ export async function ticketData(db: Db, orderIds: number[]) {
       const k = (n.get(r.orderId) ?? 0) + 1;
       n.set(r.orderId, k);
       return {
-        serial: `${r.orderNo}-${String(k).padStart(2, '0')}`, orderNo: r.orderNo, label: seatLabel(r), code: r.code,
+        serial: `${r.orderNo}-${String(k).padStart(2, '0')}`, orderNo: r.orderNo, orderId: r.orderId, seatId: r.seatId, label: seatLabel(r), code: r.code,
         zoneName: r.zoneName, comboName: combos.find((c) => c.id === r.comboId)?.name ?? '',
         holderName: r.holderName ?? '', holderId4: r.holderId4 ?? '', entrance: r.entrance,
       };

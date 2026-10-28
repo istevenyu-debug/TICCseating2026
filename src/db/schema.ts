@@ -207,6 +207,29 @@ export const preorder = pgTable('preorder', {
   seenAt: timestamp('seen_at', { withTimezone: true }),
 }, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no) }));
 
+/** 驗票門口：每個門一條驗票連結（token），工作人員用手機打開即可掃描，可停用 */
+export const gate = pgTable('gate', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  name: text('name').notNull(),
+  token: text('token').notNull(),
+  active: boolean('active').notNull().default(true),
+  sort: integer('sort').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ token: uniqueIndex('gate_token_idx').on(t.token) }));
+
+/** 入場紀錄：每張票（序號）只能一筆 */
+export const checkin = pgTable('checkin', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  serial: text('serial').notNull(),
+  orderId: integer('order_id').notNull(),
+  seatId: text('seat_id').notNull(),
+  gateId: integer('gate_id'),
+  manual: boolean('manual').notNull().default(false), // 手動輸入序號或搜尋入場（非掃描）
+  at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ serial: uniqueIndex('checkin_serial_idx').on(t.eventId, t.serial) }));
+
 /** 手機推播訂閱：消費者在購票頁按「開啟通知」後建立 */
 export const pushSub = pgTable('push_sub', {
   id: serial('id').primaryKey(),
