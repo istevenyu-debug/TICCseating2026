@@ -62,7 +62,7 @@ interface Form {
   name: string; phone: string; email: string;
   holders: Record<string, { name: string; id4: string }>;
   idBase: string;
-  last5: string; amount: string; time: string; agree: boolean;
+  agree: boolean;
 }
 
 export default function BookingApp({ code }: { code: string }) {
@@ -113,7 +113,7 @@ export default function BookingApp({ code }: { code: string }) {
       setForm((f) => f ?? {
         name: st.prefill.name, phone: st.prefill.phone, email: st.prefill.email, idBase: '',
         holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.prefill.name : '', id4: '' }])),
-        last5: '', amount: String(held.amount), time: '', agree: false,
+        agree: false,
       });
     } else {
       setForm(null);
@@ -245,10 +245,6 @@ export default function BookingApp({ code }: { code: string }) {
         if (!/^[0-9A-Za-z]{4}$/.test(h.id4.trim())) return bad(`${seatById[id]?.label ?? id} 的身分證末 4 碼應為 4 個英數字`, `h-i-${id}`);
       }
     }
-    if (!st!.event.payFirst) {
-      if (!/^\d{5}$/.test(form.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 't-last5');
-      if (!form.time) return bad('請填寫匯款時間', 't-time');
-    }
     if (!form.agree) return bad('請勾選同意個資蒐集', 't-agree');
     setMsg(null); setReview(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -257,22 +253,19 @@ export default function BookingApp({ code }: { code: string }) {
   async function doSubmit() {
     if (!form || !held) return;
     setBusy(true); setMsg(null);
-    const r = await api<{ orderNo: string; amountMismatch: boolean }>(`/api/t/${code}/submit`, {
+    const r = await api<{ orderNo: string }>(`/api/t/${code}/submit`, {
       orderId: held.orderId,
       buyer: { name: form.name, phone: form.phone, email: form.email },
       holders: heldAuto
         ? held.seatIds.map((id, i) => ({ seatId: id, ...autoList[i] }))
         : held.seatIds.map((id) => ({ seatId: id, ...form.holders[id] })),
       ...(heldAuto ? { idBase: form.idBase.trim().toUpperCase() } : {}),
-      ...(st!.event.payFirst ? {} : { transfer: { last5: form.last5, amount: Number(form.amount.replace(/[^\d]/g, '')) || 0, time: form.time.replace('T', ' ') } }),
       agree: form.agree,
     });
     setBusy(false);
     if (!r.ok) { setReview(false); setMsg({ kind: 'err', text: r.message }); if (r.code.startsWith('HOLD')) await load(); return; }
     setLastOrder(r.data.orderNo); setReview(false);
-    setMsg({ kind: 'ok', text: st!.event.payFirst
-      ? `劃位資料已送出（訂單 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
-      : `訂購資料已送出（訂單 ${r.data.orderNo}）。主辦方確認到帳後，會以簡訊及 Email 通知劃位結果。${r.data.amountMismatch ? '提醒：您填寫的匯款金額與應付金額不同，主辦方會再與您確認。' : ''}` });
+    setMsg({ kind: 'ok', text: `劃位資料已送出（劃位編號 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。` });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
   }
@@ -287,9 +280,7 @@ export default function BookingApp({ code }: { code: string }) {
         <h1>{st.event.name}</h1>
         <div className="muted">{fmtDate(st.event.showAt)}・台北國際會議中心 大會堂</div>
         <div className="small" style={{ marginTop: 6 }}>
-          {st.link.kind === 'public'
-            ? <>歡迎訂購。每筆訂單最多 <b>{st.event.maxPerOrder}</b> 張{st.link.perPhone ? `，每支手機最多 ${st.link.perPhone} 張` : ''}。</>
-            : <>{st.link.name} 您好，{st.link.quota ? <>此專屬連結可訂購 <b>{st.link.quota}</b> 張（已訂 {st.link.used} 張）</> : <>此專屬連結張數不限（每筆最多 {st.event.maxPerOrder} 張）</>}，有效至 {fmtDate(st.link.expiresAt)}。</>}
+          {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 張（已劃 {st.link.used} 張）</> : ''}，有效至 {fmtDate(st.link.expiresAt)}。請勿轉傳他人。
         </div>
       </div>
       {alerts.length > 0 && (() => {
@@ -375,7 +366,7 @@ export default function BookingApp({ code }: { code: string }) {
           {held && form && (
             <div className="card">
               <h2>座位暫存中 <span className="timer">{mmss(remain)}</span></h2>
-              <p className="small muted" style={{ margin: '0 0 8px' }}>{st.event.payFirst ? '請在時間內填好資料並送出，逾時座位會自動釋放。' : '請在時間內完成匯款並送出資料，逾時座位會自動釋放。'}</p>
+              <p className="small muted" style={{ margin: '0 0 8px' }}>請在時間內填好資料並送出，逾時座位會自動釋放。</p>
               <div className="sellist">
                 {held.seatIds.map((id) => (
                   <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small muted">{zoneBy[seatById[id]?.zoneId]?.name}</span></div>
@@ -383,19 +374,6 @@ export default function BookingApp({ code }: { code: string }) {
               </div>
               <div className="total"><span className="muted">{st.combos.find((c) => c.id === held.comboId)?.name}</span><b>{money(held.amount)}</b></div>
 
-              {!st.event.payFirst && <>
-              <h3>匯款帳戶</h3>
-              <div className="bank">
-                <span className="muted">銀行</span><span>{st.event.bankName}</span>
-                <span className="muted">帳號</span><span className="mono">{st.event.bankAccount}</span>
-                <span className="muted">戶名</span><span>{st.event.accountName}</span>
-                <span className="muted">金額</span><span className="mono">{money(held.amount)}</span>
-              </div>
-              <button className="btn small" type="button" style={{ marginTop: 6 }}
-                onClick={() => navigator.clipboard?.writeText(st.event.bankAccount.replace(/-/g, '')).then(() => setMsg({ kind: 'ok', text: '已複製帳號' }), () => undefined)}>
-                複製帳號
-              </button>
-              </>}
 
               {review && (
                 <div className="review">
@@ -427,7 +405,7 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="fields">
                   <label className="f">姓名<input id="b-name" value={form.name} onChange={(e) => upd({ name: e.target.value })} autoComplete="name" /></label>
                   <label className="f">手機<input id="b-phone" value={form.phone} maxLength={13} aria-invalid={!!phoneProblem(form.phone)} style={phoneProblem(form.phone) ? { borderColor: 'var(--red)' } : undefined}
-                    onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder={st.link.kind === 'public' ? '09xxxxxxxx' : `09xxxxx${st.link.phoneTail}`} autoComplete="tel" />
+                    onChange={(e) => upd({ phone: e.target.value })} inputMode="tel" placeholder="09xxxxxxxx" autoComplete="tel" />
                     {phoneProblem(form.phone) && <span className="small" style={{ color: 'var(--red)' }}>{phoneProblem(form.phone)}</span>}</label>
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
@@ -453,14 +431,6 @@ export default function BookingApp({ code }: { code: string }) {
                   </div>
                 ))}
 
-                {!st.event.payFirst && <>
-                <h3>匯款資訊</h3>
-                <div className="fields">
-                  <label className="f">匯出帳號末 5 碼<input id="t-last5" value={form.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value })} /></label>
-                  <label className="f">匯款金額<input id="t-amt" value={form.amount} inputMode="numeric" onChange={(e) => upd({ amount: e.target.value })} /></label>
-                </div>
-                <label className="f" style={{ marginTop: 8 }}>匯款時間<input id="t-time" type="datetime-local" value={form.time} onChange={(e) => upd({ time: e.target.value })} /></label>
-                </>}
                 <label className="check" style={{ marginTop: 10 }}>
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />
                   我同意主辦方為售票及實名入場核對之目的，蒐集與處理上述個人資料。
@@ -475,13 +445,13 @@ export default function BookingApp({ code }: { code: string }) {
           )}
 
           <div className="card" id="my-orders">
-            <h2>我的訂單</h2>
+            <h2>我的劃位</h2>
             {st.orders.length ? st.orders.map((o) => (
               <div key={o.orderNo} className="note" style={{ marginBottom: 6, outline: o.orderNo === lastOrder ? '1px solid var(--ok)' : undefined }}>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' ? (st.event.payFirst ? '・主辦方確認後會寄出劃位成功通知與 QR code' : o.payDueAt ? `・請於 ${fmtDate(o.payDueAt)} 前完成匯款確認` : '') : ''}</div>
+                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">

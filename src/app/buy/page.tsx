@@ -1,7 +1,7 @@
 import PreorderApp from '@/components/PreorderApp';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: '訂購｜大會堂劃位' };
+export const metadata = { title: '預購單｜大會堂劃位' };
 
 export default function BuyPage() {
   return <PreorderApp />;

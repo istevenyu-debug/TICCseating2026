@@ -73,10 +73,10 @@ export async function saveNotifyConfig(db: Db, actor: string, v: Partial<Record<
 
 const SUBJECT: Record<string, string> = {
   invite: '您的專屬購票連結',
-  order_received: '已收到您的訂購資料',
+  order_received: '已收到您的劃位資料',
   order_confirmed: '劃位成功通知',
-  order_cancelled: '訂單取消通知',
-  order_expired: '訂單逾期取消通知',
+  order_cancelled: '劃位取消通知',
+  order_expired: '劃位逾時取消通知',
   preorder_received: '已收到您的訂單',
   preorder_link: '已收到款項：您的專屬劃位連結',
   preorder_cancelled: '訂單取消通知',
@@ -215,7 +215,7 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
 }
 
 const PUSH_TITLE: Record<string, string> = {
-  order_confirmed: '🎉 劃位成功', order_cancelled: '訂單已取消', order_expired: '訂單已逾期取消', order_received: '已收到訂購資料',
+  order_confirmed: '🎉 劃位成功', order_cancelled: '劃位已取消', order_expired: '劃位已逾時取消', order_received: '已收到劃位資料',
 };
 
 /** App 推播：推到訂購人手機（購票頁按過「開啟通知」的那支） */

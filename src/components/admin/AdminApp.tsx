@@ -23,7 +23,7 @@ type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
 const nStatus = (ch: string, st: string) => (ch === 'push' ? ({ sent: '已送達手機', simulated: '僅顯示在購票頁' } as Record<string, string>)[st] : undefined) ?? N_STATUS[st] ?? st;
-const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '專屬連結', order_received: '收到訂購資料', order_confirmed: '劃位成功', order_cancelled: '訂單取消', order_expired: '逾期取消' };
+const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '劃位連結', order_received: '收到劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消', order_expired: '劃位逾時' };
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };
@@ -51,7 +51,7 @@ const COLOR_PRESETS = [
   '#ffadad', '#9fd8c8', '#d3d3d3', '#4f7bd8', '#2f9a62', '#d9822b', '#c0392b', '#8e44ad', '#555e70',
 ];
 const USAGE_COLOR: Record<string, string> = { sale: '#dfe5f1', 'hold-pr': '#f5c6a5', 'hold-sponsor': '#cdbdf2', closed: '#ffffff' };
-const STATUS: Record<string, string> = { held: '暫存中・填寫資料', pending: '待確認到帳', paid: '劃位成功', cancelled: '已取消', expired: '逾時取消' };
+const STATUS: Record<string, string> = { held: '選位中・填寫資料', pending: '待確認劃位', paid: '劃位成功', cancelled: '已取消', expired: '逾時取消' };
 const BLOCKS: [string, string][] = [['L2', '左側區'], ['L1', '左區'], ['C0', '中區'], ['R1', '右區'], ['R2', '右側區']];
 
 const money = (n: number) => `NT$${(n || 0).toLocaleString('en-US')}`;
@@ -64,7 +64,6 @@ const toLocalInput = (iso: string | null) => {
   return d.toISOString().slice(0, 16);
 };
 const fromLocalInput = (v: string) => (v ? new Date(`${v}:00+08:00`).toISOString() : null);
-const todayTW = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
 
 function rowsText(set: Set<number>) {
   const n = [...set].filter((x) => x > 0).sort((a, b) => a - b), p: string[] = [];
@@ -195,7 +194,7 @@ export default function AdminApp() {
       )}
       {st.stats.newOrders > 0 && (
         <div className="alertbar">
-          <span><b>有 {st.stats.newOrders} 筆新訂單已送出</b>，消費者已填好匯款資料，請核對入帳後按「確認到帳」。</span>
+          <span><b>有 {st.stats.newOrders} 筆新劃位已送出</b>，請核對座位與持票人後按「確認劃位」，系統會寄出 QR code。</span>
           <button className="btn pri" onClick={() => { const o = st.orders.find((x) => x.isNew); go('orders'); if (o) openOrder(o); }}>立即查看</button>
         </div>
       )}
@@ -210,7 +209,7 @@ export default function AdminApp() {
         <div className="stat"><b>{st.stats.total}</b><span>本場席位</span></div>
         <div className="stat"><b>{st.stats.sale}</b><span>可售剩餘</span></div>
         <div className="stat"><b style={{ color: 'var(--accent)' }}>{st.stats.held}</b><span>暫存中</span></div>
-        <div className="stat"><b style={{ color: 'var(--warn)' }}>{st.stats.pending}</b><span>待確認到帳</span></div>
+        <div className="stat"><b style={{ color: 'var(--warn)' }}>{st.stats.pending}</b><span>待確認劃位</span></div>
         <div className="stat"><b style={{ color: 'var(--ok)' }}>{st.stats.sold}</b><span>已售出</span></div>
         <div className="stat"><b>{st.stats.reserved}</b><span>保留／不開放</span></div>
         <div className="stat"><b>{money(st.stats.revenue)}</b><span>已到帳金額</span></div>
@@ -239,7 +238,7 @@ function Home() {
     ['price', '價格設定', '票種名稱、票價與座位底色，依排數和區塊指定座位，組合票，開放訂購與發布', st.zones.slice(0, 3).map((z) => `${z.name || '未命名'} ${money(z.price)}`).join('・')],
     ['usage', '席位用途', '保留公關席、贊助席、不開放座位，加裝 VIP 排', `保留／不開放 ${st.stats.reserved} 席`],
     ['links', '專屬購票連結', '發給受邀對象的購票連結與可購張數', `已發出 ${st.links.length} 條`],
-    ['pre', '訂單（收款）', '公開訂購頁收到的訂單：核對入帳後確認收訖，系統自動寄出專屬劃位連結', `${st.preorders.filter((x) => x.status === 'submitted').length} 張待確認收訖`],
+    ['pre', '訂單（收款）', '買方從預購單送出的訂單：核對入帳後確認收訖，系統自動以 Email 寄出劃位連結', `${st.preorders.filter((x) => x.status === 'submitted').length} 張待確認收訖`],
     ['groups', '連座分組', '兩位一組、十位一組等連座；預設分組可修改，按一下套用', ''],
     ['orders', '劃位確認', '看暫存中與已送出劃位資料的人，核對後按確認，寄出劃位成功與 QR code', `${st.stats.newOrders ? `新訂單 ${st.stats.newOrders} 筆・` : ''}暫存 ${st.stats.held} 席・待確認 ${st.stats.pending} 席`],
     ['tickets', '紙本入場券', '依已確認的訂單產生實名入場券並列印', `已售 ${st.stats.sold} 席`],
@@ -478,28 +477,24 @@ function Settings() {
   const e = st.event;
   const [v, setV] = useState({
     name: e.name, showAt: toLocalInput(e.showAt), saleStart: toLocalInput(e.saleStart), saleEnd: toLocalInput(e.saleEnd), maxPerOrder: String(e.maxPerOrder),
-    holdMinutes: String(e.holdMinutes), payHours: String(e.payHours), bankName: e.bankName, bankAccount: e.bankAccount, accountName: e.accountName,
+    holdMinutes: String(e.holdMinutes), bankName: e.bankName, bankAccount: e.bankAccount, accountName: e.accountName,
   });
   const f = (k: keyof typeof v, label: string, type = 'text') => (
     <label className="f">{label}<input type={type} value={v[k]} onChange={(x) => setV({ ...v, [k]: x.target.value })} /></label>
   );
   return (
     <>
-      <h3>付款方式</h3>
-      <label className="switch"><input type="checkbox" checked={st.event.payFirst} disabled={busy}
-        onChange={(x) => act({ action: 'event.update', values: { payFirst: x.target.checked } }, x.target.checked ? '已改為先匯款再給連結：購票頁不顯示匯款帳戶與匯款欄位' : '已改為劃位後匯款：購票頁顯示匯款帳戶，需填匯款資料')} />
-        先匯款、再給劃位連結（購票頁不顯示匯款帳戶、不用填匯款資料；送出後不會逾期取消）</label>
       <h3>時間、限制與匯款帳戶</h3>
       <div className="fields">
         {f('name', '演出名稱')}{f('showAt', '演出時間（台北）', 'datetime-local')}
         {f('maxPerOrder', '每筆訂單上限（張）')}
         {f('saleStart', '開始時間（台北）', 'datetime-local')}{f('saleEnd', '截止時間（台北）', 'datetime-local')}
-        {f('holdMinutes', '選位暫存（分鐘）')}{f('payHours', '待確認到帳保留（小時）')}
+        {f('holdMinutes', '選位暫存（分鐘）')}
         {f('bankName', '銀行（含代碼）')}{f('bankAccount', '帳號')}{f('accountName', '戶名')}
       </div>
       <button className="btn pri" style={{ marginTop: 10 }} disabled={busy} onClick={() => act({ action: 'event.update', values: {
         name: v.name, ...(v.showAt ? { showAt: fromLocalInput(v.showAt) } : {}), saleStart: fromLocalInput(v.saleStart), saleEnd: fromLocalInput(v.saleEnd),
-        maxPerOrder: parseInt(v.maxPerOrder) || 21, holdMinutes: parseInt(v.holdMinutes) || 20, payHours: parseInt(v.payHours) || 48,
+        maxPerOrder: parseInt(v.maxPerOrder) || 21, holdMinutes: parseInt(v.holdMinutes) || 20,
         bankName: v.bankName, bankAccount: v.bankAccount, accountName: v.accountName,
       } }, '已儲存。時間與匯款帳戶立即生效，不需發布。')}>儲存這些設定</button>
     </>
@@ -512,45 +507,12 @@ function Links() {
   const [f, setF] = useState({ name: '', phone: '', note: '', quota: '21', expiresAt: toDateInput(st.event.showAt) });
   const [made, setMade] = useState<{ name: string; code: string; note: string } | null>(null);
   const base = typeof window !== 'undefined' ? location.origin : '';
-  const pubLink = st.links.find((l) => l.kind === 'public');
-  const [pv, setPv] = useState({ start: toLocalInput(st.event.publicSaleStart), perPhone: String(st.event.publicPerPhone) });
-  const copy = (code: string) => navigator.clipboard?.writeText(`${base}/t/${code}`)
-    .then(() => setMsg({ kind: 'ok', text: `已複製 ${base}/t/${code}` }), () => setMsg({ kind: 'ok', text: `${base}/t/${code}` }));
-  const generalStart = st.event.saleStart ? tw(st.event.saleStart) : '開放後立即';
   return (
     <div className="pstack">
-    {st.event.payFirst ? (
-      <p className="small muted" style={{ margin: 0 }}>目前為「先匯款、再給劃位連結」：依來帳逐一產生連結，複製後貼給當事人。不使用公開連結（可在「二、價格設定 → 付款方式」切換）。</p>
-    ) : (
-    <div className="card">
-      <h2>公開連結 <span className="small muted">整場一條，發給所有人（例如貼在 LINE 群組）；購票人訂購時自己填姓名電話</span></h2>
-      {pubLink ? (
-        <>
-          <div className="row">
-            <span className="mono" style={{ fontSize: 15 }}>{base}/t/{pubLink.code}</span>
-            {pubLink.status === 'active' ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}
-          </div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <button className="btn pri" onClick={() => copy(pubLink.code)}>複製公開連結</button>
-            <a className="btn" href={`/t/${pubLink.code}`} target="_blank" rel="noreferrer">開啟購票頁</a>
-            <button className="btn" disabled={busy} onClick={() => act({ action: 'link.update', id: pubLink.id, values: { status: pubLink.status === 'active' ? 'disabled' : 'active' } })}>{pubLink.status === 'active' ? '停用' : '啟用'}</button>
-          </div>
-        </>
-      ) : (
-        <button className="btn pri" disabled={busy} onClick={() => act({ action: 'link.createPublic' }, '已建立公開連結')}>建立公開連結</button>
-      )}
-      <h3>先專屬、再公開</h3>
-      <div className="fields">
-        <label className="f">公開連結開始時間（台北）<input type="datetime-local" value={pv.start} onChange={(e) => setPv({ ...pv, start: e.target.value })} /></label>
-        <label className="f">公開連結每支手機上限（0＝不限）<input value={pv.perPhone} inputMode="numeric" onChange={(e) => setPv({ ...pv, perPhone: e.target.value })} /></label>
-      </div>
-      <p className="small muted">專屬連結從 {generalStart} 開始可訂；公開連結從上面的時間開始，空白代表與專屬連結相同。時間到之前打開公開連結，可以看座位但不能訂。</p>
-      <button className="btn" disabled={busy} onClick={() => act({ action: 'event.update', values: { publicSaleStart: fromLocalInput(pv.start), publicPerPhone: parseInt(pv.perPhone) || 0 } }, '已儲存公開連結設定（立即生效）')}>儲存公開連結設定</button>
-    </div>
-    )}
+    <p className="small muted" style={{ margin: 0 }}>劃位連結通常由「四、訂單（收款）」確認收訖後自動建立並以 Email 寄出，會列在下面。特殊狀況（例如貴賓、沒填預購單直接匯款）可用右側「手動發劃位連結」。</p>
     <div className="grid2">
       <div className="card">
-        <h2>已發出的專屬購票連結</h2>
+        <h2>已發出的劃位連結</h2>
         <div className="tbl"><table>
           <thead><tr><th>代碼</th><th>對象</th><th>手機／來帳備註</th><th>可購／已訂</th><th>有效至</th><th>狀態</th><th></th></tr></thead>
           <tbody>
@@ -583,8 +545,8 @@ function Links() {
         </table></div>
         <p className="small muted">每個連結綁定一位對象與可購張數。之後會加上開啟時的手機簡訊驗證碼，避免連結被轉傳使用。</p>
       </div>
-      <div className="side"><div className="card">
-        <h2>發出新連結</h2>
+      <div className="side"><details className="card">
+        <summary style={{ cursor: 'pointer' }}><b>手動發劃位連結</b> <span className="small muted">備用：貴賓、未填預購單直接匯款</span></summary>
         <form onSubmit={async (e) => {
           e.preventDefault();
           const miss = [!f.name.trim() && '姓名', !f.expiresAt && '有效期限'].filter(Boolean);
@@ -624,7 +586,7 @@ function Links() {
             </div>
           </div>
         )}
-      </div></div>
+      </details></div>
     </div>
     </div>
   );
@@ -638,39 +600,37 @@ function Orders() {
   return (
     <div className="grid2">
       <div className="card">
-        <h2>訂單
+        <h2>劃位
           <select value={filter} style={{ width: 'auto' }} onChange={(e) => setFilter(e.target.value)}>
-            {[['all', '全部'], ['held', '暫存中'], ['pending', '待確認到帳'], ['paid', '劃位成功'], ['cancelled', '已取消'], ['expired', '逾時取消']].map(([k, n]) => <option key={k} value={k}>{n}</option>)}
+            {[['all', '全部'], ['held', '選位中'], ['pending', '待確認劃位'], ['paid', '劃位成功'], ['cancelled', '已取消'], ['expired', '逾時取消']].map(([k, n]) => <option key={k} value={k}>{n}</option>)}
           </select>
         </h2>
         <div className="tbl"><table>
-          <thead><tr><th>編號</th><th>購票人</th><th>座位</th><th>金額</th><th>匯款末5碼</th><th>狀態</th></tr></thead>
+          <thead><tr><th>劃位編號</th><th>姓名</th><th>座位</th><th>金額</th><th>狀態</th></tr></thead>
           <tbody>
             {list.map((x) => (
               <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} onClick={() => openOrder(x)}>
-                <td className="mono">{x.orderNo}</td><td>{x.buyerName}<br /><span className="small muted">{x.linkKind === 'public' ? '公開連結' : '專屬連結'}</span></td>
+                <td className="mono">{x.orderNo}</td><td>{x.buyerName}{x.linkNote && <><br /><span className="small muted">{x.linkNote}</span></>}</td>
                 <td className="small">{x.seats.map((s) => s.code).join('、')}</td>
                 <td className="mono">{money(x.amount)}</td>
-                <td className="mono">{x.payment?.last5 ?? '—'}</td>
                 <td><span className={`pill p-${x.status}`}>{STATUS[x.status]}</span>{x.isNew && <span className="badge">新</span>}
                   {x.status === 'held' && x.holdUntil && <><br /><span className="small muted">剩 {mmss(Date.parse(x.holdUntil) - now)}</span></>}</td>
               </tr>
             ))}
-            {!list.length && <tr><td colSpan={6} className="muted">沒有符合的訂單</td></tr>}
+            {!list.length && <tr><td colSpan={5} className="muted">沒有符合的劃位</td></tr>}
           </tbody>
         </table></div>
       </div>
-      <div className="side">{o ? <OrderDetail o={o} /> : <div className="card"><p className="muted small" style={{ margin: 0 }}>點選左側訂單查看明細、確認到帳。</p></div>}</div>
+      <div className="side">{o ? <OrderDetail o={o} /> : <div className="card"><p className="muted small" style={{ margin: 0 }}>點選左側劃位查看明細、確認到帳。</p></div>}</div>
     </div>
   );
 }
 
 function OrderDetail({ o }: { o: Order }) {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
-  const [c, setC] = useState({ date: todayTW(), amount: String(o.payment?.amount ?? o.amount), note: '' });
   return (
     <div className="card">
-      <h2>訂單 {o.orderNo} <span className={`pill p-${o.status}`}>{STATUS[o.status]}</span></h2>
+      <h2>劃位 {o.orderNo} <span className={`pill p-${o.status}`}>{STATUS[o.status]}</span></h2>
       <div className="bank">
         <span className="muted">購票人</span><span>{o.buyerName}</span>
         <span className="muted">手機</span><span className="mono">{o.buyerPhone || '—'}</span>
@@ -687,37 +647,22 @@ function OrderDetail({ o }: { o: Order }) {
         {o.seats.map((s) => <tr key={s.seatId}><td>{s.label}</td><td className="mono small">{s.code}</td><td>{s.holderName ?? <span className="muted">尚未填寫</span>}</td><td className="mono">{s.holderId4 ?? ''}</td></tr>)}
       </tbody></table></div>
 
-      {o.payment && !st.event.payFirst && <>
-        <h3>消費者填寫的匯款資訊</h3>
-        <div className="bank">
-          <span className="muted">帳號末5碼</span><span className="mono">{o.payment.last5}</span>
-          <span className="muted">金額</span><span className="mono">{money(o.payment.amount)}{o.payment.amount !== o.amount && <b style={{ color: 'var(--red)' }}> 與應付不符</b>}</span>
-          <span className="muted">時間</span><span>{o.payment.time}</span>
-        </div>
-      </>}
 
       {o.status === 'held' && <>
-        <div className="note" style={{ marginTop: 12 }}>消費者正在填寫實名與匯款資料，<b>尚未送出</b>。座位已先保留，剩 {mmss(Date.parse(o.holdUntil ?? '') - now)}，逾時自動釋放。</div>
+        <div className="note" style={{ marginTop: 12 }}>對方正在填寫持票人資料，<b>尚未送出</b>。座位已先保留，剩 {mmss(Date.parse(o.holdUntil ?? '') - now)}，逾時自動釋放。</div>
         <button className="btn danger" style={{ marginTop: 10 }} disabled={busy} onClick={() => confirm2(`cancel${o.id}`, () => act({ action: 'order.cancel', id: o.id }, '已取消暫存，座位已釋放'))}>{sure === `cancel${o.id}` ? '再按一次確認取消' : '取消暫存（釋放座位）'}</button>
       </>}
 
       {o.status === 'pending' && <>
-        <h3>{st.event.payFirst ? '確認劃位' : '確認到帳'}</h3>
+        <h3>確認劃位</h3>
         {!st.notify.email.ready && <div className="note err" style={{ margin: '0 0 8px' }}>尚未設定 Gmail：按下後<b>不會寄出 Email</b>，只會顯示在對方的購票頁。請先到「八、通知設定」設定。</div>}
-        <p className="small muted" style={{ margin: '0 0 6px' }}>{st.event.payFirst
-          ? '核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 會寄出劃位成功通知並附每張票的入場 QR code，購票頁也會顯示。'
-          : <>核對銀行入帳無誤後按下方按鈕：座位改為已售出，並以簡訊與 Email 通知消費者劃位成功（Email 附入場 QR code）。請於 {tw(o.payDueAt)} 前確認，逾時系統會自動取消。</>}</p>
-        <div className="fields">
-          <label className="f">到帳日期<input type="date" value={c.date} onChange={(e) => setC({ ...c, date: e.target.value })} /></label>
-          <label className="f">到帳金額<input value={c.amount} inputMode="numeric" onChange={(e) => setC({ ...c, amount: e.target.value })} /></label>
-        </div>
-        <label className="f" style={{ marginTop: 8 }}>備註<input value={c.note} placeholder="例：核對網銀明細" onChange={(e) => setC({ ...c, note: e.target.value })} /></label>
+        <p className="small muted" style={{ margin: '0 0 6px' }}>款項已在預購單收訖。核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 寄出劃位成功通知並附每張票的入場 QR code，劃位頁也會顯示。</p>
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
-            const r = await act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }) as { delivery?: Delivery } | null;
-            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認，訂單改為劃位成功。${d.text}` }); }
-          }}>{st.event.payFirst ? '確認劃位，寄出劃位成功與 QR code' : '確認到帳，通知消費者劃位成功'}</button>
-          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。${d.text || '訊息已顯示在訂購人的購票頁'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
+            const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery } | null;
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認，劃位成功。${d.text}` }); }
+          }}>確認劃位，寄出劃位成功與 QR code</button>
+          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消劃位，座位已釋放。${d.text}` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消劃位'}</button>
         </div>
       </>}
 
@@ -742,7 +687,7 @@ function Tickets() {
   const n = paid.filter((o) => pick.has(o.id)).reduce((a, o) => a + o.seats.length, 0);
   return (
     <div className="card">
-      <h2>依訂購資料產生紙本入場券 <span className="small muted">已選 {pick.size} 筆訂單・{n} 張</span></h2>
+      <h2>依劃位資料產生紙本入場券（備用） <span className="small muted">已選 {pick.size} 筆劃位・{n} 張</span></h2>
       <div className="row">
         {paid.map((o) => (
           <label key={o.id} className="switch small" style={{ border: '1px solid var(--line)', borderRadius: 6, padding: '4px 8px' }}>
@@ -750,7 +695,7 @@ function Tickets() {
             {o.orderNo} {o.buyerName}（{o.seats.length} 張）
           </label>
         ))}
-        {!paid.length && <span className="muted">尚無已確認到帳的訂單</span>}
+        {!paid.length && <span className="muted">尚無已確認的劃位</span>}
       </div>
       <a className={`btn pri${pick.size ? '' : ' disabled'}`} style={{ marginTop: 12, display: 'inline-block' }}
         href={pick.size ? `/admin/tickets?ids=${[...pick].join(',')}` : undefined} target="_blank" rel="noreferrer">開啟列印頁</a>
@@ -782,7 +727,7 @@ function Notify() {
           <span className="muted">Email</span><span>{ok(ne.ready)}{ne.ready && <span className="small muted">　寄件：{ne.user}</span>}</span>
           <span className="muted">簡訊</span><span>{ok(ns.ready)}{ns.ready && <span className="small muted">　三竹帳號：{ns.user}</span>}</span>
         </div>
-        <p className="small muted" style={{ marginBottom: 0 }}>消費者送出訂購、確認到帳、取消訂單、發出專屬連結時，系統會自動寄出。失敗會自動重試 3 次，下方「通知紀錄」可看結果與原因，也可以重寄。</p>
+        <p className="small muted" style={{ marginBottom: 0 }}>買方送出預購單、確認收訖（寄劃位連結）、送出劃位、確認劃位（寄 QR code）、取消時，系統會自動寄出。失敗會自動重試 3 次，下方「通知紀錄」可看結果與原因，也可以重寄。</p>
       </div>
 
       <div className="grid2">
@@ -1087,16 +1032,16 @@ function Preorders() {
   return (
     <div className="pstack">
       <div className="card">
-        <h2>公開訂購頁 <span className="small muted">不劃位：選購、匯款、回填資料；確認收訖後自動寄出專屬劃位連結</span></h2>
+        <h2>預購單 <span className="small muted">公開網址：選購、匯款、回填資料（不劃位）；買方送出後成為訂單，確認收訖後自動以 Email 寄出劃位連結</span></h2>
         <label className="switch"><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
-          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放公開訂購頁' : '已關閉公開訂購頁')} />開放公開訂購</label>
+          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放預購單</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
-          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製 ${buyUrl}` }), () => undefined)}>複製訂購網址</button>
-          <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟訂購頁</a>
+          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製預購單網址 ${buyUrl}` }), () => undefined)}>複製預購單網址</button>
+          <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟預購單</a>
         </div>
-        <p className="small muted" style={{ marginBottom: 0 }}>訂購頁顯示已發布的組合票（每組）與單張票種，以及「時間、限制與匯款帳戶」裡的匯款帳戶，請先確認帳戶正確。訂購不佔名額、不會自動取消。</p>
-        {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，訂購頁會顯示空白，請到「二、價格設定」填寫。</div>}
+        <p className="small muted" style={{ marginBottom: 0 }}>預購單顯示已發布的組合票（每組）與單張票種，以及「時間、限制與匯款帳戶」裡的匯款帳戶，請先確認帳戶正確。訂購不佔名額、不會自動取消。</p>
+        {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，預購單會顯示空白，請到「二、價格設定」填寫。</div>}
       </div>
 
       <div className="card">

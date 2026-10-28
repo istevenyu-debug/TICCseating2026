@@ -44,12 +44,6 @@ export const submitInput = z.object({
   })).min(1),
   /** 持票人自動編號的購票方式：購票人身分證末 4 碼 */
   idBase: z.string().trim().toUpperCase().regex(/^[0-9A-Z]{4}$/, '購票人身分證末 4 碼應為 4 個英數字').optional(),
-  /** 先匯款再給連結的場次不需要填 */
-  transfer: z.object({
-    last5: z.string().trim().regex(/^\d{5}$/, '匯款帳號末 5 碼應為 5 位數字'),
-    amount: z.number().int().nonnegative('匯款金額不正確'),
-    time: z.string().trim().min(1, '請填寫匯款時間').max(40),
-  }).optional(),
   agree: z.literal(true, { errorMap: () => ({ message: '請勾選同意個資蒐集' }) }),
 });
 

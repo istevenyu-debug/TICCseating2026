@@ -17,7 +17,7 @@ async function order() {
   const h = await holdSeats(db, 'AAA111', ['3-1'], single, T0);
   await submitOrder(db, 'AAA111', {
     orderId: h.orderId, buyer: { name: '王大明', phone: '0912345678', email: 'wang@example.com' },
-    holders: [{ seatId: '3-1', name: '王大明', id4: 'A123' }], transfer: { last5: '12345', amount: h.amount, time: '10:05' }, agree: true,
+    holders: [{ seatId: '3-1', name: '王大明', id4: 'A123' }], agree: true,
   }, T0);
   return h.orderId;
 }
@@ -56,7 +56,7 @@ describe('通知寄送', () => {
     const id = await order();
     const { s, sent } = fake();
     await dispatchQueued(db, s);
-    expect(sent).toEqual([expect.objectContaining({ ch: 'email', to: 'wang@example.com', subject: '已收到您的訂購資料' })]);
+    expect(sent).toEqual([expect.objectContaining({ ch: 'email', to: 'wang@example.com', subject: '已收到您的劃位資料' })]);
     await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0, 'https://abc-def.trycloudflare.com');
     await dispatchQueued(db, s);
     const last = sent.slice(1);
@@ -175,11 +175,11 @@ describe('先匯款再給連結', () => {
       orderId: h.orderId, buyer: { name: '陳小美', phone: '0912345678', email: 'mei@example.com' },
       holders: [{ seatId: '5-1', name: '陳小美', id4: 'B234' }], agree: true,
     }, T0);
-    expect(r.amountMismatch).toBe(false);
+    expect(r.orderNo).toBe('T1-00001');
     const { getBookingState } = await import('@/lib/booking');
     const later = await getBookingState(db, l.code, new Date(T0.getTime() + 20 * 86400_000));
     expect(later.orders[0].status).toBe('pending'); // 20 天後仍在，不會被取消
-    expect(later.event.bankAccount).toBe(''); // 購票頁不顯示匯款帳戶
+    expect('bankAccount' in later.event).toBe(false); // 購票頁不顯示匯款帳戶
   });
 
   it('劃位成功 Email 附每張票的 QR code（序號與入場券相同）', async () => {

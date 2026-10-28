@@ -78,6 +78,13 @@
       "when": 1793183984254,
       "tag": "0010_checkin",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793202811350,
+      "tag": "0011_remove_pay_later",
+      "breakpoints": true
     }
   ]
 }

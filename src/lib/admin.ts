@@ -115,7 +115,6 @@ export async function getAdminState(db: Db, now = new Date()) {
       saleStart: evNow.saleStart?.toISOString() ?? null, saleEnd: evNow.saleEnd?.toISOString() ?? null,
       maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours, payFirst: evNow.payFirst, preorderOpen: evNow.preorderOpen,
       bankName: evNow.bankName, bankAccount: evNow.bankAccount, accountName: evNow.accountName,
-      publicSaleStart: evNow.publicSaleStart?.toISOString() ?? null, publicPerPhone: evNow.publicPerPhone,
     },
     published: pub, dirty,
     zones: zones.map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price, open: z.open, seatCount: inst.filter((s) => s.zoneId === z.id).length })),
@@ -145,7 +144,6 @@ function draftOf(ev: typeof t.event.$inferSelect, zones: { id: number; open: boo
 export async function updateEventSettings(db: Db, actor: string, v: Partial<{
   name: string; showAt: Date; saleOpen: boolean; saleStart: Date | null; saleEnd: Date | null; maxPerOrder: number; holdMinutes: number;
   payHours: number; payFirst: boolean; preorderOpen: boolean; bankName: string; bankAccount: string; accountName: string; vipInstalled: boolean;
-  publicSaleStart: Date | null; publicPerPhone: number;
 }>) {
   const ev = await currentEvent(db);
   if (v.vipInstalled === false) {
@@ -483,23 +481,6 @@ export async function createInviteLink(db: Db, actor: string, v: { name: string;
   throw new BookingError('SERVER', '產生連結代碼失敗，請再試一次。');
 }
 
-/** 公開連結：整場一條，任何人都可開啟；購票人訂購時自行填寫姓名電話 */
-export async function createPublicLink(db: Db, actor: string) {
-  const ev = await currentEvent(db);
-  const [exists] = await db.select().from(t.inviteLink).where(and(eq(t.inviteLink.eventId, ev.id), eq(t.inviteLink.kind, 'public')));
-  if (exists) return exists;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
-    const [dup] = await db.select({ id: t.inviteLink.id }).from(t.inviteLink).where(eq(t.inviteLink.code, code));
-    if (dup) continue;
-    const [l] = await db.insert(t.inviteLink).values({
-      eventId: ev.id, code, kind: 'public', name: '公開連結', phone: '', quota: 0, expiresAt: ev.showAt,
-    }).returning();
-    await audit(db, actor, 'link_create_public', `link:${l.id}`);
-    return l;
-  }
-  throw new BookingError('SERVER', '產生連結代碼失敗，請再試一次。');
-}
 
 export async function updateInviteLink(db: Db, actor: string, id: number, v: Partial<{ quota: number; expiresAt: Date; status: 'active' | 'disabled' }>) {
   await db.update(t.inviteLink).set(v).where(eq(t.inviteLink.id, id));
@@ -510,7 +491,7 @@ export async function updateInviteLink(db: Db, actor: string, id: number, v: Par
 
 export function confirmMessage(eventName: string, o: { buyerName: string | null; orderNo: string | null }, amount: number, seatText: string, showAt: Date, myOrderUrl?: string) {
   const when = showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  return `【${eventName}】${o.buyerName ?? ''} 您好，已確認收到您的匯款 NT$${amount.toLocaleString('en-US')}。劃位成功：${seatText}。訂單編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至購票頁「我的訂單」查看${myOrderUrl ? `：${myOrderUrl}` : ''}，入場時請出示 QR code 與身分證件。`;
+  return `【${eventName}】${o.buyerName ?? ''} 您好，劃位成功：${seatText}。劃位編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至劃位頁「我的劃位」查看${myOrderUrl ? `：${myOrderUrl}` : ''}，入場時請出示 QR code 與身分證件。`;
 }
 
 export async function markOrderSeen(db: Db, id: number, now = new Date()) {
@@ -518,21 +499,22 @@ export async function markOrderSeen(db: Db, id: number, now = new Date()) {
 }
 
 /** 確認到帳：座位改為已售出，並通知消費者劃位成功 */
-export async function confirmPayment(db: Db, actor: string, id: number, v: { date: string; amount: number; note?: string }, now = new Date(), base?: string) {
+/** 劃位確認：座位改為已售出，寄出劃位成功與 QR code（款項已在預購單收訖） */
+export async function confirmPayment(db: Db, actor: string, id: number, v: { date?: string; amount?: number; note?: string } = {}, now = new Date(), base?: string) {
   const ev = await currentEvent(db);
   return db.transaction(async (tx) => {
     const [o] = await tx.select().from(t.orders).where(and(eq(t.orders.id, id), eq(t.orders.eventId, ev.id))).for('update');
     if (!o) throw new BookingError('NOT_FOUND', '找不到此訂單');
-    if (o.status !== 'pending') throw new BookingError('INVALID', '只有「待確認到帳」的訂單可以確認到帳。');
+    if (o.status !== 'pending') throw new BookingError('INVALID', '只有「待確認」的劃位可以確認。');
     await tx.update(t.orders).set({ status: 'paid', seenAt: o.seenAt ?? now }).where(eq(t.orders.id, id));
     await tx.update(t.eventSeat).set({ status: 'sold', version: sql`${t.eventSeat.version} + 1` }).where(eq(t.eventSeat.orderId, id));
-    await tx.update(t.payment).set({ confirmedDate: v.date, confirmedAmount: v.amount, confirmedBy: actor, note: v.note ?? null, confirmedAt: now })
+    await tx.update(t.payment).set({ confirmedDate: v.date ?? now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }), confirmedAmount: v.amount ?? o.amount, confirmedBy: actor, note: v.note ?? null, confirmedAt: now })
       .where(eq(t.payment.orderId, id));
     const seats = await tx.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, holder: t.orderSeat.holderName })
       .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(eq(t.orderSeat.orderId, id));
     const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}，持票人 ${s.holder ?? ''}）`).join('、');
     const [lk] = await tx.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
-    const content = confirmMessage(ev.name, o, v.amount, seatText, ev.showAt, lk && (base || process.env.PUBLIC_BASE_URL) ? linkUrl(lk.code, base) : undefined);
+    const content = confirmMessage(ev.name, o, v.amount ?? o.amount, seatText, ev.showAt, lk && (base || process.env.PUBLIC_BASE_URL) ? linkUrl(lk.code, base) : undefined);
     await tx.insert(t.notification).values([
       { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_confirmed', recipient: o.buyerPhone ?? '', content },
       { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_confirmed', recipient: o.buyerEmail ?? '', content },
@@ -553,7 +535,7 @@ export async function cancelOrder(db: Db, actor: string, id: number) {
     await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'admin_cancel', holdUntil: null }).where(eq(t.orders.id, id));
     await freeSeatsOf(tx, [id]);
     if (o.status === 'pending') {
-      const content = `【${ev.name}】訂單 ${o.orderNo} 已由主辦方取消，座位已釋放。如有疑問請聯繫主辦方。`;
+      const content = `【${ev.name}】劃位 ${o.orderNo} 已由主辦方取消，座位已釋放，可用原連結重新劃位。如有疑問請聯繫主辦方。`;
       await tx.insert(t.notification).values([
         { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_cancelled', recipient: o.buyerPhone ?? '', content },
         { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_cancelled', recipient: o.buyerEmail ?? '', content },

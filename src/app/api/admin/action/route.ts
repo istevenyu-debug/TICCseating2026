@@ -25,10 +25,8 @@ const action = z.discriminatedUnion('action', [
     showAt: z.string().min(1, '請填寫演出時間').transform((s) => new Date(s)).refine((d) => !Number.isNaN(d.getTime()), '演出時間格式不正確'),
     saleOpen: z.boolean(), saleStart: date, saleEnd: date,
     maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
-    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), payFirst: z.boolean(), preorderOpen: z.boolean(),
-    publicSaleStart: date, publicPerPhone: z.number().int().min(0).max(200),
+    bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), preorderOpen: z.boolean(),
   }).partial() }),
-  z.object({ action: z.literal('link.createPublic') }),
   z.object({ action: z.literal('publish') }),
   z.object({ action: z.literal('zone.create') }),
   z.object({ action: z.literal('zone.update'), id, values: z.object({
@@ -51,7 +49,7 @@ const action = z.discriminatedUnion('action', [
     quota: z.number().int().min(0).max(200), expiresAt: z.string(), status: z.enum(['active', 'disabled']),
   }).partial() }),
   z.object({ action: z.literal('order.seen'), id }),
-  z.object({ action: z.literal('order.confirm'), id, date: z.string().min(1), amount: money, note: z.string().max(200).optional() }),
+  z.object({ action: z.literal('order.confirm'), id }),
   z.object({ action: z.literal('order.cancel'), id }),
   z.object({ action: z.literal('order.delete'), id }),
   z.object({ action: z.literal('notify.save'), values: z.object({
@@ -117,14 +115,13 @@ export async function POST(req: Request) {
       case 'combo.create': return A.createCombo(db, who);
       case 'combo.update': return A.updateCombo(db, who, a.id, a.values);
       case 'combo.delete': return A.deleteCombo(db, who, a.id);
-      case 'link.createPublic': return A.createPublicLink(db, who);
       case 'link.create': { const l = await A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt), note: a.note }, originOf(req)); return { ...l, delivery: await deliver(db, { linkId: l.id }) }; }
       case 'link.update': {
         const { expiresAt, ...rest } = a.values;
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });
       }
       case 'order.seen': return A.markOrderSeen(db, a.id);
-      case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, { date: a.date, amount: a.amount, note: a.note }, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
+      case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
       case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
       case 'order.delete': return A.deleteOrder(db, who, a.id);
       case 'notify.save': return saveNotifyConfig(db, who, a.values);

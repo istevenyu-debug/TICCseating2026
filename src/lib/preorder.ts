@@ -60,7 +60,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   const p = submitBody.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
   const menu = await preorderMenu(db);
-  if (!menu.open) throw new BookingError('SALE_CLOSED', '目前未開放訂購。');
+  if (!menu.open) throw new BookingError('SALE_CLOSED', '目前未開放預購。');
   const items: t.PreorderItem[] = [];
   for (const it of p.data.items.filter((x) => x.qty > 0)) {
     const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);

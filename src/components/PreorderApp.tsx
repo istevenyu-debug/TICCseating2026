@@ -20,7 +20,7 @@ async function api<T>(body?: unknown): Promise<Res<T>> {
   } catch { return { ok: false, code: 'NETWORK', message: '網路連線異常，請確認後再試。' }; }
 }
 
-/** 公開訂購頁：選購（不劃位）→ 匯款 → 填資料回傳；主辦方確認收訖後寄出專屬劃位連結 */
+/** 預購單（公開）：選購（不劃位）→ 匯款 → 填資料回傳；主辦方確認收訖後寄出專屬劃位連結 */
 export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [err, setErr] = useState('');
@@ -70,7 +70,7 @@ export default function PreorderApp() {
     <div className="card">
       <h1>{menu.event.name}</h1>
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
-      <p className="small" style={{ margin: '8px 0 0' }}>本頁為<b>訂購</b>，不在這裡劃位。匯款並送出資料後，主辦方確認收到款項，會把<b>專屬劃位連結寄到您的 Email</b>，再用連結選位。</p>
+      <p className="small" style={{ margin: '8px 0 0' }}>本頁為<b>預購單</b>，不在這裡劃位。匯款並送出資料後，主辦方確認收到款項，會把<b>專屬劃位連結寄到您的 Email</b>，再用連結選位。</p>
     </div>
   );
 
@@ -88,7 +88,7 @@ export default function PreorderApp() {
     );
   }
 
-  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<div className="note err">目前未開放訂購。</div></main>;
+  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<div className="note err">目前未開放預購。</div></main>;
 
   return (
     <main className="wrap" style={{ maxWidth: 640 }}>

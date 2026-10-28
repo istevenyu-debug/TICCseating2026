@@ -34,7 +34,6 @@ const submitBody = (orderId: number, seatIds: string[], amount: number) => ({
   orderId,
   buyer: { name: '甲', phone: '0911-111-111', email: 'a@example.com' },
   holders: seatIds.map((s, i) => ({ seatId: s, name: `持票人${i}`, id4: '12a4' })),
-  transfer: { last5: '12345', amount, time: '2026-11-15 10:05' },
   agree: true,
 });
 
@@ -130,16 +129,12 @@ describe('購票端', () => {
     await expect(holdSeats(db, 'BBB222', ['4-4'], SINGLE(), min(6))).resolves.toBeTruthy();
   });
 
-  it('送出後 48 小時未確認到帳自動取消並通知', async () => {
-    await A.updateEventSettings(db, 'tester', { payFirst: false }); // 劃位後匯款模式才會逾期取消
+  it('送出劃位後不會被自動取消（款項已在預購單收訖）', async () => {
     const h = await holdSeats(db, 'AAA111', ['7-1', '7-2'], SINGLE(), T0);
     await submitOrder(db, 'AAA111', submitBody(h.orderId, ['7-1', '7-2'], h.amount), min(10));
-    let s = await getBookingState(db, 'BBB222', min(11));
+    const s = await getBookingState(db, 'BBB222', min(10 + 20 * 24 * 60));
     expect(s.seats.find((x) => x.id === '7-1')!.status).toBe('pending');
-    s = await getBookingState(db, 'BBB222', min(10 + 48 * 60 + 1));
-    expect(s.seats.find((x) => x.id === '7-1')!.status).toBe('free');
-    const n = await db.select().from(t.notification).where(eq(t.notification.template, 'order_expired'));
-    expect(n.map((x) => x.channel).sort()).toEqual(["email", "push", "sms"]); // 簡訊、Email、App 推播
+    expect(await db.select().from(t.notification).where(eq(t.notification.template, 'order_expired'))).toHaveLength(0);
   });
 
   it('暫存逾時後不可送出；欄位驗證', async () => {
@@ -272,51 +267,14 @@ describe('後台', () => {
   });
 });
 
-describe('公開連結（先專屬、再公開）', () => {
+describe('專屬連結', () => {
   beforeEach(setup);
   const who = 'tester';
-  const VA = 'visitorAAAAAAAAAAAAAA';
-  const VB = 'visitorBBBBBBBBBBBBBB';
 
-  it('同一條公開連結，不同訪客各自暫存，互不取消', async () => {
-    const pub = await A.createPublicLink(db, who);
-    await holdSeats(db, pub.code, ['3-1'], SINGLE(), T0, VA);
-    await holdSeats(db, pub.code, ['3-2'], SINGLE(), T0, VB);
-    const a = await getBookingState(db, pub.code, T0, VA);
-    const b = await getBookingState(db, pub.code, T0, VB);
-    expect(a.seats.find((x) => x.id === '3-1')!.status).toBe('mine');
-    expect(a.seats.find((x) => x.id === '3-2')!.status).toBe('held');
-    expect(b.seats.find((x) => x.id === '3-2')!.status).toBe('mine');
-    expect(a.held?.seatIds).toEqual(['3-1']);
-  });
-
-  it('沒有訪客代碼不能操作公開連結', async () => {
-    const pub = await A.createPublicLink(db, who);
-    await expectCode(holdSeats(db, pub.code, ['3-1'], SINGLE(), T0), 'INVALID');
-  });
-
-  it('公開連結開始時間之前不能訂，專屬連結可以', async () => {
-    const pub = await A.createPublicLink(db, who);
-    await A.updateEventSettings(db, who, { publicSaleStart: min(60) });
-    const s = await getBookingState(db, pub.code, T0, VA);
-    expect(s.sale).toBe('not_started');
-    expect(s.seats.length).toBeGreaterThan(0); // 仍可看座位
-    await expectCode(holdSeats(db, pub.code, ['3-1'], SINGLE(), T0, VA), 'SALE_CLOSED');
-    await expect(holdSeats(db, 'AAA111', ['3-1'], SINGLE(), T0)).resolves.toBeTruthy();
-    await expect(holdSeats(db, pub.code, ['3-3'], SINGLE(), min(61), VA)).resolves.toBeTruthy();
-  });
-
-  it('公開連結每支手機上限（0 = 不限）', async () => {
-    const pub = await A.createPublicLink(db, who);
-    const h1 = await holdSeats(db, pub.code, ['4-1', '4-2'], SINGLE(), T0, VA);
-    await submitOrder(db, pub.code, submitBody(h1.orderId, ['4-1', '4-2'], h1.amount), min(1), VA);
-    await A.updateEventSettings(db, who, { publicPerPhone: 3 });
-    const h2 = await holdSeats(db, pub.code, ['4-3', '4-5'], SINGLE(), min(2), VB);
-    await expectCode(submitOrder(db, pub.code, submitBody(h2.orderId, ['4-3', '4-5'], h2.amount), min(3), VB), 'QUOTA');
-    await A.updateEventSettings(db, who, { publicPerPhone: 0 });
-    await expect(submitOrder(db, pub.code, submitBody(h2.orderId, ['4-3', '4-5'], h2.amount), min(3), VB)).resolves.toBeTruthy();
-    const b = await getBookingState(db, pub.code, min(4), VB);
-    expect(b.orders).toHaveLength(1); // 只看到自己的訂單
+  it('舊的公開連結已停用，不能使用', async () => {
+    const [ev] = await db.select().from(t.event);
+    await db.insert(t.inviteLink).values({ eventId: ev.id, code: 'PUB001', kind: 'public', name: '公開連結', phone: '', quota: 0, expiresAt: EXP });
+    await expect(getBookingState(db, 'PUB001', T0)).rejects.toThrow('已停用');
   });
 
   it('專屬連結張數 0 = 不限（仍受每筆上限 21 張）', async () => {

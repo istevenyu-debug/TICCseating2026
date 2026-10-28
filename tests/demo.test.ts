@@ -24,7 +24,7 @@ describe('移除舊版示範資料', () => {
     await A.updateZone(db, 'admin', zB.id, { price: 999 });
     const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
     const body = (orderId: number, seat: string, amount: number) => ({ orderId, buyer: { name: '王', phone: '0912345678', email: 'a@b.co' },
-      holders: [{ seatId: seat, name: '王', id4: 'A123' }], transfer: { last5: '12345', amount, time: '10:00' }, agree: true });
+      holders: [{ seatId: seat, name: '王', id4: 'A123' }], agree: true });
     const hd = await holdSeats(db, 'DEMO26', ['3-1'], single, T0); await submitOrder(db, 'DEMO26', body(hd.orderId, '3-1', hd.amount), T0);
     const hm = await holdSeats(db, mine.code, ['3-2'], single, T0); await submitOrder(db, mine.code, body(hm.orderId, '3-2', hm.amount), T0);
     // 一個同代碼但不是示範內容的連結不能刪（例如使用者自己取名 DEMO27 以外的狀況）
