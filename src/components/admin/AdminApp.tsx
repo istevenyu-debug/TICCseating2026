@@ -5,6 +5,7 @@ import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
 import { comboDesc, comboQty } from '@/lib/pricing';
 import { phoneProblem } from '@/lib/validation';
+import { APP_VERSION } from '@/lib/version';
 import { bundleIndex } from '@/lib/bundle';
 import AdminMap, { type SeatLook } from './AdminMap';
 
@@ -150,7 +151,7 @@ export default function AdminApp() {
       <header className="top">
         <div>
           <h1>大會堂劃位後台</h1>
-          <div className="small muted">{st.event.name}・{tw(st.event.showAt)}・{st.user.displayName}</div>
+          <div className="small muted">{st.event.name}・{tw(st.event.showAt)}・{st.user.displayName}・<span title="系統版本">{APP_VERSION}</span></div>
         </div>
         <div className="row">
           <a className="btn" href="/" target="_blank" rel="noreferrer">網站首頁</a>
