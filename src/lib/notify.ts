@@ -77,9 +77,9 @@ const SUBJECT: Record<string, string> = {
   order_confirmed: '劃位成功通知',
   order_cancelled: '訂單取消通知',
   order_expired: '訂單逾期取消通知',
-  preorder_received: '已收到您的預購單',
+  preorder_received: '已收到您的訂單',
   preorder_link: '已收到款項：您的專屬劃位連結',
-  preorder_cancelled: '預購單取消通知',
+  preorder_cancelled: '訂單取消通知',
   test: '測試信',
 };
 

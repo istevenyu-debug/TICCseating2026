@@ -5,12 +5,12 @@ import { preorderMenu, submitPreorder } from '@/lib/preorder';
 
 export const dynamic = 'force-dynamic';
 
-/** 公開預購頁：可選項目與匯款帳戶 */
+/** 公開訂購頁：可選項目與匯款帳戶 */
 export async function GET() {
   return handle(async () => preorderMenu(await getDb()));
 }
 
-/** 送出預購單 */
+/** 送出訂單 */
 export async function POST(req: Request) {
   return handle(async () => {
     const db = await getDb();

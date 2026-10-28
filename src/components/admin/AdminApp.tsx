@@ -21,7 +21,7 @@ type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
 const nStatus = (ch: string, st: string) => (ch === 'push' ? ({ sent: '已送達手機', simulated: '僅顯示在購票頁' } as Record<string, string>)[st] : undefined) ?? N_STATUS[st] ?? st;
-const N_TEMPLATE: Record<string, string> = { preorder_received: '收到預購單', preorder_link: '寄出劃位連結', preorder_cancelled: '預購單取消', invite: '專屬連結', order_received: '收到訂購資料', order_confirmed: '劃位成功', order_cancelled: '訂單取消', order_expired: '逾期取消' };
+const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '專屬連結', order_received: '收到訂購資料', order_confirmed: '劃位成功', order_cancelled: '訂單取消', order_expired: '逾期取消' };
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };
@@ -35,7 +35,8 @@ type Order = State['orders'][number];
 type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify';
 
 const TABS: [Tab, string][] = [
-  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '連座分組'], ['pre', '預購單'], ['links', '三、專屬連結'], ['orders', '三、訂單與到帳'], ['tickets', '四、紙本入場券'], ['notify', '五、通知設定'],
+  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單（收款）'],
+  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -180,8 +181,8 @@ export default function AdminApp() {
       )}
       {st.preorders.some((x) => x.isNew) && (
         <div className="alertbar">
-          <span><b>有 {st.preorders.filter((x) => x.isNew).length} 張新預購單</b>，請核對入帳後按「確認收訖」，系統會自動寄出劃位連結。</span>
-          <button className="btn pri" onClick={() => go('pre')}>前往預購單</button>
+          <span><b>有 {st.preorders.filter((x) => x.isNew).length} 張新訂單</b>，請核對入帳後按「確認收訖」，系統會自動寄出劃位連結。</span>
+          <button className="btn pri" onClick={() => go('pre')}>前往訂單</button>
         </div>
       )}
       {st.stats.newOrders > 0 && (
@@ -229,7 +230,9 @@ function Home() {
     ['price', '價格設定', '票種名稱、票價與座位底色，依排數和區塊指定座位，組合票，開放訂購與發布', st.zones.slice(0, 3).map((z) => `${z.name || '未命名'} ${money(z.price)}`).join('・')],
     ['usage', '席位用途', '保留公關席、贊助席、不開放座位，加裝 VIP 排', `保留／不開放 ${st.stats.reserved} 席`],
     ['links', '專屬購票連結', '發給受邀對象的購票連結與可購張數', `已發出 ${st.links.length} 條`],
-    ['orders', '訂單與到帳確認', '看暫存中與已送出的訂單，核對匯款後按確認，通知消費者劃位成功', `${st.stats.newOrders ? `新訂單 ${st.stats.newOrders} 筆・` : ''}暫存 ${st.stats.held} 席・待確認 ${st.stats.pending} 席`],
+    ['pre', '訂單（收款）', '公開訂購頁收到的訂單：核對入帳後確認收訖，系統自動寄出專屬劃位連結', `${st.preorders.filter((x) => x.status === 'submitted').length} 張待確認收訖`],
+    ['groups', '連座分組', '兩位一組、十位一組等連座；預設分組可修改，按一下套用', ''],
+    ['orders', '劃位確認', '看暫存中與已送出劃位資料的人，核對後按確認，寄出劃位成功與 QR code', `${st.stats.newOrders ? `新訂單 ${st.stats.newOrders} 筆・` : ''}暫存 ${st.stats.held} 席・待確認 ${st.stats.pending} 席`],
     ['tickets', '紙本入場券', '依已確認的訂單產生實名入場券並列印', `已售 ${st.stats.sold} 席`],
   ];
   return (
@@ -702,7 +705,7 @@ function OrderDetail({ o }: { o: Order }) {
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
             const r = await act({ action: 'order.confirm', id: o.id, date: c.date, amount: parseInt(c.amount.replace(/[^\d]/g, '')) || 0, note: c.note }) as { delivery?: Delivery } | null;
-            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。${d.text || '訊息已顯示在訂購人的購票頁'}。${d.bad ? '可到「五、通知設定」查看原因或重寄。' : ''}` }); }
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認到帳，訂單改為劃位成功。${d.text || '訊息已顯示在訂購人的購票頁'}。${d.bad ? '可到「八、通知設定」查看原因或重寄。' : ''}` }); }
           }}>{st.event.payFirst ? '確認劃位，寄出劃位成功與 QR code' : '確認到帳，通知消費者劃位成功'}</button>
           <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消訂單。${d.text || '訊息已顯示在訂購人的購票頁'}。` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消訂單'}</button>
         </div>
@@ -746,7 +749,7 @@ function Tickets() {
   );
 }
 
-/* ---------- 五、通知設定 ---------- */
+/* ---------- 八、通知設定 ---------- */
 function Notify() {
   const { st, act, busy, setMsg } = useAdmin();
   const ne = st.notify.email, ns = st.notify.sms;
@@ -1057,7 +1060,7 @@ function Presets({ sel, setSel }: { sel: Set<string>; setSel: (s: Set<string>) =
   );
 }
 
-/* ---------- 預購單 ---------- */
+/* ---------- 訂單 ---------- */
 const PRE_STATUS: Record<string, string> = { submitted: '待確認收訖', confirmed: '已收訖・已寄連結', cancelled: '已取消' };
 
 function Preorders() {
@@ -1074,16 +1077,16 @@ function Preorders() {
   return (
     <div className="pstack">
       <div className="card">
-        <h2>公開預購頁 <span className="small muted">不劃位：選購、匯款、回填資料；確認收訖後自動寄出專屬劃位連結</span></h2>
+        <h2>公開訂購頁 <span className="small muted">不劃位：選購、匯款、回填資料；確認收訖後自動寄出專屬劃位連結</span></h2>
         <label className="switch"><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
-          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放公開預購頁' : '已關閉公開預購頁')} />開放公開預購</label>
+          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放公開訂購頁' : '已關閉公開訂購頁')} />開放公開訂購</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
-          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製 ${buyUrl}` }), () => undefined)}>複製預購網址</button>
-          <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟預購頁</a>
+          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製 ${buyUrl}` }), () => undefined)}>複製訂購網址</button>
+          <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟訂購頁</a>
         </div>
-        <p className="small muted" style={{ marginBottom: 0 }}>預購頁顯示已發布的組合票（每組）與單張票種，以及「時間、限制與匯款帳戶」裡的匯款帳戶，請先確認帳戶正確。預購不佔名額、不會自動取消。</p>
-        {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，預購頁會顯示空白，請到「二、價格設定」填寫。</div>}
+        <p className="small muted" style={{ marginBottom: 0 }}>訂購頁顯示已發布的組合票（每組）與單張票種，以及「時間、限制與匯款帳戶」裡的匯款帳戶，請先確認帳戶正確。訂購不佔名額、不會自動取消。</p>
+        {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，訂購頁會顯示空白，請到「二、價格設定」填寫。</div>}
       </div>
 
       <div className="card">
@@ -1124,8 +1127,8 @@ function Preorders() {
                           const r = await act({ action: 'preorder.confirm', id: p.id }) as { code: string; delivery?: Delivery } | null;
                           if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}。${d.text.replace('訊息已顯示在訂購人的購票頁；', '')}` }); }
                         }}>確認收訖，寄出劃位連結</button>
-                        <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消預購單 ${p.no}，並寄信通知`)) setOpenId(null); })}>
-                          {sure === `pc${p.id}` ? '再按一次確認取消' : '取消預購單'}</button>
+                        <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消訂單 ${p.no}，並寄信通知`)) setOpenId(null); })}>
+                          {sure === `pc${p.id}` ? '再按一次確認取消' : '取消訂單'}</button>
                       </>}
                       {p.linkCode && <button className="btn" onClick={() => navigator.clipboard?.writeText(`${base}/t/${p.linkCode}`).then(() => setMsg({ kind: 'ok', text: '已複製劃位連結' }), () => undefined)}>複製劃位連結</button>}
                     </div>
@@ -1133,7 +1136,7 @@ function Preorders() {
                 )}
               </Fragment>
             ))}
-            {!list.length && <tr><td colSpan={7} className="muted">沒有預購單</td></tr>}
+            {!list.length && <tr><td colSpan={7} className="muted">沒有訂單</td></tr>}
           </tbody>
         </table></div>
       </div>

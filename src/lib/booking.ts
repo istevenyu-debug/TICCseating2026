@@ -224,6 +224,13 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
   }).reverse().map((n) => ({ id: n.id, at: n.createdAt.toISOString(), template: n.template, content: n.content }));
 
   const sf = saleStateFor(ev, link, now);
+  // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
+  const [po] = link.kind === 'public' ? [] : await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
+  const comboItem = po?.items.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
+  const prefill = {
+    name: link.kind === 'public' ? '' : link.name, phone: link.kind === 'public' ? '' : link.phone, email: po?.email ?? '',
+    comboId: comboItem?.id ?? 0, bought: po ? po.items.map((i) => `${i.name} × ${i.qty}`).join('、') : '',
+  };
   return {
     now: now.toISOString(),
     sale: sf.state,
@@ -261,6 +268,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), vi
       }),
     })),
     inbox,
+    prefill,
   };
 }
 

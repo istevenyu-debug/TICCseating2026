@@ -94,6 +94,13 @@ export default function BookingApp({ code }: { code: string }) {
   }, [code]);
 
   useEffect(() => { load(); }, [load]);
+  // 第一次載入：預先選好他購買的購票方式
+  const preset = useRef(false);
+  useEffect(() => {
+    if (!st || preset.current) return;
+    preset.current = true;
+    if (st.prefill.comboId && !st.held) setCombo(st.prefill.comboId);
+  }, [st]);
 
   const held = st?.held ?? null;
 
@@ -104,8 +111,8 @@ export default function BookingApp({ code }: { code: string }) {
       setSel(new Set(held.seatIds));
       setCombo(held.comboId);
       setForm((f) => f ?? {
-        name: st.link.name, phone: '', email: '', idBase: '',
-        holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.link.name : '', id4: '' }])),
+        name: st.prefill.name, phone: st.prefill.phone, email: st.prefill.email, idBase: '',
+        holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.prefill.name : '', id4: '' }])),
         last5: '', amount: String(held.amount), time: '', agree: false,
       });
     } else {
@@ -306,6 +313,7 @@ export default function BookingApp({ code }: { code: string }) {
       {!held && (
         <div className="card">
           <h2>第一步：選擇購票方式</h2>
+          {st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您已購買：<b>{st.prefill.bought}</b>。已幫您選好購票方式，直接在座位圖上選位即可。</p>}
           <div className="combos">
             {st.combos.map((c) => {
               const soldOut = c.limitSets > 0 && c.usedSets >= c.limitSets;
