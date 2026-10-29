@@ -206,8 +206,8 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
   const comboItem = po?.items.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
   const ent = await linkEntitle(db, link.id);
-  const { invoicesOf } = await import('./einvoice');
-  const invs = await invoicesOf(db, myOrders.filter((o) => o.status === 'paid').map((o) => o.id));
+  const { invoiceForLink } = await import('./einvoice');
+  const inv = await invoiceForLink(db, link.id); // 只有「即開」時顯示
   const prefill = {
     name: link.name, phone: link.phone, email: po?.email ?? '',
     comboId: comboItem?.id ?? 0, bought: po ? po.items.map((i) => `${i.name} × ${i.qty}`).join('、') : '',
@@ -237,7 +237,6 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
       orderNo: o.orderNo, status: o.status, amount: o.amount, payDueAt: o.payDueAt?.toISOString() ?? null,
       comboName: combosAll.find((c) => c.id === o.comboId)?.name ?? '', sets: o.sets,
       buyerName: o.buyerName, buyerPhone: o.buyerPhone, buyerEmail: o.buyerEmail,
-      invoice: (() => { const v = invs.get(o.id); return v && v.status === 'issued' ? { no: v.invoiceNo, date: v.invoiceDate.slice(0, 10), random: v.randomNumber, test: v.env === 'test' } : null; })(),
       // 劃位成功後才提供入場憑證（序號與入場券列印頁一致）
       seats: orderSeats.filter((s) => s.orderId === o.id).map((s, i) => {
         const v = seatById[s.seatId];
@@ -252,6 +251,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
     inbox,
     prefill,
     paid: ent, // 付款買了什麼、已劃多少（手動連結為 null）
+    invoice: inv && { no: inv.invoiceNo, date: inv.invoiceDate.slice(0, 10), random: inv.randomNumber, amount: inv.amount, test: inv.env !== 'prod' },
   };
 }
 

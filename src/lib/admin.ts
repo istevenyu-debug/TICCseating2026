@@ -13,7 +13,6 @@ import {
 } from './booking';
 import { BLOCKS, rowKey, seatLabel, type Block } from './layout';
 import { entText, entitle } from './entitle';
-import { invoicesOf } from './einvoice';
 
 export const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -64,18 +63,15 @@ export async function getAdminState(db: Db, now = new Date()) {
   const linkById = Object.fromEntries(links.map((l) => [l.id, l]));
   const comboById = Object.fromEntries(combos.map((c) => [c.id, c]));
 
-  const invs = await invoicesOf(db, ids);
   const orders = orderRows.map((o) => {
     const p = pays.find((x) => x.orderId === o.id);
-    const inv = invs.get(o.id);
     return {
       id: o.id, orderNo: o.orderNo, status: o.status, amount: o.amount, comboName: `${comboById[o.comboId]?.name ?? ''}${o.sets > 1 ? ` ×${o.sets} 組` : ''}`,
       buyerName: o.buyerName ?? linkById[o.linkId]?.name ?? '', buyerPhone: o.buyerPhone ?? '', buyerEmail: o.buyerEmail ?? '',
       linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal', linkName: linkById[o.linkId]?.name ?? '', linkNote: linkById[o.linkId]?.note ?? '',
       createdAt: o.createdAt.toISOString(), submittedAt: o.submittedAt?.toISOString() ?? null,
       holdUntil: o.holdUntil?.toISOString() ?? null, payDueAt: o.payDueAt?.toISOString() ?? null,
-      isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason, linkId: o.linkId,
-      invoice: inv ? { status: inv.status, invoiceNo: inv.invoiceNo, randomNumber: inv.randomNumber, buyer: inv.buyer, env: inv.env, error: inv.error } : null,
+      isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason, linkId: o.linkId, vip: o.vip,
       seats: oseats.filter((s) => s.orderId === o.id).map((s) => ({
         seatId: s.seatId, code: seatById[s.seatId]?.code ?? s.seatId, label: seatById[s.seatId]?.label ?? s.seatId,
         holderName: s.holderName, holderId4: s.holderId4, unitPrice: s.unitPrice,
@@ -114,6 +110,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     sold: inst.filter((s) => s.status === 'sold').length,
     reserved: inst.filter((s) => s.status === 'free' && !usageById[s.usageId]?.sellable).length,
     revenue: orders.filter((o) => o.status === 'paid').reduce((a, o) => a + (o.payment?.confirmedAmount ?? o.amount), 0),
+    vipSeats: orderRows.filter((o) => o.vip && o.status === 'paid').reduce((a, o) => a + oseats.filter((x) => x.orderId === o.id).length, 0), // 招待席（不算收入）
     newOrders: orders.filter((o) => o.isNew).length,
   };
 

@@ -9,7 +9,7 @@
  * 寄送帳號存在 app_setting 資料表，由後台「通知設定」填寫；也可用環境變數設定（優先）。
  * 密碼類設定只寫不讀，不會回傳到後台畫面。
  */
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
@@ -144,7 +144,10 @@ export function dispatchQueued(db: Db, senders: Senders = realSenders, now = () 
   running = (async () => {
     try {
       for (let round = 0; round < 10; round++) {
-        const rows = await db.select().from(t.notification).where(eq(t.notification.status, 'queued')).orderBy(asc(t.notification.id)).limit(20);
+        // 排程的（招待演出前寄出）時間到了才寄
+        const rows = await db.select().from(t.notification)
+          .where(and(eq(t.notification.status, 'queued'), or(isNull(t.notification.sendAfter), lte(t.notification.sendAfter, now()))))
+          .orderBy(asc(t.notification.id)).limit(20);
         if (!rows.length) return;
         const cfg = await getNotifyConfig(db);
         for (const n of rows) await deliverOne(db, n, cfg, senders, now());
@@ -198,25 +201,20 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
       <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">
         <div style="font-size:18px;font-weight:700">${esc(tk.label)}</div>
         <div>座位編號 ${esc(tk.code)}・${esc(tk.zoneName)}</div>
-        <div>持票人 ${esc(maskName(tk.holderName))}（${tk.holderId4.length > 4 ? '證號' : '證末4碼'} ${esc(tk.holderId4)}）</div>
+        <div>持票人 ${esc(maskName(tk.holderName))}${tk.holderId4 ? `（${tk.holderId4.length > 4 ? '證號' : '證末4碼'} ${esc(tk.holderId4)}）` : ''}</div>
         ${tk.entrance ? `<div>${esc(tk.entrance)}</div>` : ''}
         <div style="color:#5b6579;font-family:monospace">序號 ${esc(tk.serial)}</div>
       </td></tr></table>`);
   }
   const when = event.showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-  // 電子發票：劃位成功當下開立，號碼一併寄出。啟用中但還沒開完時先不寄（稍後自動重寄）
-  const { getEinvConfig, invoicesOf } = await import('./einvoice');
-  const inv = (await invoicesOf(db, [orderId])).get(orderId);
-  if (!inv && (await getEinvConfig(db)).enabled) {
-    const [pay] = await db.select({ at: t.payment.confirmedAt }).from(t.payment).where(eq(t.payment.orderId, orderId));
-    if (pay?.at && Date.now() - pay.at.getTime() < 5 * 60_000) throw new Error('等待電子發票開立，稍後自動寄出');
-  }
-  const invHtml = !inv ? '' : inv.status === 'issued'
-    ? `<div style="border:1px solid #d6dce8;border-radius:10px;padding:10px 12px;margin:0 0 14px;max-width:520px">
-        <b>電子發票</b> <span style="font-family:monospace;font-size:16px">${esc(inv.invoiceNo)}</span>${inv.env === 'test' ? '<span style="color:#b45309">（測試環境，非正式發票）</span>' : ''}<br>
+  // 電子發票：只有開立時機為「即開」且已開立時，才寫進劃位成功信（核對後開時不提發票）
+  const { invoiceForLink } = await import('./einvoice');
+  const [ord] = await db.select({ linkId: t.orders.linkId }).from(t.orders).where(eq(t.orders.id, orderId));
+  const inv = ord ? await invoiceForLink(db, ord.linkId) : null;
+  const invHtml = !inv ? '' : `<div style="border:1px solid #d6dce8;border-radius:10px;padding:10px 12px;margin:0 0 14px;max-width:520px">
+        <b>電子發票</b> <span style="font-family:monospace;font-size:16px">${esc(inv.invoiceNo)}</span>${inv.env !== 'prod' ? '<span style="color:#b45309">（測試，非正式發票）</span>' : ''}<br>
         開立日期 ${esc(inv.invoiceDate.slice(0, 10))}・隨機碼 ${esc(inv.randomNumber)}・金額 NT$${inv.amount.toLocaleString('en-US')}<br>
-        <span style="color:#5b6579">${esc(inv.buyer)}。可至財政部電子發票整合服務平台查詢。</span></div>`
-    : `<p style="margin:0 0 14px;color:#5b6579">電子發票開立中，完成後會由綠界另寄發票通知到您的 Email。</p>`;
+        <span style="color:#5b6579">${esc(inv.buyer)}。可至財政部電子發票整合服務平台查詢。</span></div>`;
   const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
     <h2 style="margin:0 0 4px">🎉 劃位成功</h2>
     <div style="color:#5b6579;margin-bottom:12px">${esc(event.name)}・${esc(when)}・台北國際會議中心 大會堂</div>
@@ -290,6 +288,7 @@ export async function listNotifications(db: Db, limit = 100) {
   return rows.map((n) => ({
     id: n.id, orderId: n.orderId, channel: n.channel, template: n.template, recipient: n.recipient, content: n.content,
     status: n.status, error: n.error, attempts: n.attempts, createdAt: n.createdAt.toISOString(), sentAt: n.sentAt?.toISOString() ?? null,
+    sendAfter: n.sendAfter?.toISOString() ?? null,
   }));
 }
 

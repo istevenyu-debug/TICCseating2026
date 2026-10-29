@@ -13,7 +13,7 @@ import { comboDesc } from './pricing';
 import { createInviteLink, linkUrl } from './admin';
 import { normalizePhone } from './validation';
 import { invDesc, invProblem } from './invoiceRules';
-import { getEinvConfig } from './einvoice';
+import { getEinvConfig, verifyBuyer, type EinvPost } from './einvoice';
 
 async function currentEvent(db: Db) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
@@ -63,7 +63,7 @@ function rateLimit(ip: string, now: number) {
   list.push(now); recent.set(ip, list);
 }
 
-export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Date()) {
+export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Date(), einvPost?: EinvPost) {
   const p = submitBody.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
   const menu = await preorderMenu(db);
@@ -80,6 +80,11 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   const ip2 = invProblem(inv.invType, inv.invCode, inv.invTitle);
   if (ip2) throw new BookingError('INVALID', ip2);
   rateLimit(ip, now.getTime());
+  // 手機條碼、愛心碼、統編：送出前先向綠界確認，確定錯的請訂購人改正
+  if (menu.invoice) {
+    const v = await verifyBuyer(db, inv.invType, inv.invCode, inv.invTitle, einvPost);
+    if (v.block) throw new BookingError('INVALID', v.block);
+  }
   const amount = items.reduce((a, x) => a + x.price * x.qty, 0);
   const ev = await currentEvent(db);
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -111,11 +116,13 @@ export async function listPreorders(db: Db) {
   const rows = await db.select().from(t.preorder).where(eq(t.preorder.eventId, ev.id)).orderBy(desc(t.preorder.id));
   const linkIds = rows.map((r) => r.linkId).filter((x): x is number => !!x);
   const links = linkIds.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code }).from(t.inviteLink).where(inArray(t.inviteLink.id, linkIds)) : [];
+  const invs = rows.length ? await db.select().from(t.invoice).where(inArray(t.invoice.preorderId, rows.map((r) => r.id))).orderBy(t.invoice.id) : [];
   return rows.map((r) => ({
     id: r.id, no: r.no, items: r.items, amount: r.amount, name: r.name, phone: r.phone, email: r.email, paidAmount: r.paidAmount, last5: r.last5,
     status: r.status, note: r.note, createdAt: r.createdAt.toISOString(), confirmedAt: r.confirmedAt?.toISOString() ?? null, confirmedBy: r.confirmedBy,
     isNew: r.status === 'submitted' && !r.seenAt, linkCode: links.find((l) => l.id === r.linkId)?.code ?? null,
     invoice: invDesc(r.invType, r.invCode, r.invTitle, r.email),
+    invoiceState: (() => { const v = invs.filter((x) => x.preorderId === r.id).at(-1); return v ? { status: v.status, invoiceNo: v.invoiceNo, checks: v.checks.length } : null; })(),
   }));
 }
 

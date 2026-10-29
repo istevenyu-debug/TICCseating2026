@@ -12,7 +12,8 @@ import { rememberOrigin } from '@/lib/push';
 import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
-import { issueForOrder, saveEinvConfig, voidForOrder } from '@/lib/einvoice';
+import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
+import { createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,9 +62,19 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
   z.object({ action: z.literal('preorder.confirm'), id }),
-  z.object({ action: z.literal('invoice.retry'), id }),
-  z.object({ action: z.literal('einvoice.save'), values: z.object({
-    enabled: z.enum(['0', '1']), env: z.enum(['test', 'prod']), merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), itemName: z.string().trim().max(40),
+  z.object({ action: z.literal('vip.create'), name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
+    seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional() }),
+  z.object({ action: z.literal('vip.seats'), id, seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60) }),
+  z.object({ action: z.literal('vip.mode'), id, mode: z.enum(['scheduled', 'now', 'none']) }),
+  z.object({ action: z.literal('vip.cancel'), id }),
+  z.object({ action: z.literal('vip.days'), days: z.number().int().min(0).max(60) }),
+  z.object({ action: z.literal('invoice.issue'), ids: z.array(id).min(1).max(500), force: z.boolean().optional() }),
+  z.object({ action: z.literal('invoice.edit'), id, invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']), invCode: z.string().max(20), invTitle: z.string().max(60) }),
+  z.object({ action: z.literal('invoice.recheck'), id }),
+  z.object({ action: z.literal('invoice.void'), id, reason: z.string().trim().min(1, '請填寫作廢原因').max(20), reopen: z.boolean().optional() }),
+  z.object({ action: z.literal('einvoice.save'), reason: z.string().trim().max(100).optional(), values: z.object({
+    enabled: z.enum(['0', '1']), mode: z.enum(['mock', 'test', 'prod']), timing: z.enum(['auto', 'review']), taxType: z.enum(['1', '3']),
+    merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), itemName: z.string().trim().max(40),
   }).partial() }),
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
@@ -114,6 +125,8 @@ export async function POST(req: Request) {
     if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
     const a = p.data;
     const who = user.username;
+    // 主管／網管才能做的：電子發票、招待
+    const mustBeAdmin = () => { if (user.role !== 'admin') throw new BookingError('FORBIDDEN', '這項操作需要主管或網管帳號'); };
     switch (a.action) {
       case 'event.update': return A.updateEventSettings(db, who, a.values);
       case 'publish': return A.publish(db, who);
@@ -132,27 +145,35 @@ export async function POST(req: Request) {
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });
       }
       case 'order.seen': return A.markOrderSeen(db, a.id);
-      case 'order.confirm': {
-        const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req));
-        // 劃位成功當下開立電子發票，發票號碼寫進同一封劃位成功 Email
-        const inv = await issueForOrder(db, a.id);
-        return { ...r, invoice: inv && { status: inv.status, invoiceNo: inv.invoiceNo, error: inv.error }, delivery: await deliver(db, { orderId: a.id }) };
+      case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
+      case 'vip.create': {
+        mustBeAdmin();
+        const phone = a.phone.trim() ? normalizePhone(a.phone) : '';
+        if (phone && !/^09\d{8}$/.test(phone)) throw new BookingError('INVALID', '手機應為 09 開頭的 10 位數字');
+        if (a.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email)) throw new BookingError('INVALID', 'Email 格式不正確');
+        const r = await createVip(db, who, { ...a, phone }, originOf(req));
+        return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: r.orderId }) : undefined };
       }
-      case 'invoice.retry': {
-        const inv = await issueForOrder(db, a.id);
-        if (!inv) throw new BookingError('INVALID', '尚未啟用電子發票');
-        if (inv.status !== 'issued') throw new BookingError('EINVOICE', `發票開立失敗：${inv.error ?? ''}`);
-        return { invoiceNo: inv.invoiceNo };
-      }
-      case 'einvoice.save': return saveEinvConfig(db, who, a.values);
+      case 'vip.seats': mustBeAdmin(); return updateVipSeats(db, who, a.id, a.seatIds, originOf(req));
+      case 'vip.mode': { mustBeAdmin(); const r = await setVipMode(db, who, a.id, a.mode, originOf(req)); return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: a.id }) : undefined }; }
+      case 'vip.cancel': mustBeAdmin(); return cancelVip(db, who, a.id);
+      case 'vip.days': mustBeAdmin(); return setVipDays(db, who, a.days);
+      case 'invoice.issue': mustBeAdmin(); return issueBatch(db, a.ids, who, !!a.force);
+      case 'invoice.edit': mustBeAdmin(); return editInvoiceBuyer(db, a.id, who, a);
+      case 'invoice.recheck': mustBeAdmin(); return recheckInvoice(db, a.id, who);
+      case 'invoice.void': mustBeAdmin(); return voidInvoice(db, a.id, who, a.reason, !!a.reopen);
+      case 'einvoice.save': mustBeAdmin(); return saveEinvConfig(db, who, a.values, a.reason ?? '');
       case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
-      case 'order.delete': await voidForOrder(db, a.id, '取消劃位'); return A.deleteOrder(db, who, a.id);
+      case 'order.delete': return A.deleteOrder(db, who, a.id);
       case 'notify.save': return saveNotifyConfig(db, who, a.values);
       case 'notify.test': return sendTest(db, a.channel, a.to);
       case 'notify.resend': return resendNotification(db, who, a.id);
       case 'preorder.confirm': {
         const r = await confirmPreorder(db, who, a.id, originOf(req));
-        return { ...r, delivery: await deliver(db, { linkId: r.linkId, templates: ['invite', 'preorder_link'] }) };
+        const delivery = await deliver(db, { linkId: r.linkId, templates: ['invite', 'preorder_link'] });
+        // 收款開發票：建立待開發票並由電腦核對；「即開」且沒有異常就立刻開立
+        const inv = await createForPreorder(db, a.id, who);
+        return { ...r, delivery, invoice: inv && { status: inv.status, invoiceNo: inv.invoiceNo, checks: inv.checks, error: inv.error } };
       }
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);

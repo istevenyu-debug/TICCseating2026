@@ -220,3 +220,4 @@ input.need { border-color: var(--red); }
 .ok-text { color: var(--ok); } .err-text { color: var(--red); }
 ol.steps { margin: 0 0 10px; padding-left: 22px; line-height: 1.6; }
 ol.steps li { margin-bottom: 4px; }
+tr.warnrow td { background: #fff4f4; }

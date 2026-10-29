@@ -64,7 +64,14 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
     // 沒有對應訂單卻被佔住的座位（理論上不會有）也一併釋放
     await tx.update(t.eventSeat).set({ status: 'free', holdUntil: null }).where(and(eq(t.eventSeat.eventId, ev.id), isNull(t.eventSeat.orderId), sql`${t.eventSeat.status} <> 'free'`));
 
-    // 訂單（預購單送出的）：保留連結對應的那幾張，其他全刪
+    // 訂單（預購單送出的）：保留連結對應的那幾張，其他全刪。正式發票還沒作廢的不能刪
+    const preCond = and(eq(t.preorder.eventId, ev.id), keep.length ? or(isNull(t.preorder.linkId), notInArray(t.preorder.linkId, keep)) : sql`true`);
+    const preIds = (await tx.select({ id: t.preorder.id }).from(t.preorder).where(preCond)).map((x) => x.id);
+    if (preIds.length) {
+      const prod = await tx.select({ id: t.invoice.id }).from(t.invoice)
+        .where(and(inArray(t.invoice.preorderId, preIds), eq(t.invoice.env, 'prod'), eq(t.invoice.status, 'issued')));
+      if (prod.length) throw new BookingError('EINVOICE', `有 ${prod.length} 張正式電子發票還沒作廢，不能清除。請先到「十、電子發票」作廢。`);
+    }
     const pre = await tx.delete(t.preorder).where(and(eq(t.preorder.eventId, ev.id),
       keep.length ? or(isNull(t.preorder.linkId), notInArray(t.preorder.linkId, keep)) : sql`true`)).returning({ id: t.preorder.id });
     if (links.length) {

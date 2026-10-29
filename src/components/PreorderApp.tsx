@@ -230,7 +230,7 @@ export default function PreorderApp() {
             {menu.invoice && (
               <div style={{ marginTop: 12 }}>
                 <h3 style={{ margin: '0 0 6px' }}>電子發票</h3>
-                <p className="small muted" style={{ margin: '0 0 6px' }}>劃位成功時開立，發票號碼會寫在劃位成功的 Email 裡。</p>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>一筆訂單開立一張發票，恕不拆開；需要分開開立的，請分開下單。</p>
                 {INV_TYPES.map((x) => (
                   <label key={x.id} className="check" style={{ marginBottom: 4 }}>
                     <input type="radio" name="inv" checked={inv.type === x.id} onChange={() => { setInv({ type: x.id, code: '', title: '' }); setErr(''); }} />

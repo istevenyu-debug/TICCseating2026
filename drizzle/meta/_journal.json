@@ -99,6 +99,13 @@
       "when": 1793295211350,
       "tag": "0013_einvoice",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793301211350,
+      "tag": "0014_invoice_review_vip",
+      "breakpoints": true
     }
   ]
 }

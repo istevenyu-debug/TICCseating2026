@@ -48,6 +48,9 @@ export const event = pgTable('event', {
   published: jsonb('published').$type<Published>(),
   publicSaleStart: timestamp('public_sale_start', { withTimezone: true }), // 公開連結開始時間；未設定時同 saleStart
   publicPerPhone: integer('public_per_phone').notNull().default(0), // 公開連結每支手機上限，0 = 不限
+  invTaxType: text('inv_tax_type').notNull().default('1'), // 發票課稅別：1 應稅、3 免稅
+  invItemName: text('inv_item_name').notNull().default('入場券'), // 發票品名（前面會加演出名稱）
+  vipNotifyDays: integer('vip_notify_days').notNull().default(3), // 招待：演出前幾天寄出劃位資料
 });
 
 /** 票種（票區）：名稱、票價、座位底色由主辦方自訂；open 為後台勾選的開放狀態（發布後生效） */
@@ -141,6 +144,8 @@ export const orders = pgTable('orders', {
   closedReason: text('closed_reason'),
   seenAt: timestamp('seen_at', { withTimezone: true }), // 後台已看過（新訂單提示用）
   visitorId: text('visitor_id'), // 公開連結：區分同一連結的不同訪客（瀏覽器）
+  vip: boolean('vip').notNull().default(false), // 招待（未付費，由主管安排）
+  notifyMode: text('notify_mode').notNull().default(''), // 招待寄送方式：scheduled 演出前自動寄／now 已立即寄／none 不寄（紙本）
 }, (t) => ({
   orderNo: uniqueIndex('orders_order_no_idx').on(t.orderNo),
   byLink: index('orders_link_idx').on(t.linkId),
@@ -183,6 +188,7 @@ export const notification = pgTable('notification', {
   attempts: integer('attempts').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp('sent_at', { withTimezone: true }),
+  sendAfter: timestamp('send_after', { withTimezone: true }), // 排程：這個時間以後才寄（招待演出前寄出）
 });
 
 /** 預購單：公開預購頁送出（選購內容＋匯款資料），後台確認收訖後自動建立專屬劃位連結並寄 Email */
@@ -274,7 +280,7 @@ export const adminUser = pgTable('admin_user', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ username: uniqueIndex('admin_user_username_idx').on(t.username) }));
 
-/** 電子發票（綠界）：每筆劃位一張。訂單刪除後仍保留紀錄 */
+/** 電子發票（綠界）：一筆訂單（收款）一張。status：pending 待開／issued 已開立／failed 開立失敗／void 已作廢 */
 export const invoice = pgTable('invoice', {
   id: serial('id').primaryKey(),
   orderId: integer('order_id').references(() => orders.id, { onDelete: 'set null' }),
@@ -291,4 +297,7 @@ export const invoice = pgTable('invoice', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   voidedAt: timestamp('voided_at', { withTimezone: true }),
   voidReason: text('void_reason'),
-}, (t) => ({ order: index('invoice_order_idx').on(t.orderId) }));
+  preorderId: integer('preorder_id').references(() => preorder.id, { onDelete: 'set null' }), // 一筆訂單（收款）一張
+  checks: jsonb('checks').$type<string[]>().notNull().default([]), // 電腦核對發現的異常
+  issuedBy: text('issued_by'),
+}, (t) => ({ order: index('invoice_order_idx').on(t.orderId), preorder: index('invoice_preorder_idx').on(t.preorderId) }));

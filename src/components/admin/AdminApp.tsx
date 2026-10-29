@@ -9,18 +9,21 @@ import { APP_VERSION } from '@/lib/version';
 import { bundleIndex } from '@/lib/bundle';
 import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
+import { INV_TYPES } from '@/lib/invoiceRules';
 
 type NotifyPublic = {
   email: { host: string; port: number; user: string; fromName: string; passSet: boolean; ready: boolean };
   sms: { url: string; user: string; passSet: boolean; ready: boolean };
 };
-type Notice = { id: number; orderId: number | null; channel: string; template: string; recipient: string; content: string; status: string; error: string | null; attempts: number; createdAt: string; sentAt: string | null };
+type Notice = { id: number; orderId: number | null; channel: string; template: string; recipient: string; content: string; status: string; error: string | null; attempts: number; createdAt: string; sentAt: string | null; sendAfter: string | null };
 type Pre = { id: number; no: string; items: { kind: string; id: number; name: string; price: number; qty: number }[]; amount: number; name: string; phone: string; email: string;
-  paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null; invoice: string };
+  paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null; invoice: string; invoiceState: { status: string; invoiceNo: string; checks: number } | null };
 type Gate = { id: number; name: string; token: string; active: boolean; count: number };
 type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
-type EinvPublic = { enabled: boolean; env: 'test' | 'prod'; merchantId: string; itemName: string; keySet: boolean; ivSet: boolean; ready: boolean; usingTestMerchant: boolean };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
+type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
+type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
+  issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -42,11 +45,11 @@ function deliveryText(d: Delivery | undefined) {
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
-type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates';
+type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates' | 'einv' | 'vip';
 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單（收款）'],
-  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
+  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'], ['einv', '十、電子發票'], ['vip', '十一、招待'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -215,6 +218,7 @@ export default function AdminApp() {
         <div className="stat"><b style={{ color: 'var(--ok)' }}>{st.stats.sold}</b><span>已售出</span></div>
         <div className="stat"><b>{st.stats.reserved}</b><span>保留／不開放</span></div>
         <div className="stat"><b>{money(st.stats.revenue)}</b><span>已到帳金額</span></div>
+        {st.stats.vipSeats > 0 && <div className="stat"><b>{st.stats.vipSeats}</b><span>招待席（不算收入）</span></div>}
       </div>
 
       {tab === 'home' && <Home />}
@@ -226,6 +230,8 @@ export default function AdminApp() {
       {tab === 'links' && <Links />}
       {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
+      {tab === 'einv' && <Invoices />}
+      {tab === 'vip' && <Vips />}
       {tab === 'notify' && <Notify />}
     </main>
     </AdminCtx.Provider>
@@ -568,7 +574,7 @@ function Links() {
         <div className="tbl"><table>
           <thead><tr><th>代碼</th><th>對象</th><th>手機／來帳備註</th><th>可劃／已劃</th><th>有效至</th><th>狀態</th><th></th></tr></thead>
           <tbody>
-            {st.links.filter((l) => l.kind !== 'public').map((l) => (
+            {st.links.filter((l) => l.kind !== 'public' && l.kind !== 'vip').map((l) => (
               <tr key={l.id}>
                 <td className="mono">{l.code}</td><td>{l.name}</td><td className="small"><span className="mono">{l.phone || '—'}</span>{l.note && <div className="muted">{l.note}</div>}</td>
                 <td className="small">{l.paid
@@ -665,11 +671,10 @@ function Orders() {
             {list.map((x) => (
               <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} onClick={() => openOrder(x)}>
                 <td className="mono">{x.orderNo}</td><td>{x.buyerName}{x.linkNote && <><br /><span className="small muted">{x.linkNote}</span></>}
-                  {st.paidByLink[x.linkId]?.over && <><br /><b className="small err-text">⚠ 劃的座位超過付款內容</b></>}
-                  {x.invoice?.status === 'failed' && <><br /><b className="small err-text">⚠ 發票開立失敗</b></>}</td>
+                  {st.paidByLink[x.linkId]?.over && <><br /><b className="small err-text">⚠ 劃的座位超過付款內容</b></>}</td>
                 <td className="small">{x.seats.map((s) => s.code).join('、')}</td>
                 <td className="mono">{money(x.amount)}</td>
-                <td><span className={`pill p-${x.status}`}>{STATUS[x.status]}</span>{x.isNew && <span className="badge">新</span>}
+                <td><span className={`pill p-${x.status}`}>{STATUS[x.status]}</span>{x.vip && <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63', marginLeft: 4 }}>招待</span>}{x.isNew && <span className="badge">新</span>}
                   {x.status === 'held' && x.holdUntil && <><br /><span className="small muted">剩 {mmss(Date.parse(x.holdUntil) - now)}</span></>}</td>
               </tr>
             ))}
@@ -697,13 +702,6 @@ function OrderDetail({ o }: { o: Order }) {
         {st.paidByLink[o.linkId] && <><span className="muted">付款／已劃</span><span className={st.paidByLink[o.linkId].over ? 'err-text' : ''}>
           {st.paidByLink[o.linkId].text}（訂單 {st.paidByLink[o.linkId].preorderNo}）{st.paidByLink[o.linkId].over && <b><br />⚠ 劃的座位超過付款內容，請核對</b>}</span></>}
         <span className="muted">應付</span><span className="mono">{money(o.amount)}</span>
-        {o.invoice && <><span className="muted">電子發票</span><span>
-          {o.invoice.status === 'issued' ? <><b className="mono">{o.invoice.invoiceNo}</b>{o.invoice.env === 'test' && <span className="err-text small">（測試）</span>}<br /><span className="small muted">{o.invoice.buyer}</span></>
-            : o.invoice.status === 'void' ? <span className="muted">{o.invoice.invoiceNo} 已作廢</span>
-            : <><b className="err-text">開立失敗</b><br /><span className="small err-text">{o.invoice.error}</span><br />
-              <button className="btn small" disabled={busy} onClick={() => act({ action: 'invoice.retry', id: o.id }, '已重新開立發票')}>重新開立</button></>}
-        </span></>}
-        {!o.invoice && o.status === 'paid' && st.einvoice.enabled && <><span className="muted">電子發票</span><span><span className="muted small">尚未開立</span> <button className="btn small" disabled={busy} onClick={() => act({ action: 'invoice.retry', id: o.id }, '已開立發票')}>開立發票</button></span></>}
         <span className="muted">暫存時間</span><span>{tw(o.createdAt)}</span>
         {o.submittedAt && <><span className="muted">送出時間</span><span>{tw(o.submittedAt)}</span></>}
       </div>
@@ -721,15 +719,11 @@ function OrderDetail({ o }: { o: Order }) {
       {o.status === 'pending' && <>
         <h3>確認劃位</h3>
         {!st.notify.email.ready && <div className="note err" style={{ margin: '0 0 8px' }}>尚未設定 Gmail：按下後<b>不會寄出 Email</b>，只會顯示在對方的購票頁。請先到「八、通知設定」設定。</div>}
-        <p className="small muted" style={{ margin: '0 0 6px' }}>款項已在預購單收訖。核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 寄出劃位成功通知並附每張票的入場 QR code，劃位頁也會顯示。{st.einvoice.enabled && <b>同時開立電子發票（{st.einvoice.env === 'prod' ? '正式' : '測試環境'}），發票號碼寫在同一封 Email。</b>}</p>
+        <p className="small muted" style={{ margin: '0 0 6px' }}>款項已在預購單收訖。核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 寄出劃位成功通知並附每張票的入場 QR code，劃位頁也會顯示。{st.einvoice.enabled && st.einvoice.timing === 'auto' && ' 這筆訂單的電子發票已開立時，號碼會一併寫在信裡。'}</p>
         <div className="row" style={{ marginTop: 10 }}>
           <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={async () => {
-            const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery; invoice?: { status: string; invoiceNo: string; error: string | null } | null } | null;
-            if (r) {
-              const d = deliveryText(r.delivery);
-              const inv = r.invoice ? (r.invoice.status === 'issued' ? `電子發票 ${r.invoice.invoiceNo} 已開立。` : `⚠ 電子發票開立失敗：${r.invoice.error ?? ''}（可在下方按「重新開立」）。`) : '';
-              setMsg({ kind: d.bad || r.invoice?.status === 'failed' ? 'err' : 'ok', text: `已確認，劃位成功。${inv}${d.text}` });
-            }
+            const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery } | null;
+            if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認，劃位成功。${d.text}` }); }
           }}>確認劃位，寄出劃位成功與 QR code</button>
           <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消劃位，座位已釋放。${d.text}` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消劃位'}</button>
         </div>
@@ -774,50 +768,6 @@ function Tickets() {
 }
 
 /* ---------- 八、通知設定 ---------- */
-/** 電子發票（綠界）設定：劃位成功時自動開立 */
-function EinvoiceCard() {
-  const { st, act, busy, setMsg } = useAdmin();
-  const c = st.einvoice;
-  const [f, setF] = useState({ env: c.env, merchantId: c.merchantId, hashKey: '', hashIV: '', itemName: c.itemName });
-  const save = async (enabled?: '0' | '1') => {
-    const values: Record<string, string> = { env: f.env, merchantId: f.merchantId.trim(), hashKey: f.hashKey.trim(), hashIV: f.hashIV.trim(), itemName: f.itemName.trim() };
-    if (enabled) values.enabled = enabled;
-    if (await act({ action: 'einvoice.save', values }, enabled === '1' ? '已啟用電子發票：之後按「確認劃位」會自動開立' : enabled === '0' ? '已停用電子發票' : '已儲存電子發票設定')) setF({ ...f, hashKey: '', hashIV: '' });
-  };
-  return (
-    <div className="card">
-      <h2>電子發票（綠界）</h2>
-      <div className="bank" style={{ marginBottom: 8 }}>
-        <span className="muted">狀態</span>
-        <span>{c.enabled ? <span className="pill p-paid">已啟用</span> : <span className="pill p-cancelled">未啟用</span>}
-          {c.enabled && <b className={c.env === 'prod' ? 'ok-text' : 'err-text'}>　{c.env === 'prod' ? '正式環境（開出的是真的發票）' : '測試環境（不是正式發票）'}</b>}</span>
-      </div>
-      <p className="small muted" style={{ margin: '0 0 8px' }}>啟用後，在「六、劃位確認」按「確認劃位」的當下自動開立電子發票，發票號碼一併寫進劃位成功 Email。發票開立方式（載具、捐贈、統編）由訂購人在預購單選擇。</p>
-      <label className="f">環境
-        <select value={f.env} onChange={(e) => setF({ ...f, env: e.target.value as 'test' | 'prod' })}>
-          <option value="test">測試環境（先試用，不會開出真的發票）</option>
-          <option value="prod">正式環境</option>
-        </select>
-      </label>
-      <div className="fields" style={{ marginTop: 8 }}>
-        <label className="f">特店編號（MerchantID）<input value={f.merchantId} placeholder={f.env === 'test' ? '測試環境可留空（用綠界測試帳號）' : '綠界廠商後台 → 系統介接設定'} onChange={(e) => setF({ ...f, merchantId: e.target.value })} /></label>
-        <label className="f">品名<input value={f.itemName} placeholder="入場券" onChange={(e) => setF({ ...f, itemName: e.target.value })} /></label>
-      </div>
-      <div className="fields" style={{ marginTop: 8 }}>
-        <label className="f">HashKey<input type="password" value={f.hashKey} autoComplete="new-password" placeholder={c.keySet ? '已設定；要更換才需要填' : ''} onChange={(e) => setF({ ...f, hashKey: e.target.value })} /></label>
-        <label className="f">HashIV<input type="password" value={f.hashIV} autoComplete="new-password" placeholder={c.ivSet ? '已設定；要更換才需要填' : ''} onChange={(e) => setF({ ...f, hashIV: e.target.value })} /></label>
-      </div>
-      <p className="small muted" style={{ margin: '6px 0 0' }}>發票品名會是「演出名稱＋品名（購票方式）」，例：「祈福音樂會 入場券（功德組）」。</p>
-      <div className="row" style={{ marginTop: 10 }}>
-        <button className="btn" disabled={busy} onClick={() => save()}>儲存設定</button>
-        {c.enabled
-          ? <button className="btn danger" disabled={busy} onClick={() => save('0')}>停用</button>
-          : <button className="btn pri" disabled={busy} onClick={() => save('1')}>儲存並啟用</button>}
-      </div>
-    </div>
-  );
-}
-
 function Notify() {
   const { st, act, busy, setMsg } = useAdmin();
   const ne = st.notify.email, ns = st.notify.sms;
@@ -842,7 +792,6 @@ function Notify() {
         </div>
         <p className="small muted" style={{ marginBottom: 0 }}>買方送出預購單、確認收訖（寄劃位連結）、送出劃位、確認劃位（寄 QR code）、取消時，系統會自動寄出。失敗會自動重試 3 次，下方「通知紀錄」可看結果與原因，也可以重寄。</p>
       </div>
-      <EinvoiceCard />
 
       <div className="grid2">
         <div className="card">
@@ -914,7 +863,7 @@ function Notify() {
                 <td>{CH[x.channel] ?? x.channel}</td>
                 <td className="mono small">{x.recipient || '—'}</td>
                 <td>
-                  <span className={`pill ${x.status === 'sent' ? 'p-paid' : x.status === 'queued' ? 'p-pending' : 'p-cancelled'}`}>{nStatus(x.channel, x.status)}</span>
+                  <span className={`pill ${x.status === 'sent' ? 'p-paid' : x.status === 'queued' ? 'p-pending' : 'p-cancelled'}`}>{x.status === 'queued' && x.sendAfter && Date.parse(x.sendAfter) > Date.now() ? `排定 ${tw(x.sendAfter)} 寄出` : nStatus(x.channel, x.status)}</span>
                   {x.error && x.status !== 'sent' && <div className="small" style={{ color: 'var(--red)' }}>{x.error}</div>}
                 </td>
                 <td>{(x.status === 'failed' || (x.status === 'simulated' && x.channel !== 'push')) && x.recipient &&
@@ -1249,7 +1198,7 @@ function Preorders() {
                     <div className="bank">
                       <span className="muted">Email</span><span className="mono">{p.email}</span>
                       <span className="muted">內容</span><span>{p.items.map((i) => `${i.name} × ${i.qty}（${money(i.price * i.qty)}）`).join('、')}</span>
-                      {st.einvoice.enabled && <><span className="muted">發票</span><span>{p.invoice}</span></>}
+                      {st.einvoice.enabled && <><span className="muted">發票</span><span>{p.invoice}{p.invoiceState && <>・<b>{INV_STATUS[p.invoiceState.status]}</b>{p.invoiceState.invoiceNo && ` ${p.invoiceState.invoiceNo}`}{p.invoiceState.status !== 'issued' && p.invoiceState.checks > 0 && <span className="err-text">（{p.invoiceState.checks} 項異常，請到「十、電子發票」）</span>}</>}</span></>}
                       {p.confirmedAt && <><span className="muted">確認</span><span>{tw(p.confirmedAt)}・{p.confirmedBy}</span></>}
                       {p.linkCode && <><span className="muted">劃位連結</span><span className="mono">{base}/t/{p.linkCode}</span></>}
                       {p.note && <><span className="muted">備註</span><span>{p.note}</span></>}
@@ -1258,8 +1207,14 @@ function Preorders() {
                       {p.status === 'submitted' && !st.notify.email.ready && <div className="note err" style={{ width: '100%' }}>尚未設定 Gmail：確認收訖後劃位連結<b>不會寄出</b>，需手動複製傳給對方。請先到「八、通知設定」設定。</div>}
                       {p.status === 'submitted' && <>
                         <button className="btn pri" disabled={busy} onClick={async () => {
-                          const r = await act({ action: 'preorder.confirm', id: p.id }) as { code: string; delivery?: Delivery } | null;
-                          if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}。${d.text}` }); }
+                          const r = await act({ action: 'preorder.confirm', id: p.id }) as { code: string; delivery?: Delivery; invoice?: { status: string; invoiceNo: string; checks: string[]; error: string | null } | null } | null;
+                          if (r) {
+                            const d = deliveryText(r.delivery);
+                            const iv = r.invoice;
+                            const it = !iv ? '' : iv.status === 'issued' ? `電子發票 ${iv.invoiceNo} 已開立。` : iv.status === 'failed' ? `⚠ 電子發票開立失敗：${iv.error ?? ''}（到「十、電子發票」處理）。`
+                              : iv.checks.length ? `⚠ 電子發票有 ${iv.checks.length} 項異常，已列入「十、電子發票」待人工確認。` : '電子發票已列入「十、電子發票」待開清單。';
+                            setMsg({ kind: d.bad || (iv && iv.status !== 'issued' && (iv.status === 'failed' || iv.checks.length > 0)) ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}。${it}${d.text}` });
+                          }
                         }}>確認收訖，寄出劃位連結</button>
                         <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消訂單 ${p.no}，並寄信通知`)) setOpenId(null); })}>
                           {sure === `pc${p.id}` ? '再按一次確認取消' : '取消訂單'}</button>
@@ -1343,6 +1298,291 @@ function Gates() {
             </div>
           )) : <p className="small muted" style={{ margin: 0 }}>尚無入場紀錄</p>}
         </div></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 十、電子發票 ---------- */
+const MODE_LABEL = { mock: '模擬（不連綠界）', test: '綠界測試環境', prod: '正式' } as const;
+const INV_STATUS: Record<string, string> = { pending: '待開立', failed: '開立失敗', issued: '已開立', void: '已作廢' };
+
+function EinvSettings() {
+  const { st, act, busy, setMsg } = useAdmin();
+  const c = st.einvoice;
+  const init = { enabled: c.enabled ? '1' : '0', mode: c.mode, timing: c.timing, taxType: c.taxType, itemName: c.itemName, merchantId: c.merchantId, hashKey: '', hashIV: '' };
+  const [f, setF] = useState(init);
+  const [reason, setReason] = useState('');
+  const important = f.enabled !== init.enabled || f.mode !== c.mode || f.timing !== c.timing || f.taxType !== c.taxType;
+  const save = async () => {
+    if (important && !reason.trim()) { setMsg({ kind: 'err', text: '啟用／停用、模式、開立時機、課稅別有變更，請填寫「依誰指示」' }); return; }
+    const values: Record<string, string> = { enabled: f.enabled, mode: f.mode, timing: f.timing, taxType: f.taxType, itemName: f.itemName, merchantId: f.merchantId, hashKey: f.hashKey, hashIV: f.hashIV };
+    if (await act({ action: 'einvoice.save', values, reason }, '已儲存電子發票設定')) { setReason(''); setF({ ...f, hashKey: '', hashIV: '' }); }
+  };
+  return (
+    <div className="card">
+      <h2>發票設定</h2>
+      <div className="fields">
+        <label className="f">電子發票<select value={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.value })}><option value="1">啟用</option><option value="0">停用</option></select></label>
+        <label className="f">模式<select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value as typeof f.mode })}>
+          {(['mock', 'test', 'prod'] as const).map((m) => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}</select></label>
+      </div>
+      <div className="fields" style={{ marginTop: 8 }}>
+        <label className="f">開立時機<select value={f.timing} onChange={(e) => setF({ ...f, timing: e.target.value as typeof f.timing })}>
+          <option value="review">核對後開（確認收訖後進待開清單，人工開立）</option><option value="auto">即開（確認收訖、核對無異常就開）</option></select></label>
+        <label className="f">課稅別（本場）<select value={f.taxType} onChange={(e) => setF({ ...f, taxType: e.target.value })}><option value="1">應稅（5%，內含）</option><option value="3">免稅</option></select></label>
+      </div>
+      <label className="f" style={{ marginTop: 8 }}>品名（本場）<input value={f.itemName} onChange={(e) => setF({ ...f, itemName: e.target.value })} /></label>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>發票品名＝「演出名稱 品名（購票方式）」，例：「{st.event.name || '演出名稱'} {f.itemName || '入場券'}（功德組）」。</p>
+      {f.mode === 'prod' && (
+        <div className="fields" style={{ marginTop: 8 }}>
+          <label className="f">特店編號（MerchantID）<input value={f.merchantId} placeholder="綠界廠商後台 → 系統介接設定" onChange={(e) => setF({ ...f, merchantId: e.target.value })} /></label>
+          <label className="f">HashKey<input type="password" value={f.hashKey} autoComplete="new-password" placeholder={c.keySet ? '已設定；要更換才需要填' : ''} onChange={(e) => setF({ ...f, hashKey: e.target.value })} /></label>
+          <label className="f">HashIV<input type="password" value={f.hashIV} autoComplete="new-password" placeholder={c.ivSet ? '已設定；要更換才需要填' : ''} onChange={(e) => setF({ ...f, hashIV: e.target.value })} /></label>
+        </div>
+      )}
+      {f.mode === 'test' && <p className="small muted" style={{ margin: '6px 0 0' }}>綠界測試環境一律使用綠界公開的測試特店（2000132），不需要填公司的金鑰。</p>}
+      {important && <label className="f" style={{ marginTop: 8 }}><b className="err-text">依誰指示（必填）</b><input value={reason} placeholder="例：王董 10/30 電話指示" onChange={(e) => setReason(e.target.value)} /></label>}
+      <button className="btn pri" style={{ marginTop: 10 }} disabled={busy} onClick={save}>儲存設定</button>
+      {c.log.length > 0 && (
+        <details style={{ marginTop: 10 }}>
+          <summary className="small" style={{ cursor: 'pointer' }}>修改紀錄（最近 {c.log.length} 筆）</summary>
+          <div className="small" style={{ marginTop: 6 }}>{c.log.map((l, i) => <div key={i}>{tw(l.at)}・{l.actor}：{l.detail}</div>)}</div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void }) {
+  const { act, busy, sure, confirm2 } = useAdmin();
+  const [open, setOpen] = useState(false);
+  const [ed, setEd] = useState({ invType: x.invType, invCode: x.invCode, invTitle: x.invTitle });
+  const [vr, setVr] = useState({ reason: '', reopen: true });
+  const canPick = x.status === 'pending' || x.status === 'failed';
+  return (
+    <>
+      <tr className={x.checks.length && canPick ? 'warnrow' : ''}>
+        <td>{canPick && <input type="checkbox" aria-label={`選取 ${x.orderNo}`} checked={on} onChange={toggle} />}</td>
+        <td className="mono">{x.orderNo}</td>
+        <td>{x.name}<br /><span className="mono small muted">{x.phone}</span></td>
+        <td className="small">{x.buyer}</td>
+        <td className="mono">{money(x.amount)}</td>
+        <td>
+          <span className={`pill ${x.status === 'issued' ? 'p-paid' : x.status === 'void' ? 'p-cancelled' : 'p-pending'}`}>{INV_STATUS[x.status] ?? x.status}</span>
+          {x.status === 'issued' && <div className="mono small">{x.invoiceNo}{x.env !== 'prod' && <span className="err-text">（{x.env === 'mock' ? '模擬' : '測試'}）</span>}</div>}
+          {canPick && x.checks.length > 0 && <div className="small err-text">⚠ {x.checks.length} 項異常</div>}
+          {x.status === 'failed' && <div className="small err-text">{x.error}</div>}
+        </td>
+        <td><button className="btn small" onClick={() => setOpen(!open)}>{open ? '收起' : '明細'}</button></td>
+      </tr>
+      {open && (
+        <tr><td colSpan={7}>
+          <div className="bank">
+            <span className="muted">訂購人</span><span>{x.name}・{x.phone}・{x.email}</span>
+            <span className="muted">金額</span><span className="mono">訂單 {money(x.amount)}{x.paidAmount !== null && x.paidAmount !== x.amount && <b className="err-text">（匯款 {money(x.paidAmount)}）</b>}</span>
+            <span className="muted">發票對象</span><span>{x.buyer}<span className="small muted">（送綠界的買受人名稱：{x.invType === 'company' ? x.invTitle : '貴賓'}）</span></span>
+            {x.checks.length > 0 && <><span className="muted">電腦核對</span><span className="err-text">{x.checks.map((c, i) => <div key={i}>⚠ {c}</div>)}</span></>}
+            {x.status === 'issued' && <><span className="muted">發票</span><span className="mono">{x.invoiceNo}・{x.invoiceDate}・隨機碼 {x.randomNumber}・{x.issuedBy}</span></>}
+            {x.status === 'void' && <><span className="muted">作廢</span><span>{x.invoiceNo}：{x.voidReason}</span></>}
+          </div>
+          {canPick && (
+            <div style={{ marginTop: 8 }}>
+              <div className="fields">
+                <label className="f">修改發票對象<select value={ed.invType} onChange={(e) => setEd({ invType: e.target.value, invCode: '', invTitle: '' })}>
+                  {INV_TYPES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+                {ed.invType !== 'member' && <label className="f">{ed.invType === 'company' ? '統一編號' : ed.invType === 'donate' ? '愛心碼' : '號碼'}<input value={ed.invCode} onChange={(e) => setEd({ ...ed, invCode: e.target.value.toUpperCase() })} /></label>}
+                {ed.invType === 'company' && <label className="f">公司抬頭<input value={ed.invTitle} onChange={(e) => setEd({ ...ed, invTitle: e.target.value })} /></label>}
+              </div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <button className="btn small" disabled={busy} onClick={() => act({ action: 'invoice.edit', id: x.id, ...ed }, '已修改並重新核對')}>儲存並重新核對</button>
+                <button className="btn small" disabled={busy} onClick={() => act({ action: 'invoice.recheck', id: x.id }, '已重新核對')}>重新核對</button>
+              </div>
+            </div>
+          )}
+          {x.status === 'issued' && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <input value={vr.reason} maxLength={20} placeholder="作廢原因（必填，20 字內）" style={{ maxWidth: 260 }} onChange={(e) => setVr({ ...vr, reason: e.target.value })} />
+              <label className="switch small"><input type="checkbox" checked={vr.reopen} onChange={(e) => setVr({ ...vr, reopen: e.target.checked })} />作廢後重新建立待開發票</label>
+              <button className="btn small danger" disabled={busy || !vr.reason.trim()} onClick={() => confirm2(`void${x.id}`, () => act({ action: 'invoice.void', id: x.id, ...vr }, `已作廢發票 ${x.invoiceNo}`))}>
+                {sure === `void${x.id}` ? '再按一次確認作廢' : '作廢這張發票'}</button>
+            </div>
+          )}
+        </td></tr>
+      )}
+    </>
+  );
+}
+
+function Invoices() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const [filter, setFilter] = useState<'todo' | 'issued' | 'void' | 'all'>('todo');
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const c = st.einvoice;
+  const list = st.invoices.filter((x) => filter === 'all' || (filter === 'todo' ? x.status === 'pending' || x.status === 'failed' : x.status === filter));
+  const todo = st.invoices.filter((x) => x.status === 'pending' || x.status === 'failed');
+  const chosen = st.invoices.filter((x) => sel.has(x.id));
+  const flagged = chosen.filter((x) => x.checks.length);
+  const toggle = (id: number) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const issue = async (force: boolean) => {
+    const r = await act({ action: 'invoice.issue', ids: [...sel], force }) as { orderNo: string; status: string; invoiceNo: string; error: string | null }[] | null;
+    if (!r) return;
+    const ok = r.filter((x) => x.status === 'issued');
+    const bad = r.filter((x) => x.status !== 'issued');
+    setMsg({ kind: bad.length ? 'err' : 'ok', text: `已開立 ${ok.length} 張${bad.length ? `；${bad.length} 張沒有開出：${bad.map((x) => `${x.orderNo} ${x.error ?? ''}`).join('；')}` : ''}` });
+    setSel(new Set());
+  };
+  return (
+    <div className="pstack">
+      {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>。確認收訖時不會建立發票。</div>
+        : c.mode !== 'prod' ? <div className="note warn">目前是<b>{MODE_LABEL[c.mode]}</b>，開出的<b>不是正式發票</b>。</div>
+        : <div className="note ok">正式模式：開出的是真的發票。開立時機：<b>{c.timing === 'auto' ? '即開' : '核對後開'}</b>・課稅別：<b>{c.taxType === '3' ? '免稅' : '應稅'}</b></div>}
+      <div className="grid2">
+        <div className="card">
+          <h2>發票
+            <select value={filter} style={{ width: 'auto' }} onChange={(e) => { setFilter(e.target.value as typeof filter); setSel(new Set()); }}>
+              <option value="todo">待開立（{todo.length}）</option><option value="issued">已開立</option><option value="void">已作廢</option><option value="all">全部</option>
+            </select>
+          </h2>
+          <p className="small muted" style={{ margin: '0 0 8px' }}>一筆訂單（收款）開一張。確認收訖時建立，電腦先核對金額與發票對象；有異常的紅底標出，人工確認後才能開。</p>
+          {filter === 'todo' && todo.length > 0 && (
+            <div className="row" style={{ marginBottom: 8 }}>
+              <button className="btn small" onClick={() => setSel(new Set(todo.filter((x) => !x.checks.length).map((x) => x.id)))}>選取全部無異常的（{todo.filter((x) => !x.checks.length).length}）</button>
+              <button className="btn small" disabled={!sel.size} onClick={() => setSel(new Set())}>清除選取</button>
+              {flagged.length === 0
+                ? <button className="btn pri small" disabled={busy || !sel.size} onClick={() => issue(false)}>開立選取的 {sel.size} 張</button>
+                : <button className="btn danger small" disabled={busy} onClick={() => confirm2('inv-force', () => issue(true))}>
+                    {sure === 'inv-force' ? `再按一次：已人工核對，開立 ${sel.size} 張` : `選取中有 ${flagged.length} 張有異常，確認後開立`}</button>}
+            </div>
+          )}
+          <div className="tbl"><table>
+            <thead><tr><th></th><th>訂單</th><th>訂購人</th><th>發票對象</th><th>金額</th><th>狀態</th><th></th></tr></thead>
+            <tbody>
+              {list.map((x) => <InvoiceRow key={x.id} x={x} on={sel.has(x.id)} toggle={() => toggle(x.id)} />)}
+              {!list.length && <tr><td colSpan={7} className="muted">沒有發票</td></tr>}
+            </tbody>
+          </table></div>
+        </div>
+        <div className="side"><EinvSettings /></div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 十一、招待（VIP） ---------- */
+type VipRow = State['vips']['list'][number];
+const VIP_MODE: Record<string, string> = { scheduled: '演出前自動寄', now: '立即寄出', none: '不寄（紙本親手交）' };
+const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
+
+function Vips() {
+  const { st, act, busy, setMsg, sure, confirm2, zoneById } = useAdmin();
+  const v = st.vips;
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [editing, setEditing] = useState<VipRow | null>(null);
+  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '' });
+  const [days, setDays] = useState(String(v.days));
+  if (st.user.role !== 'admin') return <div className="note err">招待由主管或網管安排，這個帳號沒有權限。</div>;
+
+  const vipOf = new Map<string, VipRow>();
+  v.list.filter((x) => x.status === 'paid').forEach((x) => x.seats.forEach((s) => vipOf.set(s.id, x)));
+  const mine = new Set(editing?.seats.map((s) => s.id) ?? []);
+  const look = (s: Seat): SeatLook => {
+    const vip = vipOf.get(s.id);
+    const z = zoneById[s.zoneId];
+    if (vip && !mine.has(s.id)) return { kind: 'free', bg: '#5b2a86', ink: '#ffffff', sel: sel.has(s.id), title: `${s.label}・招待：${vip.name}` };
+    if (s.status !== 'free' && !mine.has(s.id)) return { kind: 'sold', dim: true, title: `${s.label}・已有訂單` };
+    return { kind: 'free', bg: z?.color ?? '#fff', ink: z ? inkFor(z.color) : '#18213a', sel: sel.has(s.id), title: `${s.label}・${s.code}・${z?.name ?? ''}${usageNote(s)}${s.bundle ? '・連座（招待會拆成單人）' : ''}` };
+  };
+  function usageNote(s: Seat) { const u = st.usages.find((x) => x.id === s.usageId); return u && !u.sellable ? `・${u.name}` : ''; }
+  const paint = (ids: string[]) => {
+    const ok = ids.filter((id) => { const s = st.seats.find((x) => x.id === id); return s && (s.status === 'free' || mine.has(id)); });
+    setSel((p) => { const n = new Set(p); const allOn = ok.every((i) => n.has(i)); ok.forEach((i) => (allOn ? n.delete(i) : n.add(i))); return n; });
+  };
+  const selLabels = st.seats.filter((s) => sel.has(s.id)).map((s) => s.label);
+
+  async function create() {
+    if (!f.name.trim()) { setMsg({ kind: 'err', text: '請填寫姓名' }); return; }
+    if (!sel.size) { setMsg({ kind: 'err', text: '請在座位圖上選取座位' }); return; }
+    const r = await act({ action: 'vip.create', ...f, seatIds: [...sel] }) as { orderNo: string; sendAt: string | null; brokeBundles: number; delivery?: Delivery } | null;
+    if (!r) return;
+    const when = f.mode === 'none' ? '不寄出，請到「七、紙本入場券」列印' : f.mode === 'now' || !r.sendAt ? `已寄出。${deliveryText(r.delivery).text}` : `將於 ${fmtDay(r.sendAt)} 自動寄出`;
+    setMsg({ kind: 'ok', text: `已保留 ${sel.size} 席給 ${f.name}（${r.orderNo}），${when}${r.brokeBundles ? `；有 ${r.brokeBundles} 組連座已改回單人` : ''}` });
+    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '' });
+  }
+
+  return (
+    <div className="grid2">
+      <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
+        caption="深紫色＝已安排的招待。點按或拖曳選取座位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
+      <div className="side">
+        {editing ? (
+          <div className="card">
+            <h2>改座位：{editing.name}</h2>
+            <p className="small" style={{ margin: '0 0 6px' }}>在座位圖上點選新的座位（原座位已預先選取）。已選 <b>{sel.size}</b> 席：{selLabels.slice(0, 12).join('、')}{selLabels.length > 12 ? '…' : ''}</p>
+            <div className="row">
+              <button className="btn pri" disabled={busy || !sel.size} onClick={async () => { if (await act({ action: 'vip.seats', id: editing.id, seatIds: [...sel] }, `已更新 ${editing.name} 的座位`)) { setEditing(null); setSel(new Set()); } }}>儲存座位</button>
+              <button className="btn" onClick={() => { setEditing(null); setSel(new Set()); }}>取消</button>
+            </div>
+          </div>
+        ) : (
+          <div className="card">
+            <h2>新增招待 <span className="small muted">已選 {sel.size} 席</span></h2>
+            {selLabels.length > 0 && <p className="small" style={{ margin: '0 0 6px' }}>{selLabels.slice(0, 12).join('、')}{selLabels.length > 12 ? '…' : ''}</p>}
+            <label className="f">姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <div className="fields" style={{ marginTop: 8 }}>
+              <label className="f">手機（選填）<input value={f.phone} inputMode="tel" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
+              <label className="f">Email（選填）<input value={f.email} type="email" onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+            </div>
+            <h3>劃位資料什麼時候寄給對方</h3>
+            {(['scheduled', 'now', 'none'] as const).map((m) => (
+              <label key={m} className="check" style={{ marginBottom: 4 }}>
+                <input type="radio" name="vipmode" checked={f.mode === m} onChange={() => setF({ ...f, mode: m })} />
+                <span>{m === 'scheduled' ? <>演出前 {v.days} 天自動寄出{v.defaultSendAt ? `（${fmtDay(v.defaultSendAt)}）` : '（已過，會立即寄出）'}</> : VIP_MODE[m]}</span>
+              </label>
+            ))}
+            <label className="f" style={{ marginTop: 6 }}>備註（選填，只有後台看得到）<input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
+            <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !sel.size} onClick={create}>保留 {sel.size} 席給這位貴賓</button>
+            <p className="small muted" style={{ margin: '6px 0 0' }}>招待不收費、不開發票，不算進售票收入。寄出前都可以改座位、改寄送方式或取消。</p>
+          </div>
+        )}
+
+        <div className="card">
+          <h2>招待名單 <span className="small muted">{v.list.filter((x) => x.status === 'paid').length} 位・{st.stats.vipSeats} 席</span></h2>
+          {v.list.filter((x) => x.status === 'paid').map((x) => (
+            <div key={x.id} className="note" style={{ marginBottom: 8 }}>
+              <div className="row" style={{ justifyContent: 'space-between' }}><b>{x.name}</b><span className="mono small">{x.orderNo}</span></div>
+              <div className="small">{x.seats.map((s) => s.label).join('、')}</div>
+              <div className="small muted">{x.phone}{x.phone && x.email ? '・' : ''}{x.email}</div>
+              <div className="small" style={{ marginTop: 4 }}>
+                {x.sentAt ? <span className="ok-text">✓ 已寄出（{fmtDay(x.sentAt)}）</span>
+                  : x.sendAt === 'now' ? <span>寄送中</span>
+                  : x.sendAt ? <span>排定 <b>{fmtDay(x.sendAt)}</b> 自動寄出</span>
+                  : <span className="muted">不寄出（紙本親手交）</span>}
+                {x.failed && !x.sentAt && <b className="err-text">・寄送失敗，請看「八、通知設定」通知紀錄</b>}
+              </div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <select value={x.mode} style={{ width: 'auto' }} disabled={busy} onChange={async (e) => {
+                  const m = e.target.value;
+                  const r = await act({ action: 'vip.mode', id: x.id, mode: m }) as { sendAt: string | null; delivery?: Delivery } | null;
+                  if (r) setMsg({ kind: 'ok', text: m === 'none' ? `${x.name}：不寄出` : m === 'now' || !r.sendAt ? `${x.name}：已寄出。${deliveryText(r.delivery).text}` : `${x.name}：將於 ${fmtDay(r.sendAt)} 自動寄出` });
+                }}>
+                  {(['scheduled', 'now', 'none'] as const).map((m) => <option key={m} value={m}>{VIP_MODE[m]}</option>)}
+                </select>
+                <button className="btn small" onClick={() => { setEditing(x); setSel(new Set(x.seats.map((s) => s.id))); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>改座位</button>
+                <button className="btn small danger" disabled={busy} onClick={() => confirm2(`vipc${x.id}`, () => act({ action: 'vip.cancel', id: x.id }, `已取消 ${x.name} 的招待，座位已釋放`))}>
+                  {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消招待'}</button>
+              </div>
+            </div>
+          ))}
+          {!v.list.some((x) => x.status === 'paid') && <p className="muted small" style={{ margin: 0 }}>還沒有安排招待。</p>}
+          <div className="row" style={{ marginTop: 8 }}>
+            <span className="small">演出前</span>
+            <input value={days} inputMode="numeric" style={{ width: 60 }} onChange={(e) => setDays(e.target.value.replace(/\D/g, ''))} />
+            <span className="small">天自動寄出</span>
+            <button className="btn small" disabled={busy || String(v.days) === days} onClick={() => act({ action: 'vip.days', days: parseInt(days) || 0 }, '已更新，尚未寄出的排程一起改了')}>儲存</button>
+          </div>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>自動寄出要系統當天開著；電腦關機的話，開機後會補寄。紙本入場券在「七、紙本入場券」列印。</p>
+        </div>
       </div>
     </div>
   );
