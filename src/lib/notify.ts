@@ -215,7 +215,7 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
 }
 
 const PUSH_TITLE: Record<string, string> = {
-  order_confirmed: '🎉 劃位成功', order_cancelled: '劃位已取消', order_expired: '劃位已逾時取消', order_received: '已收到劃位資料',
+  preorder_link: '✅ 已確認收款，請點此劃位', order_confirmed: '🎉 劃位成功', order_cancelled: '劃位已取消', order_expired: '劃位已逾時取消', order_received: '已收到劃位資料',
 };
 
 /** App 推播：推到訂購人手機（購票頁按過「開啟通知」的那支） */

@@ -205,7 +205,8 @@ export const preorder = pgTable('preorder', {
   confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
   confirmedBy: text('confirmed_by'),
   seenAt: timestamp('seen_at', { withTimezone: true }),
-}, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no) }));
+  viewToken: text('view_token'), // 訂購人裝置用來查進度、收推播的隨機碼
+}, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no), viewToken: uniqueIndex('preorder_view_token_idx').on(t.viewToken) }));
 
 /** 驗票門口：每個門一條驗票連結（token），工作人員用手機打開即可掃描，可停用 */
 export const gate = pgTable('gate', {
@@ -233,7 +234,8 @@ export const checkin = pgTable('checkin', {
 /** 手機推播訂閱：消費者在購票頁按「開啟通知」後建立 */
 export const pushSub = pgTable('push_sub', {
   id: serial('id').primaryKey(),
-  linkId: integer('link_id').notNull().references(() => inviteLink.id, { onDelete: 'cascade' }),
+  linkId: integer('link_id').references(() => inviteLink.id, { onDelete: 'cascade' }),
+  preorderId: integer('preorder_id').references(() => preorder.id, { onDelete: 'cascade' }), // 預購單送出後、尚未收款時訂閱的
   visitorId: text('visitor_id'), // 公開連結：哪一位訪客
   endpoint: text('endpoint').notNull(),
   p256dh: text('p256dh').notNull(),

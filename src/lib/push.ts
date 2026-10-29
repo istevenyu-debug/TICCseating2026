@@ -46,7 +46,7 @@ export async function siteOrigin(db: Db) {
 export async function saveSubscription(db: Db, linkId: number, visitorId: string | null, sub: { endpoint: string; keys: { p256dh: string; auth: string } }) {
   if (!/^https:\/\//.test(sub.endpoint)) throw new BookingError('INVALID', '推播訂閱資料不正確');
   await db.insert(t.pushSub).values({ linkId, visitorId, endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth })
-    .onConflictDoUpdate({ target: t.pushSub.endpoint, set: { linkId, visitorId, p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+    .onConflictDoUpdate({ target: t.pushSub.endpoint, set: { linkId, visitorId, preorderId: null, p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
 }
 
 /** 這則通知要推給誰：專屬連結推給整條連結的訂閱；公開連結只推給下單的那位訪客 */

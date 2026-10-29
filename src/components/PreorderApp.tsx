@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { phoneProblem } from '@/lib/validation';
+import PushCard from './PushCard';
 
 type Menu = {
   open: boolean;
@@ -20,6 +21,47 @@ async function api<T>(body?: unknown): Promise<Res<T>> {
   } catch { return { ok: false, code: 'NETWORK', message: '網路連線異常，請確認後再試。' }; }
 }
 
+async function call<T>(url: string, body?: unknown): Promise<Res<T>> {
+  try {
+    const r = await fetch(url, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return await r.json();
+  } catch { return { ok: false, code: 'NETWORK', message: '網路連線異常，請確認後再試。' }; }
+}
+
+/** 這台裝置送出過的訂單（只存隨機查詢碼，不存個資）。瀏覽器不允許儲存時就略過 */
+const STORE = 'ticc.preorders';
+type Saved = { token: string; no: string };
+function loadSaved(): Saved[] {
+  try { const v = JSON.parse(localStorage.getItem(STORE) ?? '[]'); return Array.isArray(v) ? v.filter((x) => x && typeof x.token === 'string') : []; } catch { return []; }
+}
+function addSaved(x: Saved) {
+  try { localStorage.setItem(STORE, JSON.stringify([x, ...loadSaved().filter((y) => y.token !== x.token)].slice(0, 20))); } catch { /* 無痕模式等 */ }
+}
+type Mine = { token: string; no: string; status: string; items: string; amount: number; createdAt: string; url: string | null };
+const MINE_STATUS: Record<string, string> = { submitted: '等待主辦方確認收款', confirmed: '已確認收款', cancelled: '已取消' };
+
+/** 這台裝置的訂單進度：確認收款後直接出現「開始劃位」按鈕 */
+function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
+  if (!mine.length) return null;
+  return (
+    <div className="card">
+      <h2>您在這支手機送出的訂單 <button className="btn small" onClick={reload}>重新整理</button></h2>
+      {mine.map((m) => (
+        <div key={m.token} className="note" style={{ marginBottom: 8 }}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <b className="mono">{m.no}</b>
+            <span className={`pill ${m.status === 'confirmed' ? 'p-paid' : m.status === 'cancelled' ? 'p-cancelled' : 'p-pending'}`}>{MINE_STATUS[m.status] ?? m.status}</span>
+          </div>
+          <div className="small muted">{m.items}・{money(m.amount)}</div>
+          {m.url
+            ? <a className="btn pri" style={{ display: 'block', textAlign: 'center', marginTop: 8 }} href={m.url}>開始劃位（選座位）</a>
+            : m.status === 'submitted' && <div className="small" style={{ marginTop: 4 }}>主辦方確認收到款項後，這裡會出現「開始劃位」按鈕，同時寄 Email 給您。</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 預購單（公開）：選購（不劃位）→ 匯款 → 填資料回傳；主辦方確認收訖後寄出專屬劃位連結 */
 export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -29,9 +71,24 @@ export default function PreorderApp() {
   const [paidTouched, setPaidTouched] = useState(false);
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ no: string; amount: number; mismatch: boolean } | null>(null);
+  const [done, setDone] = useState<{ no: string; amount: number; mismatch: boolean; token: string } | null>(null);
+  const [mine, setMine] = useState<Mine[]>([]);
 
-  useEffect(() => { api<Menu>().then((r) => (r.ok ? setMenu(r.data) : setErr(r.message))); }, []);
+  const reload = useCallback(async () => {
+    const saved = loadSaved();
+    if (!saved.length) return;
+    const r = await call<Mine[]>('/api/buy/mine', { tokens: saved.map((x) => x.token) });
+    if (r.ok) setMine(r.data);
+  }, []);
+  useEffect(() => { api<Menu>().then((r) => (r.ok ? setMenu(r.data) : setErr(r.message))); reload(); }, [reload]);
+  // 等待收款期間：回到這頁或每分鐘自動更新一次
+  useEffect(() => {
+    if (!mine.some((m) => m.status === 'submitted')) return;
+    const id = setInterval(() => { if (document.visibilityState === 'visible') reload(); }, 60_000);
+    const vis = () => { if (document.visibilityState === 'visible') reload(); };
+    document.addEventListener('visibilitychange', vis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', vis); };
+  }, [mine, reload]);
   if (err && !menu) return <main className="wrap"><div className="card"><p className="note err">{err}</p></div></main>;
   if (!menu) return <main className="wrap"><div className="card muted">載入中…</div></main>;
 
@@ -57,12 +114,13 @@ export default function PreorderApp() {
   }
   async function send() {
     setBusy(true);
-    const r = await api<{ no: string; amount: number; mismatch: boolean }>({
+    const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree,
     });
     setBusy(false);
     if (!r.ok) { setReview(false); setErr(r.message); return; }
+    addSaved({ token: r.data.token, no: r.data.no });
     setDone(r.data); window.scrollTo({ top: 0 });
   }
 
@@ -82,17 +140,22 @@ export default function PreorderApp() {
           <h2>已送出訂單 {done.no}</h2>
           <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱（也請看看垃圾郵件匣）。</p>
           {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
-          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
+          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度；確認收款後會出現「開始劃位」按鈕。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>
+        <PushCard endpoint={`/api/buy/push?t=${encodeURIComponent(done.token)}`} api={call} compact={false}
+          title="📱 收款確認後，劃位連結直接送到這支手機"
+          offText={<>開啟後，主辦方確認收到款項時，這支手機會跳出通知，<b>點一下就能開始選位</b>。Email 也會照常寄出。</>}
+          onText="✓ 已開啟通知：主辦方確認收款後，這支手機會收到劃位通知。也可以隨時回到這個網頁查看。" />
       </main>
     );
   }
 
-  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<div className="note err">目前未開放預購。</div></main>;
+  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<MyPreorders mine={mine} reload={reload} /><div className="note err">目前未開放預購。</div></main>;
 
   return (
     <main className="wrap" style={{ maxWidth: 640 }}>
       {head}
+      <MyPreorders mine={mine} reload={reload} />
 
       {review ? (
         <div className="card review" style={{ marginTop: 0 }}>
@@ -108,6 +171,7 @@ export default function PreorderApp() {
           <h3>選購內容</h3>
           <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name} × {qty[key(i)]}</span><span className="mono">{money(i.price * qty[key(i)])}</span></div>)}</div>
           <div className="total"><span className="muted">合計</span><b>{money(total)}</b></div>
+          <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，這支手機可以查進度、收到劃位通知。不要用公用或別人的電腦。</p>
           {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={send}>{busy ? '送出中…' : '資料正確，確認送出'}</button>

@@ -35,7 +35,7 @@ describe('清除測試資料', () => {
     await A.setSeatUsage(db, 'admin', vol.id, ['1-1', '1-2']);
     await A.bundleAuto(db, 'admin', { rows: [2], blocks: ['C0'], size: 2, shape: 'row', crossAisle: false, skip: [] });
     // 測試資料：預購單→訂單→連結→劃位→入場
-    await submitPreorder(db, { items: [{ kind: 'zone', id: (await db.select().from(t.priceZone))[0].id, qty: 1 }], name: '林', phone: '0912345678', email: 'l@x.co', paidAmount: 3200, last5: '12345', agree: true });
+    await submitPreorder(db, { items: [{ kind: 'zone', id: (await db.select().from(t.priceZone))[0].id, qty: 2 }], name: '林', phone: '0912345678', email: 'l@x.co', paidAmount: 6400, last5: '12345', agree: true });
     const [p] = await listPreorders(db);
     const { code } = await confirmPreorder(db, 'admin', p.id);
     await book(code, ['5-1', '5-2']);

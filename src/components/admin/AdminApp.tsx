@@ -565,12 +565,14 @@ function Links() {
       <div className="card">
         <h2>已發出的劃位連結</h2>
         <div className="tbl"><table>
-          <thead><tr><th>代碼</th><th>對象</th><th>手機／來帳備註</th><th>可購／已訂</th><th>有效至</th><th>狀態</th><th></th></tr></thead>
+          <thead><tr><th>代碼</th><th>對象</th><th>手機／來帳備註</th><th>可劃／已劃</th><th>有效至</th><th>狀態</th><th></th></tr></thead>
           <tbody>
             {st.links.filter((l) => l.kind !== 'public').map((l) => (
               <tr key={l.id}>
                 <td className="mono">{l.code}</td><td>{l.name}</td><td className="small"><span className="mono">{l.phone || '—'}</span>{l.note && <div className="muted">{l.note}</div>}</td>
-                <td className="mono">{l.quota || '不限'} / {l.used}</td><td className="small">{tw(l.expiresAt)}</td>
+                <td className="small">{l.paid
+                  ? <span className={l.paid.over ? 'err-text' : ''}>已付／已劃：{l.paid.text}{l.paid.over && <b>（超過付款內容）</b>}</span>
+                  : <span className="mono">{l.quota || '不限'} / {l.used}</span>}</td><td className="small">{tw(l.expiresAt)}</td>
                 <td>{l.status === 'active' ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}</td>
                 <td><div className="row">
                   <button className="btn small" onClick={() => navigator.clipboard?.writeText(`${base}/t/${l.code}`).then(() => setMsg({ kind: 'ok', text: `已複製 ${base}/t/${l.code}` }), () => setMsg({ kind: 'ok', text: `${base}/t/${l.code}` }))}>複製連結</button>
@@ -661,7 +663,8 @@ function Orders() {
           <tbody>
             {list.map((x) => (
               <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} onClick={() => openOrder(x)}>
-                <td className="mono">{x.orderNo}</td><td>{x.buyerName}{x.linkNote && <><br /><span className="small muted">{x.linkNote}</span></>}</td>
+                <td className="mono">{x.orderNo}</td><td>{x.buyerName}{x.linkNote && <><br /><span className="small muted">{x.linkNote}</span></>}
+                  {st.paidByLink[x.linkId]?.over && <><br /><b className="small err-text">⚠ 劃的座位超過付款內容</b></>}</td>
                 <td className="small">{x.seats.map((s) => s.code).join('、')}</td>
                 <td className="mono">{money(x.amount)}</td>
                 <td><span className={`pill p-${x.status}`}>{STATUS[x.status]}</span>{x.isNew && <span className="badge">新</span>}
@@ -689,6 +692,8 @@ function OrderDetail({ o }: { o: Order }) {
         <span className="muted">連結</span><span><span className="mono">{o.linkCode}</span>{o.linkName && o.linkKind !== 'public' ? `・${o.linkName}` : ''}</span>
         {o.linkNote && <><span className="muted">來帳備註</span><span>{o.linkNote}</span></>}
         <span className="muted">購票方式</span><span>{o.comboName}</span>
+        {st.paidByLink[o.linkId] && <><span className="muted">付款／已劃</span><span className={st.paidByLink[o.linkId].over ? 'err-text' : ''}>
+          {st.paidByLink[o.linkId].text}（訂單 {st.paidByLink[o.linkId].preorderNo}）{st.paidByLink[o.linkId].over && <b><br />⚠ 劃的座位超過付款內容，請核對</b>}</span></>}
         <span className="muted">應付</span><span className="mono">{money(o.amount)}</span>
         <span className="muted">暫存時間</span><span>{tw(o.createdAt)}</span>
         {o.submittedAt && <><span className="muted">送出時間</span><span>{tw(o.submittedAt)}</span></>}

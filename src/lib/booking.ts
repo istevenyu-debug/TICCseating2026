@@ -15,6 +15,7 @@ import { seatLabel } from './layout';
 import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
 import { autoHolders, submitInput, type SubmitInput } from './validation';
 import { qrSecret, qrValue } from './qr';
+import { entitle } from './entitle';
 
 export class BookingError extends Error {
   constructor(public code: string, message: string, public detail?: unknown) {
@@ -100,6 +101,21 @@ export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule 
     id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
+}
+
+/** 這條連結付款買了什麼、已劃多少（由訂單收款產生的連結才有；手動連結回傳 null） */
+export async function linkEntitle(db: Exec, linkId: number) {
+  const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, linkId)).limit(1);
+  if (!po) return null;
+  const os = await db.select({ id: t.orders.id, comboId: t.orders.comboId, sets: t.orders.sets, isSingle: t.combo.isSingle })
+    .from(t.orders).innerJoin(t.combo, eq(t.combo.id, t.orders.comboId))
+    .where(and(eq(t.orders.linkId, linkId), inArray(t.orders.status, ACTIVE_ORDER)));
+  const zs = os.length
+    ? await db.select({ orderId: t.orderSeat.orderId, zoneId: t.eventSeat.zoneId }).from(t.orderSeat)
+      .innerJoin(t.eventSeat, and(eq(t.eventSeat.seatId, t.orderSeat.seatId), eq(t.eventSeat.eventId, po.eventId)))
+      .where(inArray(t.orderSeat.orderId, os.map((o) => o.id)))
+    : [];
+  return entitle(po.items, os.map((o) => ({ comboId: o.comboId, sets: o.sets, isSingle: o.isSingle, zoneIds: zs.filter((z) => z.orderId === o.id).map((z) => z.zoneId) })));
 }
 
 /* ---------- 逾時釋放 ---------- */
@@ -189,6 +205,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
   const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
   const comboItem = po?.items.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
+  const ent = await linkEntitle(db, link.id);
   const prefill = {
     name: link.name, phone: link.phone, email: po?.email ?? '',
     comboId: comboItem?.id ?? 0, bought: po ? po.items.map((i) => `${i.name} × ${i.qty}`).join('、') : '',
@@ -231,6 +248,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
     })),
     inbox,
     prefill,
+    paid: ent, // 付款買了什麼、已劃多少（手動連結為 null）
   };
 }
 
@@ -298,6 +316,25 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     if (problem) throw new BookingError('COMBO', problem);
 
     const sets = cb.isSingle ? 1 : comboSets(cb, valid.map((r) => r.zoneId));
+
+    // 由訂單收款產生的連結：只能劃付了錢的組合與張數（舊的暫存已在上面放掉，不重複計算）
+    const ent = await linkEntitle(tx, link.id);
+    if (ent) {
+      const paidText = ent.rows.map((r) => `${r.name} × ${r.qty}`).join('、');
+      if (!cb.isSingle) {
+        const e = ent.rows.find((r) => r.kind === 'combo' && r.id === cb.id);
+        if (!e) throw new BookingError('PAID', `您付款購買的是「${paidText}」，請用這個購票方式劃位。`);
+        if (sets > e.left) throw new BookingError('PAID', e.left > 0 ? `您付款購買的「${e.name}」還可劃 ${e.left} 組，這次選了 ${sets} 組，請減少座位。` : `您付款購買的「${e.name}」已經全部劃完了。`);
+      } else {
+        const count = new Map<number, number>();
+        valid.forEach((r) => count.set(r.zoneId, (count.get(r.zoneId) ?? 0) + 1));
+        for (const [z, n] of count) {
+          const e = ent.rows.find((r) => r.kind === 'zone' && r.id === z);
+          if (!e) throw new BookingError('PAID', `「${zoneName(z)}」不在您付款購買的內容（${paidText}）裡。`);
+          if (n > e.left) throw new BookingError('PAID', e.left > 0 ? `您付款購買的「${e.name}」還可劃 ${e.left} 張，這次選了 ${n} 張，請減少座位。` : `您付款購買的「${e.name}」已經全部劃完了。`);
+        }
+      }
+    }
     const amount = calcAmount(valid.map((r) => r.price), cb, sets);
     const holdUntil = new Date(now.getTime() + ev.holdMinutes * 60_000);
     const [order] = await tx.insert(t.orders).values({

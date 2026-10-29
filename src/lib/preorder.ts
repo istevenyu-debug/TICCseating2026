@@ -3,6 +3,7 @@
  * 後台確認收訖後，自動建立不限張數的專屬劃位連結，寄到 Email（有手機也寄簡訊）。
  * 訂購不佔名額（確認收訖、實際劃位時才算），也不會自動取消。
  */
+import { randomBytes } from 'node:crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '@/db/client';
@@ -75,15 +76,17 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(t.preorder).where(eq(t.preorder.eventId, ev.id));
     const no = `P${String(n + 1 + attempt).padStart(4, '0')}`;
     try {
+      const viewToken = randomBytes(18).toString('base64url');
       const [row] = await db.insert(t.preorder).values({
         eventId: ev.id, no, items, amount, name: p.data.name, phone: p.data.phone, email: p.data.email,
-        paidAmount: p.data.paidAmount, last5: p.data.last5, createdAt: now,
+        paidAmount: p.data.paidAmount, last5: p.data.last5, createdAt: now, viewToken,
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
         content: `【${ev.name}】${row.name} 您好，已收到您的訂單 ${no}：${itemsText(items)}，合計 NT$${amount.toLocaleString('en-US')}（您填寫的匯款金額 NT$${row.paidAmount.toLocaleString('en-US')}、帳號末五碼 ${row.last5}）。主辦方確認收到款項後，會寄出您的專屬劃位連結到這個信箱。`,
       });
-      return { no, amount, mismatch: amount !== row.paidAmount };
+      // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
+      return { no, amount, mismatch: amount !== row.paidAmount, token: viewToken };
     } catch (e) {
       if (!/unique|duplicate/i.test(String((e as Error).message))) throw e;
     }
@@ -118,6 +121,12 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   }, base);
   const url = linkUrl(link.code, base);
   await db.update(t.preorder).set({ status: 'confirmed', linkId: link.id, confirmedAt: now, confirmedBy: actor, seenAt: po.seenAt ?? now }).where(eq(t.preorder.id, id));
+  // 訂購人送出訂單時開了手機通知：改掛到劃位連結，直接把連結推過去
+  await db.update(t.pushSub).set({ linkId: link.id }).where(eq(t.pushSub.preorderId, po.id));
+  await db.insert(t.notification).values({
+    linkId: link.id, channel: 'push', template: 'preorder_link', recipient: '訂購人手機',
+    content: `已確認收到您的款項（訂單 ${po.no}），請點這則通知開始選位。`,
+  });
   await db.insert(t.notification).values({
     linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
     content: `【${ev.name}】${po.name} 您好，已確認收到您的款項 NT$${po.paidAmount.toLocaleString('en-US')}（訂單 ${po.no}：${itemsText(po.items)}）。請點以下專屬連結選位並填寫持票人資料：${url}　連結有效至演出當天，請勿轉傳他人。`,
@@ -141,4 +150,34 @@ export async function cancelPreorder(db: Db, actor: string, id: number, reason =
 
 export async function markPreorderSeen(db: Db, id: number) {
   await db.update(t.preorder).set({ seenAt: new Date() }).where(and(eq(t.preorder.id, id), sql`${t.preorder.seenAt} is null`));
+}
+
+/** 訂購人裝置查進度：只認送出時拿到的隨機碼，一次最多 20 筆 */
+export async function preorderStatus(db: Db, tokens: string[]) {
+  const list = [...new Set(tokens.filter((x) => typeof x === 'string' && /^[\w-]{20,40}$/.test(x)))].slice(0, 20);
+  if (!list.length) return [];
+  const rows = await db.select().from(t.preorder).where(inArray(t.preorder.viewToken, list)).orderBy(desc(t.preorder.id));
+  const linkIds = rows.map((r) => r.linkId).filter((x): x is number => !!x);
+  const links = linkIds.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code, status: t.inviteLink.status }).from(t.inviteLink).where(inArray(t.inviteLink.id, linkIds)) : [];
+  return rows.map((r) => {
+    const l = links.find((x) => x.id === r.linkId);
+    return {
+      token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
+      url: r.status === 'confirmed' && l && l.status === 'active' ? `/t/${l.code}` : null,
+    };
+  });
+}
+
+/** 訂購人裝置開啟推播：還沒收款就先掛在預購單上，確認收訖時改掛到劃位連結 */
+export async function savePreorderPush(db: Db, token: string, sub: { endpoint: string; keys: { p256dh: string; auth: string } }) {
+  if (!/^https:\/\//.test(sub.endpoint)) throw new BookingError('INVALID', '推播訂閱資料不正確');
+  const [po] = token ? await db.select().from(t.preorder).where(eq(t.preorder.viewToken, token)) : [];
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  const v = { linkId: po.linkId, preorderId: po.id, visitorId: null, p256dh: sub.keys.p256dh, auth: sub.keys.auth };
+  await db.insert(t.pushSub).values({ ...v, endpoint: sub.endpoint }).onConflictDoUpdate({ target: t.pushSub.endpoint, set: v });
+}
+
+export async function preorderExists(db: Db, token: string) {
+  const [po] = token ? await db.select({ id: t.preorder.id }).from(t.preorder).where(eq(t.preorder.viewToken, token)) : [];
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
 }

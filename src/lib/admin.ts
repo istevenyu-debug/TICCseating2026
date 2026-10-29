@@ -12,6 +12,7 @@ import {
   ACTIVE_ORDER, BookingError, freeSeatsOf, loadCombos, sweepExpired, usedComboSets,
 } from './booking';
 import { BLOCKS, rowKey, seatLabel, type Block } from './layout';
+import { entText, entitle } from './entitle';
 
 export const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -70,7 +71,7 @@ export async function getAdminState(db: Db, now = new Date()) {
       linkCode: linkById[o.linkId]?.code ?? '', linkKind: linkById[o.linkId]?.kind ?? 'personal', linkName: linkById[o.linkId]?.name ?? '', linkNote: linkById[o.linkId]?.note ?? '',
       createdAt: o.createdAt.toISOString(), submittedAt: o.submittedAt?.toISOString() ?? null,
       holdUntil: o.holdUntil?.toISOString() ?? null, payDueAt: o.payDueAt?.toISOString() ?? null,
-      isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason,
+      isNew: o.status === 'pending' && !o.seenAt, closedReason: o.closedReason, linkId: o.linkId,
       seats: oseats.filter((s) => s.orderId === o.id).map((s) => ({
         seatId: s.seatId, code: seatById[s.seatId]?.code ?? s.seatId, label: seatById[s.seatId]?.label ?? s.seatId,
         holderName: s.holderName, holderId4: s.holderId4, unitPrice: s.unitPrice,
@@ -86,6 +87,18 @@ export async function getAdminState(db: Db, now = new Date()) {
   orderRows.filter((o) => o.status === 'pending' || o.status === 'paid').forEach((o) => {
     usedByLink.set(o.linkId, (usedByLink.get(o.linkId) ?? 0) + oseats.filter((s) => s.orderId === o.id).length);
   });
+
+  // 由訂單收款產生的連結：付款內容 vs 已劃內容
+  const pos = await db.select({ linkId: t.preorder.linkId, no: t.preorder.no, items: t.preorder.items }).from(t.preorder)
+    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.linkId} is not null`));
+  const paidByLink = new Map(pos.map((p) => {
+    const os = orderRows.filter((o) => o.linkId === p.linkId && ACTIVE_ORDER.includes(o.status));
+    const e = entitle(p.items, os.map((o) => ({
+      comboId: o.comboId, sets: o.sets, isSingle: !!comboById[o.comboId]?.isSingle,
+      zoneIds: oseats.filter((x) => x.orderId === o.id).map((x) => seatById[x.seatId]?.zoneId ?? 0),
+    })));
+    return [p.linkId!, { preorderNo: p.no, text: entText(e.rows), over: e.over, done: e.done }];
+  }));
 
   const usageById = Object.fromEntries(usages.map((u) => [u.id, u]));
   const inst = seats.filter((s) => s.installed);
@@ -130,8 +143,9 @@ export async function getAdminState(db: Db, now = new Date()) {
     seats, orders,
     links: links.map((l) => ({
       id: l.id, code: l.code, kind: l.kind, name: l.name, phone: l.phone, quota: l.quota, used: usedByLink.get(l.id) ?? 0,
-      expiresAt: l.expiresAt.toISOString(), status: l.status, note: l.note,
+      expiresAt: l.expiresAt.toISOString(), status: l.status, note: l.note, paid: paidByLink.get(l.id) ?? null,
     })),
+    paidByLink: Object.fromEntries(paidByLink),
     stats,
   };
 }
