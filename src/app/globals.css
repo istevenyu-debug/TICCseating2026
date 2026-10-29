@@ -221,3 +221,5 @@ input.need { border-color: var(--red); }
 ol.steps { margin: 0 0 10px; padding-left: 22px; line-height: 1.6; }
 ol.steps li { margin-bottom: 4px; }
 tr.warnrow td { background: #fff4f4; }
+/* 不能選的座位（原本用 disabled，改成可點出說明） */
+.seat[aria-disabled="true"]:not([data-k="mine"]) { opacity: .45; cursor: not-allowed; }

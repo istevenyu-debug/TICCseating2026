@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-10-30b 版（快速配對）';
+export const APP_VERSION = '2026-10-30c 版（贈票區可劃位）';

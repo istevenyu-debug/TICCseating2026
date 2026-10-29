@@ -154,6 +154,8 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
   const combosAll = await loadCombos(db, ev.id);
   const combos = combosAll.filter((c) => openCombos.has(c.id));
+  // 開放的組合票裡的贈票區（票價 0）：就算沒在價格設定勾「開放」，也要能劃
+  for (const c of combos) if (!c.isSingle) for (const i of c.items) if (zones.find((z) => z.id === i.zoneId)?.price === 0) openZones.add(i.zoneId);
   const sets = await usedComboSets(db, ev.id);
 
   const myOrders = await db.select().from(t.orders).where(ownedBy(link)).orderBy(t.orders.id);
@@ -305,7 +307,9 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       if (missing.length) throw new BookingError('BUNDLE', '連座的座位需整組一起訂購（按一下會同時選取整組）。', missing);
     }
 
-    const valid = rows.filter((r) => r.sellable && pub.zoneIds.includes(r.zoneId) && (r.seatType !== 'vip' || ev.vipInstalled));
+    // 贈票區（票價 0）只要是這個組合票的內容就可以劃
+    const giftOk = (zid: number, price: number) => price === 0 && !cb.isSingle && cb.items.some((i) => i.zoneId === zid);
+    const valid = rows.filter((r) => r.sellable && (pub.zoneIds.includes(r.zoneId) || giftOk(r.zoneId, r.price)) && (r.seatType !== 'vip' || ev.vipInstalled));
     if (valid.length !== seatIds.length) {
       const ok = new Set(valid.map((r) => r.seatId));
       throw new BookingError('SEAT_UNAVAILABLE', '部分座位目前不開放訂購。', seatIds.filter((s) => !ok.has(s)));

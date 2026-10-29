@@ -13,6 +13,8 @@ interface Props {
   vipInstalled: boolean;
   selected: Set<string>;
   onToggle: (id: string) => void;
+  /** 點到不能選的座位：說明原因（不屬於這個購票方式／不開放／已被訂） */
+  onBlocked?: (id: string, why: 'off' | 'blocked' | 'taken') => void;
   locked: boolean; // 暫存中：不可再改選
   /** 目前購票方式可選的票種；其他座位變淡、不能選 */
   allowed?: Set<number>;
@@ -20,7 +22,7 @@ interface Props {
 
 const ROW_LABEL_COLS = [8, 45];
 
-export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, locked, allowed }: Props) {
+export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed }: Props) {
   const [cell, setCell] = useState(22);
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
@@ -72,8 +74,8 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
                 title={title}
                 aria-label={title}
                 aria-pressed={isSel}
-                disabled={!clickable && s.status !== 'mine'}
-                onClick={() => clickable && onToggle(s.id)}
+                aria-disabled={!clickable}
+                onClick={() => (clickable ? onToggle(s.id) : !locked && onBlocked?.(s.id, off ? 'off' : s.status === 'blocked' ? 'blocked' : 'taken'))}
               >
                 {s.no}
               </button>

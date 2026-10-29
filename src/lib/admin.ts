@@ -193,7 +193,17 @@ export async function publish(db: Db, actor: string, now = new Date()) {
   if (orphan.length) throw new BookingError('INVALID', `「${orphan[0].name}」票價為 0（贈票），但沒有開放的組合票包含它。請在組合票（例如功德組）加入它，或填寫票價。`);
   const badCombo = combos.filter((c) => d.comboIds.includes(c.id) && !c.isSingle && (!c.name || !(c.price > 0) || !c.items.length));
   if (badCombo.length) throw new BookingError('INVALID', `組合「${badCombo[0].name || '未命名'}」還沒填完名稱、內容或套票價格，請先補齊再發布。`);
-  const published: t.Published = { ...d, at: now.toISOString() };
+  // 開放的組合票用到的票種：贈票區（票價 0）自動一起開放；有票價但沒開放的，請先開放
+  const zoneIds = new Set(d.zoneIds);
+  for (const c of combos.filter((x) => d.comboIds.includes(x.id) && !x.isSingle)) {
+    for (const i of c.items) {
+      const z = zones.find((x) => x.id === i.zoneId);
+      if (!z || zoneIds.has(z.id)) continue;
+      if (z.price === 0) zoneIds.add(z.id);
+      else throw new BookingError('INVALID', `組合「${c.name}」包含「${z.name}」，但「${z.name}」沒有開放。請在票種勾選開放，或從組合拿掉它。`);
+    }
+  }
+  const published: t.Published = { ...d, zoneIds: [...zoneIds].sort((a, b) => a - b), at: now.toISOString() };
   await db.update(t.event).set({ published }).where(eq(t.event.id, ev.id));
   await audit(db, actor, 'publish', `event:${ev.id}`, published);
   return published;

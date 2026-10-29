@@ -342,6 +342,12 @@ export default function BookingApp({ code }: { code: string }) {
 
       <div className="grid2">
         <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} onToggle={toggle} locked={!!held || !open}
+          onBlocked={(id, why) => {
+            const seat = seatById[id];
+            setMsg({ kind: 'err', text: why === 'off'
+              ? `${seat?.label ?? ''}屬於「${zoneBy[seat?.zoneId]?.name ?? '其他票種'}」，不在「${cur?.name ?? ''}」的內容裡，請選${cur && !cur.isSingle ? cur.items.map((i) => zoneName(i.zoneId)).join('或') : '開放的'}座位。`
+              : why === 'blocked' ? `${seat?.label ?? ''}目前不開放訂購。` : `${seat?.label ?? ''}已被訂走，請改選其他座位。` });
+          }}
           allowed={held ? undefined : allowed} />
 
         <div className="side">
