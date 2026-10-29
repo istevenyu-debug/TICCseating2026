@@ -97,7 +97,7 @@ function parseRows(t: string) {
 type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
 interface Ctx {
   st: State; act: Act; busy: boolean; sure: string | null; confirm2: (key: string, fn: () => void) => void; go: (t: Tab) => void;
-  setMsg: (m: { kind: 'ok' | 'err'; text: string } | null) => void;
+  setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void;
   zoneById: Record<number, State['zones'][number]>; usageById: Record<number, State['usages'][number]>; now: number;
   filter: string; setFilter: (v: string) => void; openId: number | null; setOpenId: (id: number | null) => void; openOrder: (o: Order) => void;
 }
@@ -107,7 +107,7 @@ const useAdmin = () => useContext(AdminCtx)!;
 export default function AdminApp() {
   const [st, setSt] = useState<State | null>(null);
   const [tab, setTab] = useState<Tab>('home');
-  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'warn'; text: string } | null>(null);
   useEffect(() => { if (msg?.kind !== 'ok') return; const id = setTimeout(() => setMsg(null), 6000); return () => clearTimeout(id); }, [msg]);
   const [busy, setBusy] = useState(false);
   const [sure, setSure] = useState<string | null>(null); // 二次確認的按鈕
@@ -922,12 +922,29 @@ function Groups() {
   const look = (s: Seat): SeatLook => {
     const g = s.bundle ? info.get(s.bundle) : undefined;
     return {
-      kind: 'free', bg: g ? g.color : '#ffffff', ink: '#18213a', dim: s.status !== 'free', sel: sel.has(s.id),
+      kind: 'free', bg: g ? g.color : '#ffffff', ink: '#18213a', dim: s.status !== 'free', sel: pairMode ? pending === s.id : sel.has(s.id),
       title: `${s.label}・${s.code}・${g ? `第 ${g.no} 組（${g.size} 位）` : '單人'}${s.status !== 'free' ? '・已有訂單' : ''}`,
     };
   };
-  const paint = (ids: string[]) => {
+  // 快速配對：點一席、再點一席，馬上成一組
+  const [pairMode, setPairMode] = useState(false);
+  const [pending, setPending] = useState<string | null>(null);
+  const labelOf = (id: string) => st.seats.find((x) => x.id === id)?.label ?? id;
+  const paint = async (ids: string[]) => {
     setNote(null);
+    if (pairMode) {
+      const id = ids[ids.length - 1];
+      const s = st.seats.find((x) => x.id === id);
+      if (!s) return;
+      if (s.status !== 'free') { setMsg({ kind: 'err', text: `${s.label} 已有訂單，不能改分組` }); return; }
+      if (!pending) { setPending(id); return; }
+      if (pending === id) { setPending(null); return; }
+      const a = pending;
+      setPending(null);
+      const r = await act({ action: 'bundle.manual', seatIds: [a, id] }) as { size: number } | null;
+      if (r) setMsg({ kind: 'ok', text: `已配對：${labelOf(a)} ＋ ${labelOf(id)}` });
+      return;
+    }
     setSel((p) => { const n = new Set(p); const allOn = ids.every((i) => n.has(i)); ids.forEach((i) => (allOn ? n.delete(i) : n.add(i))); return n; });
   };
   const selectWholeGroups = () => {
@@ -999,6 +1016,14 @@ function Groups() {
 
         <div className="card">
           <h2>手工設定分組 <span className="small muted">已選取 <b>{sel.size}</b> 位</span></h2>
+          <label className="switch" style={{ margin: '0 0 6px' }}><input type="checkbox" checked={pairMode} onChange={(e) => { setPairMode(e.target.checked); setPending(null); setSel(new Set()); }} /><b>快速配對（兩位一組）</b></label>
+          {pairMode && (
+            <div className="note ok" style={{ marginBottom: 8 }}>
+              {pending ? <>已點 <b>{labelOf(pending)}</b>，請點要和他同一組的座位（再點一次取消）。</> : <>點第一席，再點旁邊那一席，兩席馬上成一組。可以一直點下去。</>}
+              <div className="small" style={{ marginTop: 4 }}>點到已經在別組的座位，會把它移到新的這一組（原組只剩一人時自動改回單人）。全部配好後記得按「儲存目前分組」。</div>
+            </div>
+          )}
+          {!pairMode && <>
           <ol className="steps">
             <li>在左邊座位圖上，<b>點選要放在同一組的座位</b>（出現紅框＝已選）。可以按住拖曳一次選多位；座位不必相鄰，也可以分在走道兩邊。點錯再點一次就取消。</li>
             <li>看上面「已選取 <b>{sel.size}</b> 位」，確認人數正確。</li>
@@ -1020,6 +1045,7 @@ function Groups() {
           </div>
           {selSeats.length > 0 && <p className="small" style={{ margin: '6px 0 0' }}>已選：{selSeats.slice(0, 20).map((s) => s.label).join('、')}{selSeats.length > 20 ? `…共 ${selSeats.length} 位` : ''}</p>}
           <p className="small muted" style={{ margin: '6px 0 0' }}>其他用法：要讓某幾席<b>不分組</b>（單人購買），選取後按「改回單人」。游標停在座位上可看它是第幾組、幾位。</p>
+          </>}
         </div>
 
         <div className="card">
@@ -1085,7 +1111,7 @@ function Presets({ sel, setSel, confirmChange }: { sel: Set<string>; setSel: (s:
     if (dirty && !(await save())) return;
     const r = await act({ action: 'bundle.presets.apply', ...(index === undefined ? {} : { index }) }) as
       { name: string; groups: number; size: number; leftovers: number; skipped: number; crossAisle: number }[] | null;
-    if (r) setMsg({ kind: r.some((x) => x.leftovers) ? 'err' : 'ok', text: '已套用：' + r.map((x) => `${x.name} ${x.groups} 組（${x.size} 位一組${x.crossAisle ? `，${x.crossAisle} 組跨走道` : ''}${x.skipped ? `，略過 ${x.skipped} 席` : ''}${x.leftovers ? `，${x.leftovers} 席湊不滿維持單人` : ''}）`).join('；') });
+    if (r) setMsg({ kind: r.some((x) => x.leftovers) ? 'warn' : 'ok', text: '已套用：' + r.map((x) => `${x.name} ${x.groups} 組（${x.size} 位一組${x.crossAisle ? `，${x.crossAisle} 組跨走道` : ''}${x.skipped ? `，略過 ${x.skipped} 席` : ''}${x.leftovers ? `，${x.leftovers} 席湊不滿維持單人` : ''}）`).join('；') });
   };
   const blockChip = (i: number, p: Preset, b: string) => (
     <button key={b} className={`chip${p.blocks.includes(b) ? ' on' : ''}`} style={{ padding: '2px 8px' }}
