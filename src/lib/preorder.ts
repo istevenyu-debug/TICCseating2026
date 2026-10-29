@@ -121,11 +121,11 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   }, base);
   const url = linkUrl(link.code, base);
   await db.update(t.preorder).set({ status: 'confirmed', linkId: link.id, confirmedAt: now, confirmedBy: actor, seenAt: po.seenAt ?? now }).where(eq(t.preorder.id, id));
-  // 訂購人送出訂單時開了手機通知：改掛到劃位連結，直接把連結推過去
+  // 訂購人送出訂單時開了手機通知：只通知「已收款，請查看 Email」，劃位連結只用 Email 寄送
   await db.update(t.pushSub).set({ linkId: link.id }).where(eq(t.pushSub.preorderId, po.id));
   await db.insert(t.notification).values({
     linkId: link.id, channel: 'push', template: 'preorder_link', recipient: '訂購人手機',
-    content: `已確認收到您的款項（訂單 ${po.no}），請點這則通知開始選位。`,
+    content: `已確認收到您的款項（訂單 ${po.no}）。劃位連結已寄到您的 Email（${maskEmail(po.email)}），請查看信箱，也看看垃圾郵件匣。`,
   });
   await db.insert(t.notification).values({
     linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
@@ -152,20 +152,17 @@ export async function markPreorderSeen(db: Db, id: number) {
   await db.update(t.preorder).set({ seenAt: new Date() }).where(and(eq(t.preorder.id, id), sql`${t.preorder.seenAt} is null`));
 }
 
-/** 訂購人裝置查進度：只認送出時拿到的隨機碼，一次最多 20 筆 */
+export const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
+
+/** 訂購人裝置查進度：只認送出時拿到的隨機碼，一次最多 20 筆。不提供劃位連結（連結只用 Email 寄送） */
 export async function preorderStatus(db: Db, tokens: string[]) {
   const list = [...new Set(tokens.filter((x) => typeof x === 'string' && /^[\w-]{20,40}$/.test(x)))].slice(0, 20);
   if (!list.length) return [];
   const rows = await db.select().from(t.preorder).where(inArray(t.preorder.viewToken, list)).orderBy(desc(t.preorder.id));
-  const linkIds = rows.map((r) => r.linkId).filter((x): x is number => !!x);
-  const links = linkIds.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code, status: t.inviteLink.status }).from(t.inviteLink).where(inArray(t.inviteLink.id, linkIds)) : [];
-  return rows.map((r) => {
-    const l = links.find((x) => x.id === r.linkId);
-    return {
-      token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
-      url: r.status === 'confirmed' && l && l.status === 'active' ? `/t/${l.code}` : null,
-    };
-  });
+  return rows.map((r) => ({
+    token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
+    email: maskEmail(r.email),
+  }));
 }
 
 /** 訂購人裝置開啟推播：還沒收款就先掛在預購單上，確認收訖時改掛到劃位連結 */

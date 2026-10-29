@@ -215,7 +215,7 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
 }
 
 const PUSH_TITLE: Record<string, string> = {
-  preorder_link: '✅ 已確認收款，請點此劃位', order_confirmed: '🎉 劃位成功', order_cancelled: '劃位已取消', order_expired: '劃位已逾時取消', order_received: '已收到劃位資料',
+  preorder_link: '✅ 已確認收款，請查看 Email', order_confirmed: '🎉 劃位成功', order_cancelled: '劃位已取消', order_expired: '劃位已逾時取消', order_received: '已收到劃位資料',
 };
 
 /** App 推播：推到訂購人手機（購票頁按過「開啟通知」的那支） */
@@ -226,7 +226,9 @@ async function deliverPush(db: Db, n: typeof t.notification.$inferSelect, sender
   const send = senders.push ?? webPushSend;
   const vapid = await getVapid(db);
   const origin = await siteOrigin(db);
-  const payload = { title: PUSH_TITLE[n.template] ?? '主辦方通知', body: n.content, url: `${origin}/t/${code}` };
+  // 收款通知只請對方查看 Email，點開回到預購頁（不帶劃位連結）
+  const url = n.template === 'preorder_link' ? `${origin}/buy` : `${origin}/t/${code}`;
+  const payload = { title: PUSH_TITLE[n.template] ?? '主辦方通知', body: n.content, url };
   const gone: number[] = [];
   let ok = 0; let lastErr = '';
   for (const s of subs) {

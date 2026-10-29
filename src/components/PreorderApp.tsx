@@ -37,10 +37,10 @@ function loadSaved(): Saved[] {
 function addSaved(x: Saved) {
   try { localStorage.setItem(STORE, JSON.stringify([x, ...loadSaved().filter((y) => y.token !== x.token)].slice(0, 20))); } catch { /* 無痕模式等 */ }
 }
-type Mine = { token: string; no: string; status: string; items: string; amount: number; createdAt: string; url: string | null };
+type Mine = { token: string; no: string; status: string; items: string; amount: number; createdAt: string; email: string };
 const MINE_STATUS: Record<string, string> = { submitted: '等待主辦方確認收款', confirmed: '已確認收款', cancelled: '已取消' };
 
-/** 這台裝置的訂單進度：確認收款後直接出現「開始劃位」按鈕 */
+/** 這台裝置的訂單進度：確認收款後提醒查看 Email（劃位連結只用 Email 寄送） */
 function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
   if (!mine.length) return null;
   return (
@@ -53,9 +53,9 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
             <span className={`pill ${m.status === 'confirmed' ? 'p-paid' : m.status === 'cancelled' ? 'p-cancelled' : 'p-pending'}`}>{MINE_STATUS[m.status] ?? m.status}</span>
           </div>
           <div className="small muted">{m.items}・{money(m.amount)}</div>
-          {m.url
-            ? <a className="btn pri" style={{ display: 'block', textAlign: 'center', marginTop: 8 }} href={m.url}>開始劃位（選座位）</a>
-            : m.status === 'submitted' && <div className="small" style={{ marginTop: 4 }}>主辦方確認收到款項後，這裡會出現「開始劃位」按鈕，同時寄 Email 給您。</div>}
+          {m.status === 'confirmed'
+            ? <div className="note ok small" style={{ marginTop: 8 }}>已確認收到款項。<b>劃位連結已寄到您的 Email（{m.email}）</b>，請到信箱點連結選位；沒看到請看看垃圾郵件匣，或聯繫主辦方。</div>
+            : m.status === 'submitted' && <div className="small" style={{ marginTop: 4 }}>主辦方確認收到款項後，會把劃位連結寄到您的 Email（{m.email}），這裡也會顯示「已確認收款」。</div>}
         </div>
       ))}
     </div>
@@ -140,12 +140,12 @@ export default function PreorderApp() {
           <h2>已送出訂單 {done.no}</h2>
           <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱（也請看看垃圾郵件匣）。</p>
           {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
-          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度；確認收款後會出現「開始劃位」按鈕。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
+          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>
         <PushCard endpoint={`/api/buy/push?t=${encodeURIComponent(done.token)}`} api={call} compact={false}
-          title="📱 收款確認後，劃位連結直接送到這支手機"
-          offText={<>開啟後，主辦方確認收到款項時，這支手機會跳出通知，<b>點一下就能開始選位</b>。Email 也會照常寄出。</>}
-          onText="✓ 已開啟通知：主辦方確認收款後，這支手機會收到劃位通知。也可以隨時回到這個網頁查看。" />
+          title="📱 收款確認時通知這支手機"
+          offText={<>開啟後，主辦方確認收到款項時，這支手機會跳出通知，提醒您<b>到 Email 收劃位連結</b>。</>}
+          onText="✓ 已開啟通知：主辦方確認收款後，這支手機會跳出通知，提醒您查看 Email。也可以隨時回到這個網頁查看進度。" />
       </main>
     );
   }
@@ -171,7 +171,7 @@ export default function PreorderApp() {
           <h3>選購內容</h3>
           <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name} × {qty[key(i)]}</span><span className="mono">{money(i.price * qty[key(i)])}</span></div>)}</div>
           <div className="total"><span className="muted">合計</span><b>{money(total)}</b></div>
-          <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，這支手機可以查進度、收到劃位通知。不要用公用或別人的電腦。</p>
+          <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，這支手機可以查進度、收到收款通知。</p>
           {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={send}>{busy ? '送出中…' : '資料正確，確認送出'}</button>

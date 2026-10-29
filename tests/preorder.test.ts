@@ -140,12 +140,12 @@ describe('劃位連結只能劃付款買的內容', () => {
   });
 });
 
-describe('劃位連結直接推到訂購人手機', () => {
-  it('送出時拿到查詢碼；開推播；確認收款後推劃位連結，查詢頁也出現劃位按鈕；別人的碼查不到', async () => {
+describe('收款通知推到訂購人手機（劃位連結只用 Email）', () => {
+  it('送出時拿到查詢碼；開推播；確認收款後推「請查看 Email」，不帶劃位連結；別人的碼查不到', async () => {
     await A.updateEventSettings(db, 'admin', { preorderOpen: true });
     const { token } = await submitPreorder(db, body());
     const other = await submitPreorder(db, body({ name: '別人', email: 'x@example.com' }));
-    expect(await preorderStatus(db, [token])).toMatchObject([{ no: 'P0001', status: 'submitted', url: null }]);
+    expect(await preorderStatus(db, [token])).toEqual([expect.objectContaining({ no: 'P0001', status: 'submitted', email: 'l***@example.com' })]);
     expect(await preorderStatus(db, ['x'.repeat(24)])).toEqual([]);
     await savePreorderPush(db, token, { endpoint: 'https://push.example/lin', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } });
     await expect(savePreorderPush(db, 'y'.repeat(24), { endpoint: 'https://push.example/z', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } })).rejects.toThrow('找不到');
@@ -153,12 +153,15 @@ describe('劃位連結直接推到訂購人手機', () => {
 
     const p = (await listPreorders(db)).find((x) => x.no === 'P0001')!;
     const { code } = await confirmPreorder(db, 'admin', p.id);
-    const got: { endpoint: string; title: string; url: string }[] = [];
+    const got: { endpoint: string; title: string; body: string; url: string }[] = [];
     const ok = async () => undefined;
-    await dispatchQueued(db, { email: ok, sms: ok, push: async (sub, pl) => { got.push({ endpoint: sub.endpoint, title: pl.title, url: pl.url }); } });
-    expect(got).toEqual([{ endpoint: 'https://push.example/lin', title: '✅ 已確認收款，請點此劃位', url: `https://abc.trycloudflare.com/t/${code}` }]);
-    expect(await preorderStatus(db, [token, other.token])).toMatchObject([
-      { no: 'P0002', status: 'submitted', url: null }, { no: 'P0001', status: 'confirmed', url: `/t/${code}` },
-    ]);
+    await dispatchQueued(db, { email: ok, sms: ok, push: async (sub, pl) => { got.push({ endpoint: sub.endpoint, title: pl.title, body: pl.body, url: pl.url }); } });
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ endpoint: 'https://push.example/lin', title: '✅ 已確認收款，請查看 Email', url: 'https://abc.trycloudflare.com/buy' });
+    expect(got[0].body).toContain('l***@example.com');
+    expect(got[0].body).not.toContain(code);
+    const st = await preorderStatus(db, [token, other.token]);
+    expect(st.map((x) => [x.no, x.status])).toEqual([['P0002', 'submitted'], ['P0001', 'confirmed']]);
+    expect(JSON.stringify(st)).not.toContain(code);
   });
 });
