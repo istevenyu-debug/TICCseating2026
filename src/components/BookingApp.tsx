@@ -469,6 +469,7 @@ export default function BookingApp({ code }: { code: string }) {
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
                 <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
+                {o.invoice && <div className="small">電子發票 <b className="mono">{o.invoice.no}</b>・{o.invoice.date}・隨機碼 {o.invoice.random}{o.invoice.test ? '（測試）' : ''}</div>}
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">

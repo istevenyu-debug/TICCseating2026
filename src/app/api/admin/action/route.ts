@@ -12,6 +12,7 @@ import { rememberOrigin } from '@/lib/push';
 import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
+import { issueForOrder, saveEinvConfig, voidForOrder } from '@/lib/einvoice';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,6 +61,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
   z.object({ action: z.literal('preorder.confirm'), id }),
+  z.object({ action: z.literal('invoice.retry'), id }),
+  z.object({ action: z.literal('einvoice.save'), values: z.object({
+    enabled: z.enum(['0', '1']), env: z.enum(['test', 'prod']), merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), itemName: z.string().trim().max(40),
+  }).partial() }),
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
@@ -127,9 +132,21 @@ export async function POST(req: Request) {
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });
       }
       case 'order.seen': return A.markOrderSeen(db, a.id);
-      case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
+      case 'order.confirm': {
+        const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req));
+        // 劃位成功當下開立電子發票，發票號碼寫進同一封劃位成功 Email
+        const inv = await issueForOrder(db, a.id);
+        return { ...r, invoice: inv && { status: inv.status, invoiceNo: inv.invoiceNo, error: inv.error }, delivery: await deliver(db, { orderId: a.id }) };
+      }
+      case 'invoice.retry': {
+        const inv = await issueForOrder(db, a.id);
+        if (!inv) throw new BookingError('INVALID', '尚未啟用電子發票');
+        if (inv.status !== 'issued') throw new BookingError('EINVOICE', `發票開立失敗：${inv.error ?? ''}`);
+        return { invoiceNo: inv.invoiceNo };
+      }
+      case 'einvoice.save': return saveEinvConfig(db, who, a.values);
       case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
-      case 'order.delete': return A.deleteOrder(db, who, a.id);
+      case 'order.delete': await voidForOrder(db, a.id, '取消劃位'); return A.deleteOrder(db, who, a.id);
       case 'notify.save': return saveNotifyConfig(db, who, a.values);
       case 'notify.test': return sendTest(db, a.channel, a.to);
       case 'notify.resend': return resendNotification(db, who, a.id);

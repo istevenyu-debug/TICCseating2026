@@ -12,6 +12,8 @@ import { BookingError, loadCombos } from './booking';
 import { comboDesc } from './pricing';
 import { createInviteLink, linkUrl } from './admin';
 import { normalizePhone } from './validation';
+import { invDesc, invProblem } from './invoiceRules';
+import { getEinvConfig } from './einvoice';
 
 async function currentEvent(db: Db) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
@@ -33,6 +35,7 @@ export async function preorderMenu(db: Db) {
       .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: '單張購票', unit: '張' })) : []),
   ];
   return {
+    invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
     open: ev.preorderOpen && items.length > 0,
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
@@ -47,6 +50,9 @@ const submitBody = z.object({
   paidAmount: z.number().int().min(1, '請填寫匯款金額').max(10_000_000),
   last5: z.string().trim().regex(/^\d{5}$/, '匯款帳號末 5 碼應為 5 位數字'),
   agree: z.literal(true, { errorMap: () => ({ message: '請勾選同意個資蒐集' }) }),
+  invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']).default('member'),
+  invCode: z.string().trim().toUpperCase().max(20).default(''),
+  invTitle: z.string().trim().max(60).default(''),
 });
 
 const recent = new Map<string, number[]>();
@@ -69,6 +75,10 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選購一項');
+  const inv = menu.invoice ? { invType: p.data.invType, invCode: p.data.invType === 'member' ? '' : p.data.invCode, invTitle: p.data.invType === 'company' ? p.data.invTitle : '' }
+    : { invType: 'member' as const, invCode: '', invTitle: '' };
+  const ip2 = invProblem(inv.invType, inv.invCode, inv.invTitle);
+  if (ip2) throw new BookingError('INVALID', ip2);
   rateLimit(ip, now.getTime());
   const amount = items.reduce((a, x) => a + x.price * x.qty, 0);
   const ev = await currentEvent(db);
@@ -79,7 +89,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       const viewToken = randomBytes(18).toString('base64url');
       const [row] = await db.insert(t.preorder).values({
         eventId: ev.id, no, items, amount, name: p.data.name, phone: p.data.phone, email: p.data.email,
-        paidAmount: p.data.paidAmount, last5: p.data.last5, createdAt: now, viewToken,
+        paidAmount: p.data.paidAmount, last5: p.data.last5, createdAt: now, viewToken, ...inv,
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
@@ -105,6 +115,7 @@ export async function listPreorders(db: Db) {
     id: r.id, no: r.no, items: r.items, amount: r.amount, name: r.name, phone: r.phone, email: r.email, paidAmount: r.paidAmount, last5: r.last5,
     status: r.status, note: r.note, createdAt: r.createdAt.toISOString(), confirmedAt: r.confirmedAt?.toISOString() ?? null, confirmedBy: r.confirmedBy,
     isNew: r.status === 'submitted' && !r.seenAt, linkCode: links.find((l) => l.id === r.linkId)?.code ?? null,
+    invoice: invDesc(r.invType, r.invCode, r.invTitle, r.email),
   }));
 }
 

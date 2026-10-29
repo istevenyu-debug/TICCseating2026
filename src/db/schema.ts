@@ -206,6 +206,10 @@ export const preorder = pgTable('preorder', {
   confirmedBy: text('confirmed_by'),
   seenAt: timestamp('seen_at', { withTimezone: true }),
   viewToken: text('view_token'), // 訂購人裝置用來查進度、收推播的隨機碼
+  // 電子發票開立方式：member 綠界會員載具（Email）／mobile 手機條碼／cert 自然人憑證／donate 捐贈／company 公司統編
+  invType: text('inv_type').notNull().default('member'),
+  invCode: text('inv_code').notNull().default(''), // 手機條碼、憑證號碼、愛心碼或統編
+  invTitle: text('inv_title').notNull().default(''), // 公司抬頭
 }, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no), viewToken: uniqueIndex('preorder_view_token_idx').on(t.viewToken) }));
 
 /** 驗票門口：每個門一條驗票連結（token），工作人員用手機打開即可掃描，可停用 */
@@ -269,3 +273,22 @@ export const adminUser = pgTable('admin_user', {
   active: boolean('active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ username: uniqueIndex('admin_user_username_idx').on(t.username) }));
+
+/** 電子發票（綠界）：每筆劃位一張。訂單刪除後仍保留紀錄 */
+export const invoice = pgTable('invoice', {
+  id: serial('id').primaryKey(),
+  orderId: integer('order_id').references(() => orders.id, { onDelete: 'set null' }),
+  orderNo: text('order_no').notNull(),
+  env: text('env').notNull(), // test 測試環境 / prod 正式
+  relateNumber: text('relate_number').notNull(),
+  status: text('status').notNull(), // issued 已開立 / failed 開立失敗 / void 已作廢
+  invoiceNo: text('invoice_no').notNull().default(''),
+  invoiceDate: text('invoice_date').notNull().default(''),
+  randomNumber: text('random_number').notNull().default(''),
+  amount: integer('amount').notNull(),
+  buyer: text('buyer').notNull().default(''), // 開給誰／存到哪（顯示用）
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  voidedAt: timestamp('voided_at', { withTimezone: true }),
+  voidReason: text('void_reason'),
+}, (t) => ({ order: index('invoice_order_idx').on(t.orderId) }));

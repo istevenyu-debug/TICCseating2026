@@ -45,6 +45,12 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
       ? (await tx.select({ id: t.orders.id }).from(t.orders).where(and(eq(t.orders.eventId, ev.id), inArray(t.orders.linkId, links)))).map((x) => x.id)
       : [];
 
+    // 正式環境已開立的電子發票不能直接清掉（要先作廢）；測試環境的發票不影響
+    if (orders.length) {
+      const prod = await tx.select({ id: t.invoice.id }).from(t.invoice)
+        .where(and(inArray(t.invoice.orderId, orders), eq(t.invoice.env, 'prod'), eq(t.invoice.status, 'issued')));
+      if (prod.length) throw new BookingError('EINVOICE', `有 ${prod.length} 張正式電子發票還沒作廢，不能清除。請到「六、劃位確認」逐筆刪除劃位（會自動作廢發票）。`);
+    }
     let seats = 0;
     if (orders.length) {
       seats = (await tx.update(t.eventSeat).set({ status: 'free', orderId: null, holdUntil: null, version: sql`${t.eventSeat.version} + 1` })
