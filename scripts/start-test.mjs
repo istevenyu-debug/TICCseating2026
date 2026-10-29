@@ -7,7 +7,9 @@
  *
  * 用法：npm run test-site
  * 停止：在這個視窗按 Ctrl + C
- * 注意：電腦關機或關掉這個視窗，網址就連不上；每次重新啟動，網址都會改變。
+ * 注意：電腦關機或關掉這個視窗，網址就連不上。
+ * 沒設定固定網址時用 Cloudflare 臨時通道，每次重新啟動網址都會改變；
+ * 執行過「設定固定網址.bat」後（.env.local 有 TUNNEL_TOKEN 與 SITE_URL），改用自己的網域，網址固定。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -71,21 +73,30 @@ try {
 } catch { /* 沒有回應代表連接埠可用 */ }
 
 say(`啟動網站（本機 http://localhost:${PORT}）`);
-const web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env } });
+const fixedUrl = (env.SITE_URL ?? '').replace(/\/$/, '');
+const web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env, ...(fixedUrl ? { PUBLIC_BASE_URL: fixedUrl } : {}) } });
 for (let i = 0; i < 60; i++) {
   try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) break; } catch { /* 等待啟動 */ }
   await new Promise((r) => setTimeout(r, 1000));
 }
 
-/* 4. Cloudflare 臨時通道 */
-say('建立對外的 https 網址（Cloudflare 臨時通道）');
+/* 4. Cloudflare 通道：有固定網址用自己的網域，否則用臨時通道 */
+const fixed = !!(env.TUNNEL_TOKEN && fixedUrl);
+say(fixed ? `連上固定網址 ${fixedUrl}（Cloudflare 通道）` : '建立對外的 https 網址（Cloudflare 臨時通道）');
 const { bin, install } = await import('cloudflared');
 if (!existsSync(bin)) { console.log('  第一次使用，下載 cloudflared…'); await install(bin); }
-const tunnel = spawn(bin, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
+const tunnel = fixed
+  ? spawn(bin, ['tunnel', '--no-autoupdate', 'run', '--token', env.TUNNEL_TOKEN])
+  : spawn(bin, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
 let shown = false;
 const onOut = (buf) => {
-  // 臨時通道網址形如 https://xxx-yyy-zzz.trycloudflare.com；排除錯誤訊息裡的 api.trycloudflare.com
-  const m = String(buf).match(/https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/);
+  // 固定網址：通道連上就顯示；臨時通道網址形如 https://xxx-yyy-zzz.trycloudflare.com（排除 api.trycloudflare.com）
+  const m = fixed ? (/Registered tunnel connection/i.test(String(buf)) ? [fixedUrl] : null)
+    : String(buf).match(/https:\/\/(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com/);
+  if (fixed && /Unauthorized|invalid token|failed to unmarshal/i.test(String(buf)) && !shown) {
+    shown = true;
+    console.log('\n✖ 固定網址的通道代碼不正確或已失效。請重新執行「設定固定網址.bat」貼上新的代碼。');
+  }
   if (m && !shown) {
     shown = true;
     const url = m[0];
@@ -98,8 +109,10 @@ const onOut = (buf) => {
       ` 後台（桌機）：  ${url}/admin`,
       '',
       ' 購票連結：到後台「五、專屬連結」發連結，按「複製連結」就是完整網址。',
-      ' 網址換了，之前傳出去的連結要重新複製再傳一次。',
-      ' 停止：按 Ctrl + C。重新啟動後網址會改變。',
+      ...(fixed ? [' 這是固定網址，重新啟動也不會變。', ' 停止：按 Ctrl + C。'] : [
+        ' 網址換了，之前傳出去的連結要重新複製再傳一次。',
+        ' 停止：按 Ctrl + C。重新啟動後網址會改變。',
+      ]),
       '============================================================',
     ].join('\n');
     console.log(`\n${text}\n`);
