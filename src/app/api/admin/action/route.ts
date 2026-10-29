@@ -77,6 +77,8 @@ const action = z.discriminatedUnion('action', [
     blocks: z.array(z.string()).max(5), size: z.number().int().min(2, '每組至少 2 位').max(40),
     shape: z.enum(['row', 'band2', 'band3']), crossAisle: z.boolean(), skip: z.array(z.string()).max(600),
   })).max(20).nullable() }),
+  z.object({ action: z.literal('bundle.snapshot.save') }),
+  z.object({ action: z.literal('bundle.snapshot.restore'), which: z.enum(['saved', 'undo']) }),
   z.object({ action: z.literal('bundle.presets.apply'), index: z.number().int().min(0).optional() }),
   z.object({ action: z.literal('bundle.remove'), seatIds: z.array(z.string()).max(600) }),
   z.object({ action: z.literal('bundle.clear'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5) }),
@@ -148,6 +150,8 @@ export async function POST(req: Request) {
       case 'bundle.manual': return A.bundleManual(db, who, a.seatIds);
       case 'bundle.presets.save': return A.saveBundlePresets(db, who, a.presets);
       case 'bundle.presets.apply': return A.applyBundlePresets(db, who, a.index);
+      case 'bundle.snapshot.save': return A.saveBundleSnapshot(db, who);
+      case 'bundle.snapshot.restore': return A.restoreBundleSnapshot(db, who, a.which);
       case 'bundle.remove': return A.bundleRemove(db, who, a.seatIds);
     }
   });

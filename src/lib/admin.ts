@@ -107,8 +107,15 @@ export async function getAdminState(db: Db, now = new Date()) {
     || [...pub.comboIds].sort((a, b) => a - b).join() !== draft.comboIds.join();
 
   const bundlePresets = await getBundlePresets(db);
+  const curMap = Object.fromEntries(seats.filter((x) => x.bundle).map((x) => [x.id, x.bundle as string]));
+  const snapInfo = async (key: string) => {
+    const sn = await getSnapshot(db, key);
+    return sn ? { at: sn.at, by: sn.by, groups: new Set(Object.values(sn.map)).size, same: sameMap(sn.map, curMap) } : null;
+  };
   return {
     bundlePresets,
+    bundleSaved: await snapInfo(SNAP_SAVED),
+    bundleUndo: await snapInfo(SNAP_UNDO),
     now: now.toISOString(),
     event: {
       id: evNow.id, name: evNow.name, showAt: evNow.showAt.toISOString(), vipInstalled: evNow.vipInstalled, saleOpen: evNow.saleOpen,
@@ -243,10 +250,11 @@ export type BundleShape = 'row' | 'band2' | 'band3';
  * - skip：略過的座位（維持單人，例如保留給散客）
  * 這些座位原有的分組會先拆掉；有訂單的座位不能改。湊不滿一組的座位維持單人。
  */
-export async function bundleAuto(db: Db, actor: string, o: { rows: number[]; blocks: string[]; size: number; shape: BundleShape; crossAisle: boolean; skip: string[] }) {
+export async function bundleAuto(db: Db, actor: string, o: { rows: number[]; blocks: string[]; size: number; shape: BundleShape; crossAisle: boolean; skip: string[] }, backup = true) {
   const ev = await currentEvent(db);
   if (!o.rows.length) throw new BookingError('INVALID', '請選擇排數');
   if (!Number.isInteger(o.size) || o.size < 2 || o.size > 40) throw new BookingError('INVALID', '每組人數請填 2–40');
+  if (backup) await backupBeforeChange(db, actor);
   const blk = new Set(o.blocks.length ? o.blocks : BLOCKS);
   const skip = new Set(o.skip);
   const area = (await db.select().from(t.venueSeat)).filter((s) => o.rows.includes(rowKey(s)) && blk.has(s.block as Block));
@@ -323,14 +331,75 @@ export async function saveBundlePresets(db: Db, actor: string, presets: BundlePr
   return getBundlePresets(db);
 }
 
+/* ---------- 分組存檔：手工調整完可存起來，日後一鍵還原；自動分組/套用預設前也會自動備份一份，可「復原」 ---------- */
+export const SNAP_SAVED = 'bundle.saved';
+export const SNAP_UNDO = 'bundle.undo';
+interface Snapshot { at: string; by: string; map: Record<string, string> }
+type BTx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+async function getSnapshot(db: Db | BTx, key: string): Promise<Snapshot | null> {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, key));
+  if (!r) return null;
+  try { return JSON.parse(r.value) as Snapshot; } catch { return null; }
+}
+function sameMap(a: Record<string, string>, b: Record<string, string>) {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+}
+async function currentBundleMap(db: Db | BTx, eventId: number) {
+  const rows = await db.select({ id: t.eventSeat.seatId, b: t.eventSeat.bundle }).from(t.eventSeat).where(eq(t.eventSeat.eventId, eventId));
+  return Object.fromEntries(rows.filter((r) => r.b).map((r) => [r.id, r.b as string]));
+}
+async function writeSnapshot(db: Db | BTx, key: string, actor: string, eventId: number) {
+  const snap: Snapshot = { at: new Date().toISOString(), by: actor, map: await currentBundleMap(db, eventId) };
+  const value = JSON.stringify(snap);
+  await db.insert(t.appSetting).values({ key, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  return snap;
+}
+
+/** 儲存目前分組（手工調整完按這個） */
+export async function saveBundleSnapshot(db: Db, actor: string) {
+  const ev = await currentEvent(db);
+  const snap = await writeSnapshot(db, SNAP_SAVED, actor, ev.id);
+  await audit(db, actor, 'bundle_save', `event:${ev.id}`, { groups: new Set(Object.values(snap.map)).size });
+  return { groups: new Set(Object.values(snap.map)).size };
+}
+
+/** 還原到存檔（which='saved'）或復原上一次自動分組前的樣子（which='undo'）。只改有變動的座位；這些座位不能有訂單 */
+export async function restoreBundleSnapshot(db: Db, actor: string, which: 'saved' | 'undo') {
+  const ev = await currentEvent(db);
+  const key = which === 'saved' ? SNAP_SAVED : SNAP_UNDO;
+  const snap = await getSnapshot(db, key);
+  if (!snap) throw new BookingError('NOT_FOUND', which === 'saved' ? '還沒有儲存過分組' : '沒有可以復原的紀錄');
+  return db.transaction(async (tx) => {
+    const es = await tx.select().from(t.eventSeat).where(eq(t.eventSeat.eventId, ev.id));
+    const changed = es.filter((s) => (s.bundle ?? null) !== (snap.map[s.seatId] ?? null));
+    const busy = changed.filter((s) => s.status !== 'free');
+    if (busy.length) throw new BookingError('BUSY', `有 ${busy.length} 席已有訂單或暫存，分組和存檔不同，不能還原。請先處理這些訂單。`);
+    if (which === 'undo') await writeSnapshot(tx, SNAP_UNDO, actor, ev.id); // 復原後可再按一次「復原」回到剛才
+    for (const s of changed) {
+      await tx.update(t.eventSeat).set({ bundle: snap.map[s.seatId] ?? null }).where(and(eq(t.eventSeat.eventId, ev.id), eq(t.eventSeat.seatId, s.seatId)));
+    }
+    await tx.insert(t.auditLog).values({ actor, action: `bundle_restore_${which}`, target: `event:${ev.id}`, detail: JSON.stringify({ seats: changed.length }) });
+    return { seats: changed.length, groups: new Set(Object.values(snap.map)).size };
+  });
+}
+
+/** 自動分組、套用預設、取消分組之前，先把目前分組備份到「復原」 */
+async function backupBeforeChange(db: Db, actor: string) {
+  const ev = await currentEvent(db);
+  await writeSnapshot(db, SNAP_UNDO, actor, ev.id);
+}
+
 /** 套用預設分組：依序執行每一條（index 不給＝全部） */
 export async function applyBundlePresets(db: Db, actor: string, index?: number) {
   const all = await getBundlePresets(db);
   const list = index === undefined ? all : [all[index]].filter(Boolean);
   if (!list.length) throw new BookingError('NOT_FOUND', '找不到這條預設');
+  await backupBeforeChange(db, actor);
   const results = [];
   for (const p of list) {
-    const r = await bundleAuto(db, actor, p);
+    const r = await bundleAuto(db, actor, p, false);
     results.push({ name: p.name, groups: r.groups, size: p.size, leftovers: r.leftovers.length, skipped: r.skipped, crossAisle: r.crossAisle });
   }
   return results;
@@ -393,6 +462,7 @@ export async function unbundleByRule(db: Db, actor: string, rows: number[], bloc
   if (!ids.length) return { cleared: 0 };
   const es = await db.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
   const keys = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];
+  if (keys.length) await backupBeforeChange(db, actor);
   await clearBundles(db, ev.id, keys);
   await audit(db, actor, 'bundle_clear', `event:${ev.id}`, { rows, blocks, groups: keys.length });
   return { cleared: keys.length };

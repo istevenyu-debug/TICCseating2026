@@ -213,3 +213,10 @@ input.need { border-color: var(--red); }
 .scan-item:last-child { border-bottom: 0; }
 .scan-card { margin: 24px 16px; padding: 24px; border-radius: 14px; background: #1f2937; }
 .scan-card.bad { background: #b91c1c; }
+
+/* 連座分組：套用前確認、存檔狀態、步驟說明 */
+.ask-overlay { position: fixed; inset: 0; background: rgba(15, 20, 35, .45); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; isolation: isolate; }
+.ask-box { max-width: 480px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.25); }
+.ok-text { color: var(--ok); } .err-text { color: var(--red); }
+ol.steps { margin: 0 0 10px; padding-left: 22px; line-height: 1.6; }
+ol.steps li { margin-bottom: 4px; }

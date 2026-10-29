@@ -127,6 +127,24 @@ describe('10 位一組（第 4–12 排左中右區，略過 6 席）', () => {
     expect([...m.values()].map((g) => g.length).sort((a, b) => a - b)).toEqual([9, 9, 10]);
     await expect(A.bundleManual(db, 'admin', ['7-1'])).rejects.toThrow('至少要 2 位');
   });
+  it('分組存檔：手工調整可儲存、套用預設後可還原，也可復原上一次', async () => {
+    const sig = async () => JSON.stringify([...(await groupsOf()).m.values()].map((g) => g.map((x) => x.id).sort()).sort());
+    await A.bundleManual(db, 'admin', ['6-33', '6-31', '7-33', '7-31', '5-32', '5-34', '6-32', '6-34', '7-32', '7-34']);
+    const manual = await sig();
+    await A.saveBundleSnapshot(db, 'admin');
+    expect((await A.getAdminState(db)).bundleSaved?.same).toBe(true);
+    await A.applyBundlePresets(db, 'admin');
+    expect(await sig()).not.toBe(manual);
+    expect((await A.getAdminState(db)).bundleSaved?.same).toBe(false);
+    const applied = await sig();
+    await A.restoreBundleSnapshot(db, 'admin', 'undo');
+    expect(await sig()).toBe(manual);
+    await A.restoreBundleSnapshot(db, 'admin', 'undo'); // 再按一次回到剛才
+    expect(await sig()).toBe(applied);
+    await A.restoreBundleSnapshot(db, 'admin', 'saved');
+    expect(await sig()).toBe(manual);
+    expect((await A.getAdminState(db)).bundleSaved?.same).toBe(true);
+  });
   it('訂購：只能整組 10 位一起訂', async () => {
     await A.bundleAuto(db, 'admin', { rows: [5, 6], blocks: ['C0'], size: 10, shape: 'band2', crossAisle: false, skip: [] });
     const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;

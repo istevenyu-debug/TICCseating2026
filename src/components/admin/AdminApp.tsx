@@ -7,6 +7,7 @@ import { comboDesc, comboQty } from '@/lib/pricing';
 import { phoneProblem } from '@/lib/validation';
 import { APP_VERSION } from '@/lib/version';
 import { bundleIndex } from '@/lib/bundle';
+import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
 
 type NotifyPublic = {
@@ -869,10 +870,12 @@ function Notify() {
 }
 
 /* ---------- 連座分組 ---------- */
+type Scope = { rows: number[]; blocks: string[] };
+type Ask = { title: string; groups: number; manual: number; run: () => Promise<void> };
 const GROUP_COLORS = ['#9fd8c8', '#c9c2f0', '#ffd29d', '#b8ccf3', '#f5c4c4', '#d9e7a8'];
 
 function Groups() {
-  const { st, act, busy, setMsg } = useAdmin();
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [rows, setRows] = useState<Set<number>>(new Set());
   const [blks, setBlks] = useState<Set<string>>(new Set());
@@ -882,9 +885,20 @@ function Groups() {
   const [cross, setCross] = useState(true);
   const [useSkip, setUseSkip] = useState(true);
   const [note, setNote] = useState<{ err: boolean; text: string } | null>(null);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const toggle = <T,>(set: Set<T>, v: T) => { const n = new Set(set); if (n.has(v)) n.delete(v); else n.add(v); return n; };
 
   const { groups } = bundleIndex(st.seats);
+  /** 這些範圍裡現有幾組、其中幾組是手工設的（套用前提醒用） */
+  const affected = (scopes: Scope[]) => {
+    const keys = new Set<string>();
+    for (const s of st.seats) {
+      if (s.bundle && scopes.some((sc) => sc.rows.includes(s.row) && (!sc.blocks.length || sc.blocks.includes(s.block)))) keys.add(s.bundle);
+    }
+    return { groups: keys.size, manual: [...keys].filter((k) => k.includes('-m-')).length };
+  };
+  const unsaved = groups.size > 0 && !st.bundleSaved?.same;
+  const confirmChange = (title: string, scopes: Scope[], run: () => Promise<void>) => setAsk({ title, ...affected(scopes), run });
   // 依位置編號（前排、左邊優先），相鄰組用不同顏色
   const ordered = [...groups.entries()].sort((a, b) => Math.min(...a[1].map((s) => s.y)) - Math.min(...b[1].map((s) => s.y)) || Math.min(...a[1].map((s) => s.x)) - Math.min(...b[1].map((s) => s.x)));
   const info = new Map(ordered.map(([k, g], i) => [k, { no: i + 1, size: g.length, color: GROUP_COLORS[i % GROUP_COLORS.length] }]));
@@ -922,7 +936,49 @@ function Groups() {
       <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
         caption="同一顏色＝同一組；白色＝單人。點按或拖曳可選取座位（紅框），再按一次取消" />
       <div className="side">
-        <Presets sel={sel} setSel={setSel} />
+        {ask && createPortal(
+          <div className="ask-overlay" onClick={() => setAsk(null)}>
+            <div className="card ask-box" onClick={(e) => e.stopPropagation()}>
+              <h2>確定要{ask.title}嗎？</h2>
+              <p style={{ margin: '0 0 8px' }}>這個範圍內現有的 <b>{ask.groups} 組</b>會先全部拆掉，再依規則重新分。</p>
+              {ask.manual > 0 && <div className="note err" style={{ marginBottom: 8 }}>其中有 <b>{ask.manual} 組是手工設定的</b>，套用後會消失。</div>}
+              {unsaved
+                ? <div className="note warn" style={{ marginBottom: 8 }}>目前的分組<b>還沒儲存</b>。建議先按「先儲存，再套用」，以後可以用「還原到存檔」找回來。</div>
+                : <p className="small muted" style={{ margin: '0 0 8px' }}>目前的分組已經儲存過，之後可以用「還原到存檔」找回來。</p>}
+              <p className="small muted" style={{ margin: '0 0 10px' }}>就算直接套用，也可以馬上按「復原上一次」回到套用前的樣子。</p>
+              <div className="row">
+                {unsaved && <button className="btn pri" disabled={busy} onClick={async () => { const a = ask; setAsk(null); if (await act({ action: 'bundle.snapshot.save' })) await a.run(); }}>先儲存，再套用</button>}
+                <button className={`btn${unsaved ? '' : ' pri'}`} disabled={busy} onClick={async () => { const a = ask; setAsk(null); await a.run(); }}>{unsaved ? '不儲存，直接套用' : '確定套用'}</button>
+                <button className="btn" onClick={() => setAsk(null)}>取消</button>
+              </div>
+            </div>
+          </div>, document.body,
+        )}
+
+        <div className="card">
+          <h2>分組存檔</h2>
+          {st.bundleSaved
+            ? <p style={{ margin: 0 }}>上次儲存：{tw(st.bundleSaved.at)}（{st.bundleSaved.groups} 組，{st.bundleSaved.by}）<br />
+                {st.bundleSaved.same ? <span className="ok-text">✓ 目前分組和存檔相同</span> : <b className="err-text">目前分組有變更，還沒儲存</b>}</p>
+            : <p style={{ margin: 0 }}><b className="err-text">還沒儲存過。</b>手工調整完，請按「儲存目前分組」。</p>}
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn pri" disabled={busy || !groups.size} onClick={async () => {
+              const r = await act({ action: 'bundle.snapshot.save' }) as { groups: number } | null;
+              if (r) setMsg({ kind: 'ok', text: `已儲存目前分組（${r.groups} 組）` });
+            }}>儲存目前分組</button>
+            <button className="btn" disabled={busy || !st.bundleSaved || st.bundleSaved.same} onClick={() => confirm2('snap-restore', async () => {
+              const r = await act({ action: 'bundle.snapshot.restore', which: 'saved' }) as { seats: number } | null;
+              if (r) setMsg({ kind: 'ok', text: `已還原到存檔（調整了 ${r.seats} 席）` });
+            })}>{sure === 'snap-restore' ? '再按一次確認還原' : '還原到存檔'}</button>
+            <button className="btn" disabled={busy || !st.bundleUndo || st.bundleUndo.same} title="回到上一次「自動分組／套用預設／取消分組」之前的樣子" onClick={() => confirm2('snap-undo', async () => {
+              const r = await act({ action: 'bundle.snapshot.restore', which: 'undo' }) as { seats: number } | null;
+              if (r) setMsg({ kind: 'ok', text: `已復原（調整了 ${r.seats} 席）；再按一次「復原上一次」可回到剛才` });
+            })}>{sure === 'snap-undo' ? '再按一次確認復原' : '復原上一次'}</button>
+          </div>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>「還原到存檔」回到你最後一次按「儲存目前分組」的樣子。「復原上一次」回到最近一次自動分組、套用預設或取消分組之前的樣子。</p>
+        </div>
+
+        <Presets sel={sel} setSel={setSel} confirmChange={confirmChange} />
         <div className="card">
           <h2>目前分組</h2>
           <p style={{ margin: 0 }}>{sizeText || <span className="muted">尚未分組</span>}</p>
@@ -930,11 +986,18 @@ function Groups() {
         </div>
 
         <div className="card">
-          <h2>手動調整 <span className="small muted">已選取 {sel.size} 位</span></h2>
+          <h2>手工設定分組 <span className="small muted">已選取 <b>{sel.size}</b> 位</span></h2>
+          <ol className="steps">
+            <li>在左邊座位圖上，<b>點選要放在同一組的座位</b>（出現紅框＝已選）。可以按住拖曳一次選多位；座位不必相鄰，也可以分在走道兩邊。點錯再點一次就取消。</li>
+            <li>看上面「已選取 <b>{sel.size}</b> 位」，確認人數正確。</li>
+            <li>按 <b>「設為一組」</b>。這些座位原本屬於哪一組，會自動從那組移出。</li>
+            <li>檢查被拆到的組：點那一組的任一位，按「選取整組」，看人數對不對；不對就重選後再「設為一組」。</li>
+            <li>全部弄好後，到上方「分組存檔」按 <b>「儲存目前分組」</b>。</li>
+          </ol>
           <div className="row">
             <button className="btn pri" disabled={busy || sel.size < 2} onClick={async () => {
               const r = await act({ action: 'bundle.manual', seatIds: [...sel] }) as { size: number } | null;
-              if (r) { setMsg({ kind: 'ok', text: `已把 ${r.size} 位設為一組` }); setSel(new Set()); }
+              if (r) { setMsg({ kind: 'ok', text: `已把 ${r.size} 位設為一組。全部調整好後，記得按「儲存目前分組」。` }); setSel(new Set()); }
             }}>設為一組</button>
             <button className="btn" disabled={busy || !sel.size} onClick={async () => {
               const r = await act({ action: 'bundle.remove', seatIds: [...sel] }) as { removed: number } | null;
@@ -943,7 +1006,8 @@ function Groups() {
             <button className="btn" disabled={!selSeats.some((s) => s.bundle)} onClick={selectWholeGroups}>選取整組</button>
             <button className="btn" disabled={!sel.size} onClick={() => setSel(new Set())}>清除選取</button>
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>例：要把某一組換掉一位，先選那一組的 9 位加新的一位，按「設為一組」；被換掉的那位會自動改回單人或留在原組。</p>
+          {selSeats.length > 0 && <p className="small" style={{ margin: '6px 0 0' }}>已選：{selSeats.slice(0, 20).map((s) => s.label).join('、')}{selSeats.length > 20 ? `…共 ${selSeats.length} 位` : ''}</p>}
+          <p className="small muted" style={{ margin: '6px 0 0' }}>其他用法：要讓某幾席<b>不分組</b>（單人購買），選取後按「改回單人」。游標停在座位上可看它是第幾組、幾位。</p>
         </div>
 
         <div className="card">
@@ -975,11 +1039,11 @@ function Groups() {
           <label className="switch small" style={{ marginTop: 8 }}><input type="checkbox" checked={cross} onChange={(e) => setCross(e.target.checked)} />可跨走道（座位數不是人數的倍數時，才能全部分完）</label>
           <label className="switch small"><input type="checkbox" checked={useSkip} onChange={(e) => setUseSkip(e.target.checked)} />略過座位圖上選取的 {sel.size} 位（維持單人）</label>
           <div className="row" style={{ marginTop: 10 }}>
-            <button className="btn pri" disabled={busy || !rows.size} onClick={auto}>自動分組</button>
-            <button className="btn" disabled={busy || !rows.size} onClick={async () => {
+            <button className="btn pri" disabled={busy || !rows.size} onClick={() => confirmChange('自動分組', [{ rows: [...rows], blocks: [...blks] }], auto)}>自動分組</button>
+            <button className="btn" disabled={busy || !rows.size} onClick={() => confirmChange('取消這些排的分組', [{ rows: [...rows], blocks: [...blks] }], async () => {
               const r = await act({ action: 'bundle.clear', rows: [...rows], blocks: [...blks] }) as { cleared: number } | null;
               if (r) setNote({ err: false, text: r.cleared ? `已取消 ${r.cleared} 組，這些排改回單人選位` : '這些座位原本就沒有分組' });
-            }}>取消這些排的分組</button>
+            })}>取消這些排的分組</button>
           </div>
           {note && <div className={`note ${note.err ? 'warn' : 'ok'}`} style={{ marginTop: 8 }}>{note.text}</div>}
           <p className="small muted" style={{ margin: '8px 0 0' }}>選定範圍原有的分組會先拆掉再重新分；已有訂單的座位不能改。自動分完可再用「手動調整」微調。</p>
@@ -993,7 +1057,7 @@ function Groups() {
 type Preset = State['bundlePresets'][number];
 const SHAPE_NAME: Record<string, string> = { row: '同一排左右', band2: '兩排一起', band3: '三排一起' };
 
-function Presets({ sel, setSel }: { sel: Set<string>; setSel: (s: Set<string>) => void }) {
+function Presets({ sel, setSel, confirmChange }: { sel: Set<string>; setSel: (s: Set<string>) => void; confirmChange: (title: string, scopes: Scope[], run: () => Promise<void>) => void }) {
   const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
   const [list, setList] = useState<Preset[]>(st.bundlePresets);
   const [dirty, setDirty] = useState(false);
@@ -1023,7 +1087,7 @@ function Presets({ sel, setSel }: { sel: Set<string>; setSel: (s: Set<string>) =
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <b>{p.name || '（未命名）'}</b>
             <span className="row">
-              <button className="btn small pri" disabled={busy} onClick={() => apply(i)}>套用</button>
+              <button className="btn small pri" disabled={busy} onClick={() => confirmChange(`套用「${p.name}」`, [p], () => apply(i))}>套用</button>
               <button className="btn small" onClick={() => setOpen(open === i ? null : i)}>{open === i ? '收起' : '修改'}</button>
             </span>
           </div>
@@ -1055,12 +1119,12 @@ function Presets({ sel, setSel }: { sel: Set<string>; setSel: (s: Set<string>) =
         </div>
       ))}
       <div className="row">
-        <button className="btn pri" disabled={busy || !list.length} onClick={() => apply()}>全部套用</button>
+        <button className="btn pri" disabled={busy || !list.length} onClick={() => confirmChange('全部套用預設分組', list, () => apply())}>全部套用</button>
         {dirty && <button className="btn" disabled={busy} onClick={save}>儲存修改</button>}
         <button className="btn" onClick={() => { setList([...list, { name: `新的分組 ${list.length + 1}`, rows: [], blocks: [], size: 2, shape: 'row', crossAisle: false, skip: [] }]); setOpen(list.length); setDirty(true); }}>＋新增一條</button>
         <button className="btn" disabled={busy} onClick={() => confirm2('preset-reset', async () => { const r = await act({ action: 'bundle.presets.save', presets: null }, '已恢復系統預設') as Preset[] | null; if (r) { setList(r); setDirty(false); setOpen(null); } })}>{sure === 'preset-reset' ? '再按一次確認' : '恢復預設'}</button>
       </div>
-      <p className="small muted" style={{ margin: '6px 0 0' }}>套用時，該條範圍原有的分組會先拆掉重分；已有訂單的座位不能改。改完記得按「儲存修改」（按「套用」也會先自動儲存）。</p>
+      <p className="small muted" style={{ margin: '6px 0 0' }}>套用時，該條範圍原有的分組（包含手工設定的）會先拆掉重分，按下後會再問一次；已有訂單的座位不能改。修改這裡的規則記得按「儲存修改」（按「套用」也會先自動儲存）。</p>
     </div>
   );
 }
