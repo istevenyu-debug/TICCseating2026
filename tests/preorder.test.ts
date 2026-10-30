@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, submitPreorder } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setPushLink, submitPreorder } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -140,28 +140,39 @@ describe('劃位連結只能劃付款買的內容', () => {
   });
 });
 
-describe('收款通知推到訂購人手機（劃位連結只用 Email）', () => {
-  it('送出時拿到查詢碼；開推播；確認收款後推「請查看 Email」，不帶劃位連結；別人的碼查不到', async () => {
+describe('收款後劃位連結送到訂購人手機（也寄 Email）', () => {
+  async function flow(pushLinkOn: boolean) {
     await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    if (!pushLinkOn) await setPushLink(db, 'admin', false);
     const { token } = await submitPreorder(db, body());
     const other = await submitPreorder(db, body({ name: '別人', email: 'x@example.com' }));
-    expect(await preorderStatus(db, [token])).toEqual([expect.objectContaining({ no: 'P0001', status: 'submitted', email: 'l***@example.com' })]);
+    expect(await preorderStatus(db, [token])).toEqual([expect.objectContaining({ no: 'P0001', status: 'submitted', email: 'l***@example.com', url: null })]);
     expect(await preorderStatus(db, ['x'.repeat(24)])).toEqual([]);
     await savePreorderPush(db, token, { endpoint: 'https://push.example/lin', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } });
     await expect(savePreorderPush(db, 'y'.repeat(24), { endpoint: 'https://push.example/z', keys: { p256dh: 'k'.repeat(20), auth: 'a'.repeat(10) } })).rejects.toThrow('找不到');
-    await db.insert(t.appSetting).values({ key: 'site.origin', value: 'https://abc.trycloudflare.com' });
-
+    await db.insert(t.appSetting).values([{ key: 'site.origin', value: 'https://ticket.aolforgood.com' }, { key: 'email.user', value: 'aolticket2026@gmail.com' }, { key: 'email.pass', value: 'p' }]);
     const p = (await listPreorders(db)).find((x) => x.no === 'P0001')!;
     const { code } = await confirmPreorder(db, 'admin', p.id);
     const got: { endpoint: string; title: string; body: string; url: string }[] = [];
+    const mails: string[] = [];
     const ok = async () => undefined;
-    await dispatchQueued(db, { email: ok, sms: ok, push: async (sub, pl) => { got.push({ endpoint: sub.endpoint, title: pl.title, body: pl.body, url: pl.url }); } });
-    expect(got).toHaveLength(1);
-    expect(got[0]).toMatchObject({ endpoint: 'https://push.example/lin', title: '✅ 已確認收款，請查看 Email', url: 'https://abc.trycloudflare.com/buy' });
-    expect(got[0].body).toContain('l***@example.com');
-    expect(got[0].body).not.toContain(code);
+    await dispatchQueued(db, { email: async (_c, to, subject) => { mails.push(`${to}|${subject}`); }, sms: ok, push: async (sub, pl) => { got.push({ endpoint: sub.endpoint, title: pl.title, body: pl.body, url: pl.url }); } });
     const st = await preorderStatus(db, [token, other.token]);
-    expect(st.map((x) => [x.no, x.status])).toEqual([['P0002', 'submitted'], ['P0001', 'confirmed']]);
+    return { code, got, mails, st };
+  }
+
+  it('開關打開（預設）：推播點了直接進劃位頁；預購頁出現劃位按鈕；Email 也寄；別人的訂單沒有連結', async () => {
+    const { code, got, mails, st } = await flow(true);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ endpoint: 'https://push.example/lin', title: '✅ 已確認收款，可以開始劃位', url: `https://ticket.aolforgood.com/t/${code}` });
+    expect(mails).toContain('lin@example.com|【祈福法會】付款確認・劃位通知');
+    expect(st.map((x) => [x.no, x.status, x.url])).toEqual([['P0002', 'submitted', null], ['P0001', 'confirmed', `/t/${code}`]]);
+  });
+
+  it('開關關閉：推播只提醒查看 Email，預購頁不給連結', async () => {
+    const { code, got, st } = await flow(false);
+    expect(got[0]).toMatchObject({ url: 'https://ticket.aolforgood.com/buy' });
+    expect(got[0].body).not.toContain(code);
     expect(JSON.stringify(st)).not.toContain(code);
   });
 });

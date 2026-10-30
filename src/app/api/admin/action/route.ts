@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -79,6 +79,7 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
+  z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
   z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
   z.object({ action: z.literal('checkin.undo'), id }),
@@ -179,6 +180,7 @@ export async function POST(req: Request) {
       }
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);
+      case 'preorder.pushLink': return setPushLink(db, who, a.on);
       case 'gate.create': return createGates(db, who, a.names);
       case 'gate.update': return updateGate(db, who, a.id, a.values);
       case 'checkin.undo': return undoCheckin(db, who, a.id);

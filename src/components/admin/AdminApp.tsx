@@ -23,7 +23,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1204,9 +1204,12 @@ function Preorders() {
   return (
     <div className="pstack">
       <div className="card">
-        <h2>預購單 <span className="small muted">公開網址：選購、匯款、回填資料（不劃位）；買方送出後成為訂單，確認收訖後自動以 Email 寄出劃位連結</span></h2>
+        <h2>預購單 <span className="small muted">公開網址：選購、匯款、回填資料（不劃位）；買方送出後成為訂單，確認收訖後自動寄出劃位連結</span></h2>
         <label className="switch"><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
           onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放預購單</label>
+        <label className="switch" style={{ marginTop: 6 }}><input type="checkbox" checked={st.pushLink} disabled={busy}
+          onChange={(e) => act({ action: 'preorder.pushLink', on: e.target.checked }, e.target.checked ? '確認收訖後，劃位連結也會送到訂購人手機與預購頁' : '劃位連結只用 Email 寄送')} />
+          確認收訖後，劃位連結<b>也送到訂購人手機</b>（推播＋預購頁「開始劃位」按鈕；只有送出訂單的那台裝置看得到）。Email 照常寄出。</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
           <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製預購單網址 ${buyUrl}` }), () => undefined)}>複製預購單網址</button>

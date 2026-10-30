@@ -188,7 +188,7 @@ describe('先匯款再給連結', () => {
     await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0);
     const mails: { subject: string; extra?: MailExtra }[] = [];
     await dispatchQueued(db, { ...fake().s, email: async (_c, _to, subject, _text, extra) => { mails.push({ subject, extra }); } });
-    const m = mails.find((x) => x.subject === '劃位成功通知')!;
+    const m = mails.find((x) => x.subject.endsWith('劃位成功通知'))!;
     expect(m.extra!.attachments).toHaveLength(1);
     expect(m.extra!.attachments![0].filename).toBe('T1-00001-01.png');
     expect(m.extra!.attachments![0].content.subarray(1, 4).toString()).toBe('PNG');

@@ -38,6 +38,7 @@ export async function preorderMenu(db: Db) {
     invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
     open: ev.preorderOpen && items.length > 0,
     mailFrom: (await (await import('./notify')).getNotifyConfig(db)).email?.user ?? '',
+    pushLink: await getPushLink(db),
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
   };
@@ -144,7 +145,9 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   await db.update(t.pushSub).set({ linkId: link.id }).where(eq(t.pushSub.preorderId, po.id));
   await db.insert(t.notification).values({
     linkId: link.id, channel: 'push', template: 'preorder_link', recipient: '訂購人手機',
-    content: `已確認收到您的款項（訂單 ${po.no}）。劃位連結已寄到您的 Email（${maskEmail(po.email)}），請查看信箱，也看看垃圾郵件匣。`,
+    content: (await getPushLink(db))
+      ? `已確認收到您的款項（訂單 ${po.no}），請點這則通知開始選位。劃位連結也已寄到您的 Email（${maskEmail(po.email)}）。`
+      : `已確認收到您的款項（訂單 ${po.no}）。劃位連結已寄到您的 Email（${maskEmail(po.email)}），請查看信箱，也看看垃圾郵件匣。`,
   });
   await db.insert(t.notification).values({
     linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
@@ -171,6 +174,17 @@ export async function markPreorderSeen(db: Db, id: number) {
   await db.update(t.preorder).set({ seenAt: new Date() }).where(and(eq(t.preorder.id, id), sql`${t.preorder.seenAt} is null`));
 }
 
+/** 後台開關：劃位連結是否也送到訂購人手機（推播＋預購頁「開始劃位」按鈕）。預設開啟 */
+export async function getPushLink(db: Db) {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'preorder.pushLink'));
+  return r ? r.value === '1' : true;
+}
+export async function setPushLink(db: Db, actor: string, on: boolean) {
+  const value = on ? '1' : '0';
+  await db.insert(t.appSetting).values({ key: 'preorder.pushLink', value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_push_link', target: 'app_setting', detail: value });
+}
+
 export const maskEmail = (e: string) => e.replace(/^(.)[^@]*(@.*)$/, '$1***$2');
 
 /** 訂購人裝置查進度：只認送出時拿到的隨機碼，一次最多 20 筆。不提供劃位連結（連結只用 Email 寄送） */
@@ -178,10 +192,17 @@ export async function preorderStatus(db: Db, tokens: string[]) {
   const list = [...new Set(tokens.filter((x) => typeof x === 'string' && /^[\w-]{20,40}$/.test(x)))].slice(0, 20);
   if (!list.length) return [];
   const rows = await db.select().from(t.preorder).where(inArray(t.preorder.viewToken, list)).orderBy(desc(t.preorder.id));
-  return rows.map((r) => ({
-    token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
-    email: maskEmail(r.email),
-  }));
+  // 開關打開時：已收款的訂單，在送出訂單的這台裝置上直接給劃位連結（只認送出時的隨機碼，別人查不到）
+  const show = await getPushLink(db);
+  const linkIds = rows.map((r) => r.linkId).filter((x): x is number => !!x);
+  const links = show && linkIds.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code, status: t.inviteLink.status }).from(t.inviteLink).where(inArray(t.inviteLink.id, linkIds)) : [];
+  return rows.map((r) => {
+    const l = links.find((x) => x.id === r.linkId);
+    return {
+      token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
+      email: maskEmail(r.email), url: r.status === 'confirmed' && l && l.status === 'active' ? `/t/${l.code}` : null,
+    };
+  });
 }
 
 /** 訂購人裝置開啟推播：還沒收款就先掛在預購單上，確認收訖時改掛到劃位連結 */
