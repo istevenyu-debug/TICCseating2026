@@ -48,9 +48,10 @@ export async function importAll(db: Db, b: BackupFile) {
         const chunk = JSON.stringify(rows.slice(i, i + 500));
         await tx.execute(sql`insert into ${sql.raw(`"${tb}"`)} select * from jsonb_populate_recordset(null::${sql.raw(`"${tb}"`)}, ${chunk}::jsonb)`);
       }
-      // 流水號接續最大值
-      await tx.execute(sql.raw(`select setval(pg_get_serial_sequence('"${tb}"', 'id'), coalesce((select max(id) from "${tb}"), 0) + 1, false)
-        where pg_get_serial_sequence('"${tb}"', 'id') is not null`));
+      // 流水號接續最大值（只有數字流水號的資料表）
+      const q = await tx.execute(sql.raw(`select pg_get_serial_sequence('"${tb}"', column_name) as seq from information_schema.columns where table_schema = 'public' and table_name = '${tb}' and column_name = 'id'`));
+      const seq = (((q as unknown as { rows?: { seq: string | null }[] }).rows ?? (q as unknown as { seq: string | null }[]))[0])?.seq;
+      if (seq) await tx.execute(sql.raw(`select setval('${seq}', coalesce((select max(id) from "${tb}"), 0) + 1, false)`));
     }
   });
   return Object.fromEntries(TABLES.map((tb) => [tb, (b.tables[tb] ?? []).length]));

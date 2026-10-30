@@ -7,7 +7,7 @@ import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
 import { confirmPreorder, listPreorders, preorderMenu, submitPreorder } from '@/lib/preorder';
 import {
-  ECPAY_TEST, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
+  ECPAY_TEST, backfillInvoices, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
   publicEinvConfig, saveEinvConfig, voidInvoice, type EinvPost,
 } from '@/lib/einvoice';
 import { invProblem, ubnValid } from '@/lib/invoiceRules';
@@ -174,5 +174,14 @@ describe('一筆訂單（收款）開一張發票', () => {
 
     await db.update(t.invoice).set({ status: 'issued', env: 'prod' }).where(eq(t.invoice.id, inv!.id));
     await expect(resetSales(db, 'admin', {})).rejects.toThrow('正式電子發票');
+  });
+
+  it('啟用前就收訖的訂單：補建待開發票，不重複建立', async () => {
+    await confirmed();
+    await expect(backfillInvoices(db, 'admin')).rejects.toThrow('先啟用');
+    await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'mock' }, '網管');
+    expect(await backfillInvoices(db, 'admin')).toEqual({ created: 1 });
+    expect(await backfillInvoices(db, 'admin')).toEqual({ created: 0 });
+    expect((await listInvoices(db)).map((x) => x.status)).toEqual(['pending']);
   });
 });

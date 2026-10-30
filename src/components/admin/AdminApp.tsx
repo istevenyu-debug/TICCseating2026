@@ -22,7 +22,7 @@ type Gate = { id: number; name: string; token: string; active: boolean; count: n
 type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
-  issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null };
+  issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
@@ -1350,6 +1350,7 @@ function Gates() {
 }
 
 /* ---------- 十、電子發票 ---------- */
+const taipeiDay = (iso: string) => new Date(iso).toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
 const MODE_LABEL = { mock: '模擬（不連綠界）', test: '綠界測試環境', prod: '正式' } as const;
 const INV_STATUS: Record<string, string> = { pending: '待開立', failed: '開立失敗', issued: '已開立', void: '已作廢' };
 
@@ -1418,6 +1419,7 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
           <span className={`pill ${x.status === 'issued' ? 'p-paid' : x.status === 'void' ? 'p-cancelled' : 'p-pending'}`}>{INV_STATUS[x.status] ?? x.status}</span>
           {x.status === 'issued' && <div className="mono small">{x.invoiceNo}{x.env !== 'prod' && <span className="err-text">（{x.env === 'mock' ? '模擬' : '測試'}）</span>}</div>}
           {canPick && x.checks.length > 0 && <div className="small err-text">⚠ {x.checks.length} 項異常</div>}
+          {canPick && x.confirmedAt && taipeiDay(x.confirmedAt) !== taipeiDay(new Date().toISOString()) && <div className="small err-text">{taipeiDay(x.confirmedAt).slice(5).replace('-', '/')} 收訖，現在開日期會是今天</div>}
           {x.status === 'failed' && <div className="small err-text">{x.error}</div>}
         </td>
         <td><button className="btn small" onClick={() => setOpen(!open)}>{open ? '收起' : '明細'}</button></td>
@@ -1470,6 +1472,7 @@ function Invoices() {
   const chosen = st.invoices.filter((x) => sel.has(x.id));
   const flagged = chosen.filter((x) => x.checks.length);
   const toggle = (id: number) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const missing = st.preorders.filter((p) => p.status === 'confirmed' && p.amount > 0 && (!p.invoiceState || p.invoiceState.status === 'void')).length;
   const issue = async (force: boolean) => {
     const r = await act({ action: 'invoice.issue', ids: [...sel], force }) as { orderNo: string; status: string; invoiceNo: string; error: string | null }[] | null;
     if (!r) return;
@@ -1490,7 +1493,11 @@ function Invoices() {
               <option value="todo">待開立（{todo.length}）</option><option value="issued">已開立</option><option value="void">已作廢</option><option value="all">全部</option>
             </select>
           </h2>
-          <p className="small muted" style={{ margin: '0 0 8px' }}>一筆訂單（收款）開一張。確認收訖時建立，電腦先核對金額與發票對象；有異常的紅底標出，人工確認後才能開。</p>
+          <p className="small muted" style={{ margin: '0 0 8px' }}>一筆訂單（收款）開一張。確認收訖時建立，電腦先核對金額與發票對象；有異常的紅底標出，人工確認後才能開。<b>發票日期是開立當天</b>，建議每天收工前把當天收訖的開完。</p>
+          {c.enabled && missing > 0 && (
+            <div className="note warn" style={{ marginBottom: 8 }}>有 {missing} 筆訂單在啟用電子發票前就已確認收訖，還沒有發票。
+              <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => act({ action: 'invoice.backfill' }, '已建立待開發票')}>建立待開發票</button></div>
+          )}
           {filter === 'todo' && todo.length > 0 && (
             <div className="row" style={{ marginBottom: 8 }}>
               <button className="btn small" onClick={() => setSel(new Set(todo.filter((x) => !x.checks.length).map((x) => x.id)))}>選取全部無異常的（{todo.filter((x) => !x.checks.length).length}）</button>

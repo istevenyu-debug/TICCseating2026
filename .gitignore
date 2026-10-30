@@ -6,3 +6,6 @@
 next-env.d.ts
 node_modules/
 測試網址.txt
+
+# 自動備份（含個人資料，不上傳）
+/備份/

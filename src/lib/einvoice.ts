@@ -334,7 +334,20 @@ export async function listInvoices(db: Db) {
     amount: inv.amount, buyer: inv.buyer, checks: inv.checks, error: inv.error, issuedBy: inv.issuedBy, voidReason: inv.voidReason,
     name: po?.name ?? '', phone: po?.phone ?? '', email: po?.email ?? '', paidAmount: po?.paidAmount ?? null,
     invType: po?.invType ?? 'member', invCode: po?.invCode ?? '', invTitle: po?.invTitle ?? '', preorderId: inv.preorderId,
+    confirmedAt: po?.confirmedAt?.toISOString() ?? null,
   }));
+}
+
+/** 啟用電子發票前就確認收訖的訂單：補建待開發票（不會重複建立） */
+export async function backfillInvoices(db: Db, actor: string, post: EinvPost = realPost) {
+  const cfg = await getEinvConfig(db);
+  if (!cfg.enabled) throw new BookingError('INVALID', '請先啟用電子發票');
+  const pos = await db.select({ id: t.preorder.id }).from(t.preorder)
+    .where(and(eq(t.preorder.status, 'confirmed'), sql`${t.preorder.amount} > 0`,
+      sql`not exists (select 1 from ${t.invoice} where ${t.invoice.preorderId} = ${t.preorder.id} and ${t.invoice.status} <> 'void')`));
+  let n = 0;
+  for (const p of pos) { if (await createForPreorder(db, p.id, actor, post)) n++; }
+  return { created: n };
 }
 
 /** 劃位成功信、購票頁用：只有「即開」時才顯示這筆訂單的發票 */

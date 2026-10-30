@@ -13,7 +13,7 @@ import { cancelPreorder, confirmPreorder, markPreorderSeen } from '@/lib/preorde
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
-import { createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
+import { backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,6 +71,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('invoice.issue'), ids: z.array(id).min(1).max(500), force: z.boolean().optional() }),
   z.object({ action: z.literal('invoice.edit'), id, invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']), invCode: z.string().max(20), invTitle: z.string().max(60) }),
   z.object({ action: z.literal('invoice.recheck'), id }),
+  z.object({ action: z.literal('invoice.backfill') }),
   z.object({ action: z.literal('invoice.void'), id, reason: z.string().trim().min(1, '請填寫作廢原因').max(20), reopen: z.boolean().optional() }),
   z.object({ action: z.literal('einvoice.save'), reason: z.string().trim().max(100).optional(), values: z.object({
     enabled: z.enum(['0', '1']), mode: z.enum(['mock', 'test', 'prod']), timing: z.enum(['auto', 'review']), taxType: z.enum(['1', '3']),
@@ -161,6 +162,7 @@ export async function POST(req: Request) {
       case 'invoice.issue': mustBeAdmin(); return issueBatch(db, a.ids, who, !!a.force);
       case 'invoice.edit': mustBeAdmin(); return editInvoiceBuyer(db, a.id, who, a);
       case 'invoice.recheck': mustBeAdmin(); return recheckInvoice(db, a.id, who);
+      case 'invoice.backfill': mustBeAdmin(); return backfillInvoices(db, who);
       case 'invoice.void': mustBeAdmin(); return voidInvoice(db, a.id, who, a.reason, !!a.reopen);
       case 'einvoice.save': mustBeAdmin(); return saveEinvConfig(db, who, a.values, a.reason ?? '');
       case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
