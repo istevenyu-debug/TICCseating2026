@@ -61,6 +61,8 @@ function mmss(ms: number) {
 interface Form {
   name: string; phone: string; email: string;
   holders: Record<string, { name: string; id4: string }>;
+  /** 購票人自己改過的持票人欄位（沒改過的跟著自動編號變） */
+  edited: Record<string, { name?: boolean; id4?: boolean }>;
   idBase: string;
   agree: boolean;
 }
@@ -112,7 +114,7 @@ export default function BookingApp({ code }: { code: string }) {
       setCombo(held.comboId);
       setForm((f) => f ?? {
         name: st.prefill.name, phone: st.prefill.phone, email: st.prefill.email, idBase: '',
-        holders: Object.fromEntries(held.seatIds.map((id, i) => [id, { name: i === 0 ? st.prefill.name : '', id4: '' }])),
+        holders: Object.fromEntries(held.seatIds.map((id) => [id, { name: '', id4: '' }])), edited: {},
         agree: false,
       });
     } else {
@@ -193,8 +195,13 @@ export default function BookingApp({ code }: { code: string }) {
     const ok = new Set(c && !c.isSingle ? c.items.map((i) => i.zoneId) : paid ? paidZones : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
     setSel((p) => new Set([...p].filter((sid) => seatById[sid] && ok.has(seatById[sid].zoneId))));
   };
-  const heldAuto = !!held && !!st.combos.find((c) => c.id === held.comboId)?.autoHolders;
-  const autoList = held && form && heldAuto ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
+  // 持票人：先自動帶入（第 1 張本人，之後「姓名02、03…」，證號＝末 4 碼＋序號），購票人改過的欄位以他填的為準
+  const autoList = held && form ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
+  const idOk = !!form && /^[0-9A-Za-z]{4}$/.test(form.idBase.trim());
+  const holderOf = (id: string, i: number) => ({
+    name: form?.edited[id]?.name ? form.holders[id]?.name ?? '' : autoList[i]?.name ?? '',
+    id4: form?.edited[id]?.id4 ? (form.holders[id]?.id4 ?? '').toUpperCase() : idOk ? autoList[i]?.id4 ?? '' : '',
+  });
 
   const bidx = bundleIndex(st.seats);
   function toggle(id: string) {
@@ -249,13 +256,11 @@ export default function BookingApp({ code }: { code: string }) {
     const pp = form.phone.trim() ? phoneProblem(form.phone) : '請填寫手機';
     if (pp) return bad(pp, 'b-phone');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return bad('Email 格式不正確，劃位成功與入場 QR code 會寄到這個信箱', 'b-email');
-    if (heldAuto && !/^[0-9A-Za-z]{4}$/.test(form.idBase.trim())) return bad('請填寫購票人身分證末 4 碼（4 個英數字）', 'b-idbase');
-    if (!heldAuto) {
-      for (const id of held.seatIds) {
-        const h = form.holders[id];
-        if (!h?.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的持票人姓名`, `h-n-${id}`);
-        if (!/^[0-9A-Za-z]{4}$/.test(h.id4.trim())) return bad(`${seatById[id]?.label ?? id} 的身分證末 4 碼應為 4 個英數字`, `h-i-${id}`);
-      }
+    if (!idOk) return bad('請填寫購票人身分證末 4 碼（4 個英數字），用來自動編號每張票', 'b-idbase');
+    for (const [i, id] of held.seatIds.entries()) {
+      const h = holderOf(id, i);
+      if (!h.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的持票人姓名`, `h-n-${id}`);
+      if (!/^[0-9A-Za-z]{4}(\d{2,3})?$/.test(h.id4.trim())) return bad(`${seatById[id]?.label ?? id} 的證號應為身分證末 4 碼`, `h-i-${id}`);
     }
     if (!form.agree) return bad('請勾選同意個資蒐集', 't-agree');
     setMsg(null); setReview(true);
@@ -268,10 +273,8 @@ export default function BookingApp({ code }: { code: string }) {
     const r = await api<{ orderNo: string }>(`/api/t/${code}/submit`, {
       orderId: held.orderId,
       buyer: { name: form.name, phone: form.phone, email: form.email },
-      holders: heldAuto
-        ? held.seatIds.map((id, i) => ({ seatId: id, ...autoList[i] }))
-        : held.seatIds.map((id) => ({ seatId: id, ...form.holders[id] })),
-      ...(heldAuto ? { idBase: form.idBase.trim().toUpperCase() } : {}),
+      holders: held.seatIds.map((id, i) => ({ seatId: id, ...holderOf(id, i) })),
+      idBase: form.idBase.trim().toUpperCase(),
       agree: form.agree,
     });
     setBusy(false);
@@ -284,7 +287,10 @@ export default function BookingApp({ code }: { code: string }) {
 
   const upd = (patch: Partial<Form>) => setForm((f) => (f ? { ...f, ...patch } : f));
   const updHolder = (id: string, patch: Partial<{ name: string; id4: string }>) =>
-    setForm((f) => (f ? { ...f, holders: { ...f.holders, [id]: { ...f.holders[id], ...patch } } } : f));
+    setForm((f) => (f ? {
+      ...f, holders: { ...f.holders, [id]: { ...f.holders[id], ...patch } },
+      edited: { ...f.edited, [id]: { ...f.edited[id], ...Object.fromEntries(Object.keys(patch).map((k) => [k, true])) } },
+    } : f));
 
   return (
     <main className="wrap">
@@ -411,7 +417,7 @@ export default function BookingApp({ code }: { code: string }) {
                   <h3>座位與持票人（{held.seatIds.length} 張）</h3>
                   <div className="sellist">
                     {held.seatIds.map((id, i) => {
-                      const h = heldAuto ? autoList[i] : form.holders[id];
+                      const h = holderOf(id, i);
                       return <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small">{h?.name}・{(h?.id4 ?? '').toUpperCase()}</span></div>;
                     })}
                   </div>
@@ -434,25 +440,23 @@ export default function BookingApp({ code }: { code: string }) {
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
 
                 <h3>持票人實名（每張一位）</h3>
-                {heldAuto ? (
-                  <>
-                    <label className="f">購票人身分證末 4 碼<input id="b-idbase" value={form.idBase} maxLength={4} autoCapitalize="characters" onChange={(e) => upd({ idBase: e.target.value })} /></label>
-                    <p className="small muted" style={{ margin: '6px 0' }}>此購票方式的持票人由系統自動編號：第 1 張為購票人本名，之後依序為「姓名02、姓名03…」，證號為末 4 碼加序號。</p>
-                    <div className="sellist">
-                      {held.seatIds.map((id, i) => (
-                        <div className="selitem" key={id}>
-                          <span>{seatById[id]?.label ?? id}</span>
-                          <span className="mono small">{autoList[i]?.name || '（請先填姓名）'}・{form.idBase.trim().length === 4 ? autoList[i]?.id4 : '（請填證末 4 碼）'}</span>
-                        </div>
-                      ))}
+                <label className="f">購票人身分證末 4 碼<input id="b-idbase" value={form.idBase} maxLength={4} autoCapitalize="characters" placeholder="例：5234"
+                  onChange={(e) => upd({ idBase: e.target.value.toUpperCase() })} /></label>
+                <div className="note ok holder-help">
+                  <b>每張票的持票人已自動帶入</b>：第 1 張是您本人，其他張是「您的姓名02、03…」；證號是您的身分證末 4 碼加序號（例：5234<b>01</b>、5234<b>02</b>…）。
+                  <br />如果其他張是<b>別人要用</b>，請直接把那一張改成他的<b>姓名與身分證末 4 碼</b>；入場時會核對姓名與證號。
+                </div>
+                {held.seatIds.map((id, i) => {
+                  const h = holderOf(id, i);
+                  const mine = !!form.edited[id]?.name || !!form.edited[id]?.id4;
+                  return (
+                    <div className="fields holder-row" key={id}>
+                      <label className="f">{i + 1}. {seatById[id]?.label ?? id} 姓名<input id={`h-n-${id}`} value={h.name} placeholder="（先填上方購票人姓名）" onChange={(e) => updHolder(id, { name: e.target.value })} /></label>
+                      <label className="f">證號<input id={`h-i-${id}`} value={h.id4} maxLength={7} autoCapitalize="characters" placeholder="（先填上方證末 4 碼）" onChange={(e) => updHolder(id, { id4: e.target.value.toUpperCase() })} /></label>
+                      {mine && <button type="button" className="btn small" title="改回自動編號" onClick={() => setForm((f) => (f ? { ...f, edited: { ...f.edited, [id]: {} } } : f))}>還原</button>}
                     </div>
-                  </>
-                ) : held.seatIds.map((id) => (
-                  <div className="fields" key={id} style={{ marginBottom: 6 }}>
-                    <label className="f">{seatById[id]?.label ?? id} 姓名<input id={`h-n-${id}`} value={form.holders[id]?.name ?? ''} onChange={(e) => updHolder(id, { name: e.target.value })} /></label>
-                    <label className="f">身分證末 4 碼<input id={`h-i-${id}`} value={form.holders[id]?.id4 ?? ''} maxLength={4} onChange={(e) => updHolder(id, { id4: e.target.value })} /></label>
-                  </div>
-                ))}
+                  );
+                })}
 
                 <label className="check" style={{ marginTop: 10 }}>
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />

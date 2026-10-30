@@ -13,7 +13,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { seatLabel } from './layout';
 import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
-import { autoHolders, submitInput, type SubmitInput } from './validation';
+import { submitInput, type SubmitInput } from './validation';
 import { qrSecret, qrValue } from './qr';
 import { entitle } from './entitle';
 
@@ -411,17 +411,10 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
       throw new BookingError('INVALID', '每個座位都需要填寫一位持票人。');
     }
 
-    // 持票人自動編號（例如功德組）：由伺服器依購票人姓名與證末 4 碼產生，不採用前端送來的持票人
-    const [cb] = await tx.select().from(t.combo).where(eq(t.combo.id, order.comboId));
-    let holders = input.holders;
-    if (cb?.autoHolders) {
-      if (!input.idBase) throw new BookingError('INVALID', '請填寫購票人身分證末 4 碼。');
-      const gen = autoHolders(input.buyer.name, input.idBase, input.holders.length);
-      holders = input.holders.map((h, i) => ({ seatId: h.seatId, ...gen[i] }));
-    } else if (input.holders.some((h) => h.id4.length !== 4)) {
-      throw new BookingError('INVALID', '身分證末 4 碼應為 4 個英數字');
-    }
-
+    // 持票人：畫面上先依購票人姓名與證末 4 碼自動帶入（姓名02、03…／證號末 4 碼＋序號），購票人可逐張修改。
+    // 證號可為某人的末 4 碼，或自動編號的「末 4 碼＋2–3 位序號」
+    const holders = input.holders;
+    if (holders.some((h) => !/^[0-9A-Z]{4}(\d{2,3})?$/.test(h.id4))) throw new BookingError('INVALID', '持票人證號應為身分證末 4 碼（或自動編號的末 4 碼＋序號）');
     for (const h of holders) {
       await tx.update(t.orderSeat).set({ holderName: h.name, holderId4: h.id4 })
         .where(and(eq(t.orderSeat.orderId, order.id), eq(t.orderSeat.seatId, h.seatId)));

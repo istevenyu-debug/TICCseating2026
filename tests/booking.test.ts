@@ -307,36 +307,34 @@ describe('每筆訂單上限 21 張', () => {
   });
 });
 
-describe('功德組：持票人自動編號', () => {
+describe('持票人：自動帶入，購票人可修改', () => {
   beforeEach(setup);
   const who = 'tester';
 
-  it('訂 12 張（4 組）：第 1 張本名＋523401，之後 姓名02～12、523402～523412；前端送來的持票人不採用', async () => {
+  it('畫面自動編號（第 1 張本名＋523401，之後 姓名02～12、523402～523412）照送出的存；改成別人的姓名與 4 碼也可以', async () => {
     await createLink(db, { eventId, code: 'DDD444', name: '丁', phone: '0944444444', quota: 0, expiresAt: EXP });
     const c = await A.createCombo(db, who);
     await A.updateCombo(db, who, c.id, { name: '功德組', price: 3000, items: [{ zoneId: zone['B區'], qty: 3 }], autoHolders: true });
     await A.publish(db, who, T0);
     const st0 = await getBookingState(db, 'DDD444', T0);
     const ids = st0.seats.filter((s) => s.status === 'free' && s.zoneId === zone['B區']).slice(0, 12).map((s) => s.id);
-    expect(ids).toHaveLength(12);
     const h = await holdSeats(db, 'DDD444', ids, c.id, T0);
-    expect(h.amount).toBe(12000);
-    const body = { ...submitBody(h.orderId, ids, h.amount), buyer: { name: '王大明', phone: '0944444444', email: 'a@example.com' }, idBase: '5234' };
-    await submitOrder(db, 'DDD444', body, min(1));
+    const { autoHolders } = await import('@/lib/validation');
+    const auto = autoHolders('王大明', '5234', 12);
+    expect(auto[0]).toEqual({ name: '王大明', id4: '523401' });
+    expect(auto[11]).toEqual({ name: '王大明12', id4: '523412' });
+    const holders = ids.map((id, i) => ({ seatId: id, ...(i === 2 ? { name: '李小華', id4: 'A123' } : auto[i]) })); // 第 3 張改成別人
+    await submitOrder(db, 'DDD444', { orderId: h.orderId, buyer: { name: '王大明', phone: '0944444444', email: 'a@example.com' }, holders, idBase: '5234', agree: true }, min(1));
     const rows = await db.select().from(t.orderSeat).where(eq(t.orderSeat.orderId, h.orderId));
     const bySeat = Object.fromEntries(rows.map((r) => [r.seatId, r]));
-    expect(ids.map((id) => bySeat[id].holderName)).toEqual(['王大明', ...Array.from({ length: 11 }, (_, i) => `王大明${String(i + 2).padStart(2, '0')}`)]);
-    expect(ids.map((id) => bySeat[id].holderId4)).toEqual(Array.from({ length: 12 }, (_, i) => `5234${String(i + 1).padStart(2, '0')}`));
+    expect(ids.map((id) => bySeat[id].holderName)).toEqual(['王大明', '王大明02', '李小華', ...Array.from({ length: 9 }, (_, i) => `王大明${String(i + 4).padStart(2, '0')}`)]);
+    expect(bySeat[ids[2]].holderId4).toBe('A123');
+    expect(bySeat[ids[11]].holderId4).toBe('523412');
   });
 
-  it('自動編號的購票方式沒填證末 4 碼不能送出；一般購票方式仍要 4 碼', async () => {
-    const c = await A.createCombo(db, who);
-    await A.updateCombo(db, who, c.id, { name: '功德組', price: 3000, items: [{ zoneId: zone['B區'], qty: 3 }], autoHolders: true });
-    await A.publish(db, who, T0);
-    const h = await holdSeats(db, 'AAA111', ['8-11', '8-13', '8-15'], c.id, T0);
-    await expectCode(submitOrder(db, 'AAA111', submitBody(h.orderId, ['8-11', '8-13', '8-15'], h.amount), min(1)), 'INVALID');
+  it('證號格式不對不能送出', async () => {
     const h2 = await holdSeats(db, 'BBB222', ['2-1'], SINGLE(), T0);
-    const bad = submitBody(h2.orderId, ['2-1'], h2.amount); bad.holders[0].id4 = '123401';
+    const bad = submitBody(h2.orderId, ['2-1'], h2.amount); bad.holders[0].id4 = '12';
     await expectCode(submitOrder(db, 'BBB222', bad, min(1)), 'INVALID');
   });
 });

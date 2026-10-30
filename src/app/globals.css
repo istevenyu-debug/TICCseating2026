@@ -223,3 +223,6 @@ ol.steps li { margin-bottom: 4px; }
 tr.warnrow td { background: #fff4f4; }
 /* 不能選的座位（原本用 disabled，改成可點出說明） */
 .seat[aria-disabled="true"]:not([data-k="mine"]) { opacity: .45; cursor: not-allowed; }
+/* 持票人：自動帶入說明與每列 */
+.holder-help { margin: 8px 0 10px; line-height: 1.6; }
+.holder-row { align-items: end; margin-bottom: 6px; }
