@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-10-31a 版（可搬上雲端）';
+export const APP_VERSION = '2026-10-31b 版（接老闆的 Google 表單）';

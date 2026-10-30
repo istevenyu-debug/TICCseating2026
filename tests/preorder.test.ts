@@ -161,16 +161,9 @@ describe('收款後劃位連結送到訂購人手機（也寄 Email）', () => {
     return { code, got, mails, st };
   }
 
-  it('開關打開（預設）：推播點了直接進劃位頁；預購頁出現劃位按鈕；Email 也寄；別人的訂單沒有連結', async () => {
-    const { code, got, mails, st } = await flow(true);
-    expect(got).toHaveLength(1);
-    expect(got[0]).toMatchObject({ endpoint: 'https://push.example/lin', title: '✅ 已確認收款，可以開始劃位', url: `https://ticket.aolforgood.com/t/${code}` });
+  it('「推到手機＋開始劃位按鈕」已停用：推播只提醒查看 Email，預購頁不給連結；Email 照寄', async () => {
+    const { code, got, st, mails } = await flow(true);
     expect(mails).toContain('lin@example.com|【祈福法會】付款確認・劃位通知');
-    expect(st.map((x) => [x.no, x.status, x.url])).toEqual([['P0002', 'submitted', null], ['P0001', 'confirmed', `/t/${code}`]]);
-  });
-
-  it('開關關閉：推播只提醒查看 Email，預購頁不給連結', async () => {
-    const { code, got, st } = await flow(false);
     expect(got[0]).toMatchObject({ url: 'https://ticket.aolforgood.com/buy' });
     expect(got[0].body).not.toContain(code);
     expect(JSON.stringify(st)).not.toContain(code);

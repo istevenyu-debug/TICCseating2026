@@ -212,11 +212,14 @@ export const preorder = pgTable('preorder', {
   confirmedBy: text('confirmed_by'),
   seenAt: timestamp('seen_at', { withTimezone: true }),
   viewToken: text('view_token'), // 訂購人裝置用來查進度、收推播的隨機碼
+  source: text('source').notNull().default('web'), // web 本站預購頁／form Google 表單
+  formId: text('form_id'), // Google 表單回覆編號（避免重複匯入）
+  answers: jsonb('answers').$type<{ q: string; a: string }[]>().notNull().default([]), // Google 表單原始回答
   // 電子發票開立方式：member 綠界會員載具（Email）／mobile 手機條碼／cert 自然人憑證／donate 捐贈／company 公司統編
   invType: text('inv_type').notNull().default('member'),
   invCode: text('inv_code').notNull().default(''), // 手機條碼、憑證號碼、愛心碼或統編
   invTitle: text('inv_title').notNull().default(''), // 公司抬頭
-}, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no), viewToken: uniqueIndex('preorder_view_token_idx').on(t.viewToken) }));
+}, (t) => ({ no: uniqueIndex('preorder_no_idx').on(t.no), viewToken: uniqueIndex('preorder_view_token_idx').on(t.viewToken), formId: uniqueIndex('preorder_form_id_idx').on(t.formId) }));
 
 /** 驗票門口：每個門一條驗票連結（token），工作人員用手機打開即可掃描，可停用 */
 export const gate = pgTable('gate', {

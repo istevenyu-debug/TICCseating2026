@@ -61,7 +61,7 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('notify.test'), channel: z.enum(['sms', 'email']), to: z.string().max(200) }),
   z.object({ action: z.literal('notify.resend'), id }),
-  z.object({ action: z.literal('preorder.confirm'), id }),
+  z.object({ action: z.literal('preorder.confirm'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30).optional() }),
   z.object({ action: z.literal('vip.create'), name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
     seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional() }),
   z.object({ action: z.literal('vip.seats'), id, seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60) }),
@@ -172,8 +172,9 @@ export async function POST(req: Request) {
       case 'notify.test': return sendTest(db, a.channel, a.to);
       case 'notify.resend': return resendNotification(db, who, a.id);
       case 'preorder.confirm': {
-        const r = await confirmPreorder(db, who, a.id, originOf(req));
+        const r = await confirmPreorder(db, who, a.id, originOf(req), new Date(), a.items);
         const delivery = await deliver(db, { linkId: r.linkId, templates: ['invite', 'preorder_link'] });
+        if (r.fromForm) return { ...r, delivery, invoice: null }; // 表單來的：發票等賣完再處理
         // 收款開發票：建立待開發票並由電腦核對；「即開」且沒有異常就立刻開立
         const inv = await createForPreorder(db, a.id, who);
         return { ...r, delivery, invoice: inv && { status: inv.status, invoiceNo: inv.invoiceNo, checks: inv.checks, error: inv.error } };

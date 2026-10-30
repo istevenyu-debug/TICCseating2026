@@ -10,6 +10,7 @@ import { bundleIndex } from '@/lib/bundle';
 import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
 import { INV_TYPES } from '@/lib/invoiceRules';
+import { appsScript } from '@/lib/formScript';
 
 type NotifyPublic = {
   email: { host: string; port: number; user: string; fromName: string; passSet: boolean; ready: boolean };
@@ -17,13 +18,13 @@ type NotifyPublic = {
 };
 type Notice = { id: number; orderId: number | null; channel: string; template: string; recipient: string; content: string; status: string; error: string | null; attempts: number; createdAt: string; sentAt: string | null; sendAfter: string | null };
 type Pre = { id: number; no: string; items: { kind: string; id: number; name: string; price: number; qty: number }[]; amount: number; name: string; phone: string; email: string;
-  paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null; invoice: string; invoiceState: { status: string; invoiceNo: string; checks: number } | null };
+  paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null; invoice: string; source: string; answers: { q: string; a: string }[]; invType: string; invTitle: string; invCode: string; invoiceState: { status: string; invoiceNo: string; checks: number } | null };
 type Gate = { id: number; name: string; token: string; active: boolean; count: number };
 type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -48,8 +49,10 @@ type Order = State['orders'][number];
 type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates' | 'einv' | 'vip';
 
 const TABS: [Tab, string][] = [
-  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單（收款）'],
-  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'], ['einv', '十、電子發票'], ['vip', '十一、招待'],
+  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、表單／收款'],
+  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
+  // 十、電子發票、十一、招待：先收起來（賣完再開發票）；要用時把下一行加回來
+  // ['einv', '十、電子發票'], ['vip', '十一、招待'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -1243,6 +1246,70 @@ function Presets({ sel, setSel, confirmChange }: { sel: Set<string>; setSel: (s:
 }
 
 /* ---------- 訂單 ---------- */
+/** Google 表單連接：Apps Script 安裝步驟 */
+function FormCard() {
+  const { st, setMsg } = useAdmin();
+  const url = `${st.form.base}/api/form-in?key=${st.form.key}`;
+  const n = st.preorders.filter((p) => p.source === 'form').length;
+  const wait = st.preorders.filter((p) => p.source === 'form' && p.status === 'submitted').length;
+  return (
+    <div className="card">
+      <h2>Google 表單報名 <span className="small muted">已收到 {n} 筆，待確認 {wait} 筆</span></h2>
+      <p className="small" style={{ marginTop: 0 }}>老闆的 Google 表單每有人送出（以及每 5 分鐘），會自動出現在下面「待確認」。
+        跟對方確認好款項後，點那一筆 → <b>選他可以劃的內容與數量</b> → 按「確認收訖」→ 再按一次，系統就把劃位連結寄到他填的 Email。</p>
+      <details>
+        <summary style={{ cursor: 'pointer' }}><b>第一次設定（只做一次，約 3 分鐘）</b>{n > 0 && <span className="small muted">　已連接完成</span>}</summary>
+        <ol className="small" style={{ lineHeight: 1.9 }}>
+          <li>用<b>能編輯這份表單的 Google 帳號</b>打開表單的編輯畫面（不是填寫畫面）。</li>
+          <li>右上角「⋮」→「<b>Apps Script</b>」（或「指令碼編輯器」），會開一個程式頁面。</li>
+          <li>把裡面原有的字全部刪掉，按下面「複製程式碼」，貼上，按上方的磁碟圖示儲存。</li>
+          <li>上方函式選單選「<b>install</b>」→ 按「<b>執行</b>」→ 跳出授權時選你的帳號 →「進階」→「前往（不安全）」→「允許」。<br />
+            （這是你自己的程式，Google 一律這樣提醒，是正常的。）</li>
+          <li>回到這裡重新整理，已經填過表單的人會全部出現在下面。</li>
+        </ol>
+        <div className="row">
+          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(appsScript(url)).then(() => setMsg({ kind: 'ok', text: '已複製程式碼，貼到 Apps Script' }), () => setMsg({ kind: 'err', text: '無法複製，請手動選取下面的程式碼' }))}>複製程式碼</button>
+        </div>
+        <textarea readOnly value={appsScript(url)} rows={6} className="mono small" style={{ width: '100%', marginTop: 8 }} onFocus={(e) => e.currentTarget.select()} />
+        <p className="small muted" style={{ marginBottom: 0 }}>程式碼裡的網址含密碼，請只貼在表單的 Apps Script，不要轉傳。</p>
+      </details>
+    </div>
+  );
+}
+
+/** 表單來的訂單：確認收訖時選內容與數量（按兩次才送出） */
+function FormConfirm({ p, onDone }: { p: Pre; onDone: (r: { code: string; email: string; delivery?: Delivery }) => void }) {
+  const { st, act, busy, sure, confirm2, setMsg } = useAdmin();
+  const [qty, setQty] = useState<Record<string, string>>({});
+  const items = st.preMenu.map((m) => ({ m, n: Math.max(0, parseInt(qty[`${m.kind}${m.id}`] || '0') || 0) })).filter((x) => x.n > 0);
+  const total = items.reduce((a, x) => a + x.m.price * x.n, 0);
+  const text = items.map((x) => `${x.m.name} × ${x.n}`).join('、');
+  const key = `fc${p.id}`;
+  return (
+    <div style={{ width: '100%' }}>
+      <div className="small" style={{ marginBottom: 6 }}><b>他可以劃的內容與數量</b>（依你們確認的款項）</div>
+      {!st.preMenu.length && <div className="note err">還沒有可選的項目：請先到「二、價格設定」發布組合票或票種。</div>}
+      <div className="fields">
+        {st.preMenu.map((m) => (
+          <label key={`${m.kind}${m.id}`} className="f">{m.name}<span className="small muted">　{money(m.price)}／{m.unit}・{m.desc}</span>
+            <input inputMode="numeric" value={qty[`${m.kind}${m.id}`] ?? ''} placeholder="0"
+              onChange={(e) => setQty({ ...qty, [`${m.kind}${m.id}`]: e.target.value.replace(/\D/g, '').slice(0, 3) })} /></label>
+        ))}
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn pri" disabled={busy || !items.length} onClick={() => {
+          if (!items.length) { setMsg({ kind: 'err', text: '請先填數量' }); return; }
+          confirm2(key, async () => {
+            const r = await act({ action: 'preorder.confirm', id: p.id, items: items.map((x) => ({ kind: x.m.kind, id: x.m.id, qty: x.n })) }) as { code: string; email: string; delivery?: Delivery } | null;
+            if (r) onDone(r);
+          });
+        }}>{sure === key ? `再按一次：${text}，寄出劃位連結` : '確認收訖，寄出劃位連結'}</button>
+        {items.length > 0 && <span className="small">{text}・合計 {money(total)}</span>}
+      </div>
+    </div>
+  );
+}
+
 const PRE_STATUS: Record<string, string> = { submitted: '待確認收訖', confirmed: '已收訖・已寄連結', cancelled: '已取消' };
 
 function Preorders() {
@@ -1258,21 +1325,16 @@ function Preorders() {
   const open = (p: Pre) => { setOpenId(openId === p.id ? null : p.id); if (p.isNew) act({ action: 'preorder.seen', id: p.id }); };
   return (
     <div className="pstack">
-      <div className="card">
-        <h2>預購單 <span className="small muted">公開網址：選購、匯款、回填資料（不劃位）；買方送出後成為訂單，確認收訖後自動寄出劃位連結</span></h2>
-        <label className="switch"><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
-          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放預購單</label>
-        <label className="switch" style={{ marginTop: 6 }}><input type="checkbox" checked={st.pushLink} disabled={busy}
-          onChange={(e) => act({ action: 'preorder.pushLink', on: e.target.checked }, e.target.checked ? '確認收訖後，劃位連結也會送到訂購人手機與預購頁' : '劃位連結只用 Email 寄送')} />
-          確認收訖後，劃位連結<b>也送到訂購人手機</b>（推播＋預購頁「開始劃位」按鈕；只有送出訂單的那台裝置看得到）。Email 照常寄出。</label>
+      <FormCard />
+      <details className="card">
+        <summary style={{ cursor: 'pointer' }}><b>本站預購單（/buy）</b> <span className="small muted">目前改用 Google 表單，這裡通常保持關閉</span></summary>
+        <label className="switch" style={{ marginTop: 8 }}><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
+          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放本站預購單</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
-          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製預購單網址 ${buyUrl}` }), () => undefined)}>複製預購單網址</button>
           <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟預購單</a>
         </div>
-        <p className="small muted" style={{ marginBottom: 0 }}>預購單顯示已發布的組合票（每組）與單張票種，以及「時間、限制與匯款帳戶」裡的匯款帳戶，請先確認帳戶正確。訂購不佔名額、不會自動取消。</p>
-        {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，預購單會顯示空白，請到「二、價格設定」填寫。</div>}
-      </div>
+      </details>
 
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -1292,15 +1354,18 @@ function Preorders() {
                   <td className="mono">{p.no}{p.isNew && <span className="badge">新</span>}</td>
                   <td className="small">{tw(p.createdAt)}</td>
                   <td>{p.name}<br /><span className="mono small muted">{p.phone}</span></td>
-                  <td className="small">{p.items.map((i) => `${i.name} × ${i.qty}`).join('、')}</td>
-                  <td className="mono">{money(p.amount)}</td>
-                  <td className="mono">{money(p.paidAmount)}{p.paidAmount !== p.amount && <div className="small" style={{ color: 'var(--red)' }}>與合計不符</div>}<div className="small muted">{p.last5}</div></td>
+                  <td className="small">{p.source === 'form' && <span className="pill" style={{ marginRight: 4 }}>表單</span>}{p.items.length ? p.items.map((i) => `${i.name} × ${i.qty}`).join('、') : <span className="muted">確認收訖時選</span>}</td>
+                  <td className="mono">{p.items.length ? money(p.amount) : '—'}</td>
+                  {p.source === 'form'
+                    ? <td className="small" style={{ maxWidth: 220 }}>{p.last5 || '—'}</td>
+                    : <td className="mono">{money(p.paidAmount)}{p.paidAmount !== p.amount && <div className="small" style={{ color: 'var(--red)' }}>與合計不符</div>}<div className="small muted">{p.last5}</div></td>}
                   <td><span className={`pill ${p.status === 'confirmed' ? 'p-paid' : p.status === 'submitted' ? 'p-pending' : 'p-cancelled'}`}>{PRE_STATUS[p.status]}</span></td>
                 </tr>
                 {openId === p.id && (
                   <tr key={`d${p.id}`}><td colSpan={7}>
                     <div className="bank">
-                      <span className="muted">Email</span><span className="mono">{p.email}</span>
+                      <span className="muted">Email</span><span className="mono">{p.email || <b className="err-text">沒有 Email：確認後請複製劃位連結傳給他</b>}</span>
+                      {p.source === 'form' && p.answers.map((x, i) => <Fragment key={i}><span className="muted small">{x.q.length > 24 ? `${x.q.slice(0, 24)}…` : x.q}</span><span style={{ whiteSpace: 'pre-wrap' }}>{x.a}</span></Fragment>)}
                       <span className="muted">內容</span><span>{p.items.map((i) => `${i.name} × ${i.qty}（${money(i.price * i.qty)}）`).join('、')}</span>
                       {st.einvoice.enabled && <><span className="muted">發票</span><span>{p.invoice}{p.invoiceState && <>・<b>{INV_STATUS[p.invoiceState.status]}</b>{p.invoiceState.invoiceNo && ` ${p.invoiceState.invoiceNo}`}{p.invoiceState.status !== 'issued' && p.invoiceState.checks > 0 && <span className="err-text">（{p.invoiceState.checks} 項異常，請到「十、電子發票」）</span>}</>}</span></>}
                       {p.confirmedAt && <><span className="muted">確認</span><span>{tw(p.confirmedAt)}・{p.confirmedBy}</span></>}
@@ -1309,7 +1374,13 @@ function Preorders() {
                     </div>
                     <div className="row" style={{ marginTop: 10 }}>
                       {p.status === 'submitted' && !st.notify.email.ready && <div className="note err" style={{ width: '100%' }}>尚未設定 Gmail：確認收訖後劃位連結<b>不會寄出</b>，需手動複製傳給對方。請先到「八、通知設定」設定。</div>}
-                      {p.status === 'submitted' && <>
+                      {p.status === 'submitted' && !p.items.length && <FormConfirm p={p} onDone={(r) => {
+                        const d = deliveryText(r.delivery);
+                        setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認收訖，劃位連結 ${base}/t/${r.code}${r.email ? (d.bad ? `（Email：${r.email}）` : `，已寄到 ${r.email}`) : '（沒有 Email，請按「複製劃位連結」傳給他）'}。${d.text}` });
+                      }} />}
+                      {p.status === 'submitted' && !p.items.length && <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消 ${p.no}（表單來的不寄信）`)) setOpenId(null); })}>
+                        {sure === `pc${p.id}` ? '再按一次確認取消' : '取消（重複或無效）'}</button>}
+                      {p.status === 'submitted' && p.items.length > 0 && <>
                         <button className="btn pri" disabled={busy} onClick={async () => {
                           const r = await act({ action: 'preorder.confirm', id: p.id }) as { code: string; delivery?: Delivery; invoice?: { status: string; invoiceNo: string; checks: string[]; error: string | null } | null } | null;
                           if (r) {

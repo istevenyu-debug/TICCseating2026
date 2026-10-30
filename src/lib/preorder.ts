@@ -121,6 +121,7 @@ export async function listPreorders(db: Db) {
   const invs = rows.length ? await db.select().from(t.invoice).where(inArray(t.invoice.preorderId, rows.map((r) => r.id))).orderBy(t.invoice.id) : [];
   return rows.map((r) => ({
     id: r.id, no: r.no, items: r.items, amount: r.amount, name: r.name, phone: r.phone, email: r.email, paidAmount: r.paidAmount, last5: r.last5,
+    source: r.source, answers: r.answers, invType: r.invType, invTitle: r.invTitle, invCode: r.invCode,
     status: r.status, note: r.note, createdAt: r.createdAt.toISOString(), confirmedAt: r.confirmedAt?.toISOString() ?? null, confirmedBy: r.confirmedBy,
     isNew: r.status === 'submitted' && !r.seenAt, linkCode: links.find((l) => l.id === r.linkId)?.code ?? null,
     invoice: invDesc(r.invType, r.invCode, r.invTitle, r.email),
@@ -129,32 +130,52 @@ export async function listPreorders(db: Db) {
 }
 
 /** 確認收訖：建立不限張數的專屬劃位連結（有效到演出當天），寄到 Email；有手機也寄簡訊 */
-export async function confirmPreorder(db: Db, actor: string, id: number, base?: string, now = new Date()) {
+export async function confirmPreorder(db: Db, actor: string, id: number, base?: string, now = new Date(), pickItems?: { kind: 'combo' | 'zone'; id: number; qty: number }[]) {
   const ev = await currentEvent(db);
-  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
-  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
-  if (po.status !== 'submitted') throw new BookingError('INVALID', po.status === 'confirmed' ? '這張訂單已確認過了' : '這張訂單已取消');
+  const [po0] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po0) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po0.status !== 'submitted') throw new BookingError('INVALID', po0.status === 'confirmed' ? '這張訂單已確認過了' : '這張訂單已取消');
+  let po = po0;
+  // Google 表單來的沒有數量：由後台在確認收訖時選內容與數量
+  if (!po.items.length) {
+    const menu = await preorderMenu(db);
+    const items: t.PreorderItem[] = [];
+    for (const it of (pickItems ?? []).filter((x) => x.qty > 0)) {
+      const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
+      if (!m) throw new BookingError('INVALID', '選擇的項目已變更，請重新整理頁面。');
+      items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
+    }
+    if (!items.length) throw new BookingError('INVALID', '請先選擇他可以劃的內容與數量');
+    const amount = items.reduce((a, x) => a + x.price * x.qty, 0);
+    [po] = await db.update(t.preorder).set({ items, amount }).where(eq(t.preorder.id, id)).returning();
+  }
+  const fromForm = po.source === 'form';
   const expiresAt = new Date(`${ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })}T23:59:59+08:00`);
   const link = await createInviteLink(db, actor, {
     name: po.name, phone: po.phone, quota: 0, expiresAt,
-    note: `訂單 ${po.no}・${itemsText(po.items)}・匯款 NT$${po.paidAmount.toLocaleString('en-US')}・末五碼 ${po.last5}`,
+    note: fromForm ? `表單 ${po.no}・${itemsText(po.items)}・匯款 ${po.last5}`.slice(0, 300)
+      : `訂單 ${po.no}・${itemsText(po.items)}・匯款 NT$${po.paidAmount.toLocaleString('en-US')}・末五碼 ${po.last5}`,
   }, base);
   const url = linkUrl(link.code, base);
   await db.update(t.preorder).set({ status: 'confirmed', linkId: link.id, confirmedAt: now, confirmedBy: actor, seenAt: po.seenAt ?? now }).where(eq(t.preorder.id, id));
   // 訂購人送出訂單時開了手機通知：只通知「已收款，請查看 Email」，劃位連結只用 Email 寄送
   await db.update(t.pushSub).set({ linkId: link.id }).where(eq(t.pushSub.preorderId, po.id));
-  await db.insert(t.notification).values({
+  if (!fromForm) await db.insert(t.notification).values({
     linkId: link.id, channel: 'push', template: 'preorder_link', recipient: '訂購人手機',
     content: (await getPushLink(db))
       ? `已確認收到您的款項（訂單 ${po.no}），請點這則通知開始選位。劃位連結也已寄到您的 Email（${maskEmail(po.email)}）。`
       : `已確認收到您的款項（訂單 ${po.no}）。劃位連結已寄到您的 Email（${maskEmail(po.email)}），請查看信箱，也看看垃圾郵件匣。`,
   });
-  await db.insert(t.notification).values({
+  if (fromForm && po.email) await db.insert(t.notification).values({
+    linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
+    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項（${itemsText(po.items)}）。請點以下專屬連結選位並填寫持票人資料：${url}　連結有效至演出當天，請勿轉傳他人。`,
+  });
+  if (!fromForm) await db.insert(t.notification).values({
     linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
     content: `【${ev.name}】${po.name} 您好，已確認收到您的款項 NT$${po.paidAmount.toLocaleString('en-US')}（訂單 ${po.no}：${itemsText(po.items)}）。請點以下專屬連結選位並填寫持票人資料：${url}　連結有效至演出當天，請勿轉傳他人。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_confirm', target: `preorder:${id}`, detail: JSON.stringify({ link: link.code }) });
-  return { code: link.code, linkId: link.id };
+  return { code: link.code, linkId: link.id, fromForm, email: po.email };
 }
 
 export async function cancelPreorder(db: Db, actor: string, id: number, reason = '') {
@@ -163,7 +184,7 @@ export async function cancelPreorder(db: Db, actor: string, id: number, reason =
   if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
   if (po.status !== 'submitted') throw new BookingError('INVALID', '只有待確認的訂單可以取消');
   await db.update(t.preorder).set({ status: 'cancelled', note: reason, seenAt: po.seenAt ?? new Date() }).where(eq(t.preorder.id, id));
-  await db.insert(t.notification).values({
+  if (po.source !== 'form') await db.insert(t.notification).values({
     channel: 'email', template: 'preorder_cancelled', recipient: po.email,
     content: `【${ev.name}】${po.name} 您好，您的訂單 ${po.no} 已取消${reason ? `（${reason}）` : ''}。如有疑問或已匯款，請聯繫主辦方。`,
   });
@@ -177,7 +198,7 @@ export async function markPreorderSeen(db: Db, id: number) {
 /** 後台開關：劃位連結是否也送到訂購人手機（推播＋預購頁「開始劃位」按鈕）。預設開啟 */
 export async function getPushLink(db: Db) {
   const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'preorder.pushLink'));
-  return r ? r.value === '1' : true;
+  void r; return false; // 「推到手機＋開始劃位按鈕」已停用：劃位連結只用 Email 寄出
 }
 export async function setPushLink(db: Db, actor: string, on: boolean) {
   const value = on ? '1' : '0';
