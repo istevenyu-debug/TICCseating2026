@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setPushLink, submitPreorder } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineUrl, setPushLink, submitPreorder } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -46,6 +46,15 @@ describe('公開預購', () => {
     expect(n).toHaveLength(2);
     expect(n[0].recipient).toBe('lin@example.com');
     expect(await db.select().from(t.orders)).toHaveLength(0);
+  });
+
+  it('設定 LINE 群連結後：沒勾「已加入 LINE 群」不能送出', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await setLineUrl(db, 'admin', 'https://line.me/R/ti/g/abc');
+    expect((await preorderMenu(db)).lineUrl).toBe('https://line.me/R/ti/g/abc');
+    await expect(submitPreorder(db, body())).rejects.toThrow('LINE');
+    expect((await submitPreorder(db, body({ lineJoined: true }))).no).toBe('P0001');
+    await expect(setLineUrl(db, 'admin', 'line.me/xx')).rejects.toThrow('https');
   });
 
   it('欄位檢查：末五碼、手機、Email、未選購', async () => {

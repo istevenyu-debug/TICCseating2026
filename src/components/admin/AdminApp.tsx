@@ -24,7 +24,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; lineUrl: string; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1277,6 +1277,22 @@ function FormCard() {
   );
 }
 
+/** 預購單的 LINE 群連結：填了就必須先按「加入 LINE 群」並勾選已加入才能送出 */
+function LineUrlSetting() {
+  const { st, act, busy } = useAdmin();
+  const [v, setV] = useState(st.lineUrl);
+  return (
+    <div style={{ marginTop: 12 }}>
+      <label className="f">LINE 群邀請連結<span className="small muted">（填了以後，買方必須先按「加入 LINE 群」、再勾「我已加入」才能送出；留空＝不要求）</span>
+        <input value={v} placeholder="https://line.me/R/ti/g/…" onChange={(e) => setV(e.target.value)} /></label>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="btn pri" disabled={busy || v.trim() === st.lineUrl} onClick={() => act({ action: 'preorder.lineUrl', url: v.trim() }, v.trim() ? '已設定 LINE 群連結：預購單必須先加入 LINE 群才能送出' : '已移除 LINE 群連結')}>儲存</button>
+        {st.lineUrl && <a className="btn" href={st.lineUrl} target="_blank" rel="noreferrer">測試連結</a>}
+      </div>
+    </div>
+  );
+}
+
 /** 表單來的訂單：確認收訖時選內容與數量（按兩次才送出） */
 function FormConfirm({ p, onDone }: { p: Pre; onDone: (r: { code: string; email: string; delivery?: Delivery }) => void }) {
   const { st, act, busy, sure, confirm2, setMsg } = useAdmin();
@@ -1326,14 +1342,16 @@ function Preorders() {
   return (
     <div className="pstack">
       <FormCard />
-      <details className="card">
-        <summary style={{ cursor: 'pointer' }}><b>本站預購單（/buy）</b> <span className="small muted">目前改用 Google 表單，這裡通常保持關閉</span></summary>
+      <details className="card" open={st.event.preorderOpen}>
+        <summary style={{ cursor: 'pointer' }}><b>本站預購單（/buy）</b> <span className="small muted">{st.event.preorderOpen ? '開放中' : '關閉中：/buy 會轉到老闆的 Google 表單'}</span></summary>
         <label className="switch" style={{ marginTop: 8 }}><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
           onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放本站預購單</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
+          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製預購單網址 ${buyUrl}` }), () => undefined)}>複製預購單網址</button>
           <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟預購單</a>
         </div>
+        <LineUrlSetting />
       </details>
 
       <div className="card">

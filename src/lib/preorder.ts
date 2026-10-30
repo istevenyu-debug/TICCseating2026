@@ -39,6 +39,7 @@ export async function preorderMenu(db: Db) {
     open: ev.preorderOpen && items.length > 0,
     mailFrom: (await (await import('./notify')).getNotifyConfig(db)).email?.user ?? '',
     pushLink: await getPushLink(db),
+    lineUrl: await getLineUrl(db), // 有設定時：必須先按「加入 LINE 群」並勾選已加入才能送出
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
   };
@@ -55,6 +56,7 @@ const submitBody = z.object({
   invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']).default('member'),
   invCode: z.string().trim().toUpperCase().max(20).default(''),
   invTitle: z.string().trim().max(60).default(''),
+  lineJoined: z.boolean().optional().default(false),
 });
 
 const recent = new Map<string, number[]>();
@@ -77,6 +79,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選購一項');
+  if (menu.lineUrl && !p.data.lineJoined) throw new BookingError('INVALID', '請先加入 LINE 群，並勾選「我已加入 LINE 群」');
   const inv = menu.invoice ? { invType: p.data.invType, invCode: p.data.invType === 'member' ? '' : p.data.invCode, invTitle: p.data.invType === 'company' ? p.data.invTitle : '' }
     : { invType: 'member' as const, invCode: '', invTitle: '' };
   const ip2 = invProblem(inv.invType, inv.invCode, inv.invTitle);
@@ -196,6 +199,17 @@ export async function markPreorderSeen(db: Db, id: number) {
 }
 
 /** 後台開關：劃位連結是否也送到訂購人手機（推播＋預購頁「開始劃位」按鈕）。預設開啟 */
+export async function getLineUrl(db: Db) {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'preorder.lineUrl'));
+  return r?.value ?? '';
+}
+export async function setLineUrl(db: Db, actor: string, url: string) {
+  const value = url.trim();
+  if (value && !/^https:\/\/\S+$/.test(value)) throw new BookingError('INVALID', 'LINE 群連結應為 https:// 開頭的網址');
+  await db.insert(t.appSetting).values({ key: 'preorder.lineUrl', value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_line_url', target: 'app_setting', detail: value });
+}
+
 export async function getPushLink(db: Db) {
   const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'preorder.pushLink'));
   void r; return false; // 「推到手機＋開始劃位按鈕」已停用：劃位連結只用 Email 寄出

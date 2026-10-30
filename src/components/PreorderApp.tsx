@@ -9,6 +9,7 @@ type Menu = {
   open: boolean;
   mailFrom: string;
   pushLink: boolean;
+  lineUrl: string;
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
   items: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[];
@@ -74,7 +75,8 @@ export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [err, setErr] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
-  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', agree: false });
+  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', agree: false, line: false });
+  const [lineOpened, setLineOpened] = useState(false);
   const [paidTouched, setPaidTouched] = useState(false);
   const [inv, setInv] = useState<{ type: InvType; code: string; title: string }>({ type: 'member', code: '', title: '' });
   const [review, setReview] = useState(false);
@@ -119,13 +121,14 @@ export default function PreorderApp() {
     if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
     if (menu!.invoice) { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
+    if (menu!.lineUrl && !f.line) return bad(lineOpened ? '請勾選「我已加入 LINE 群」' : '請先按「加入 LINE 群」，加入後再勾選「我已加入 LINE 群」', 'p-line');
     setErr(''); setReview(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   async function send() {
     setBusy(true);
     const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
-      name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree,
+      name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree, lineJoined: f.line,
       ...(menu!.invoice ? { invType: inv.type, invCode: inv.code.trim().toUpperCase(), invTitle: inv.title.trim() } : {}),
     });
     setBusy(false);
@@ -259,6 +262,18 @@ export default function PreorderApp() {
               <input id="p-agree" type="checkbox" checked={f.agree} onChange={(e) => upd({ agree: e.target.checked })} />
               我同意主辦方為售票、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
             </label>
+            {menu.lineUrl && (
+              <div className="note" style={{ marginTop: 12 }}>
+                <b>加入 LINE 群（必做）</b>
+                <p className="small" style={{ margin: '4px 0 8px' }}>活動通知都在 LINE 群，請先加入才能送出。</p>
+                <a className="btn pri" href={menu.lineUrl} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
+                  onClick={() => { setLineOpened(true); setErr(''); }}>① 加入 LINE 群</a>
+                <label className="check" style={{ marginTop: 8, opacity: lineOpened ? 1 : 0.5 }}>
+                  <input id="p-line" type="checkbox" checked={f.line} disabled={!lineOpened} onChange={(e) => upd({ line: e.target.checked })} />
+                  <span>② 我已加入 LINE 群{!lineOpened && <><br /><span className="small muted">請先按上面的「加入 LINE 群」</span></>}</span>
+                </label>
+              </div>
+            )}
             {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
             <button className="btn pri" type="submit" style={{ width: '100%', marginTop: 12 }}>下一步：確認資料</button>
           </div>
