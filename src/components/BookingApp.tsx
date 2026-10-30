@@ -316,6 +316,31 @@ export default function BookingApp({ code }: { code: string }) {
           </div>
         );
       })()}
+      {(() => {
+        // 劃位步驟：一開始就說明，並標出現在在哪一步
+        const pending = st.orders.some((o) => o.status === 'pending');
+        const paidDone = st.orders.some((o) => o.status === 'paid');
+        const now = held ? (review ? 3 : 2) : pending ? 4 : paidDone ? 5 : 1;
+        const steps = [
+          ['選座位', '先選購票方式，在座位圖點選座位，按「暫存座位」（保留 20 分鐘）'],
+          ['填持票人', '填購票人資料與每張票的持票人，按「下一步：確認資料」'],
+          ['確認送出', '核對無誤，按「資料正確，確認送出」，看到綠字「劃位資料已送出」才算完成'],
+          ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知'],
+          ['收到 QR code', '入場時出示 QR code 與身分證件'],
+        ];
+        return (
+          <div className="card steps-card">
+            <h2 style={{ marginBottom: 6 }}>劃位步驟</h2>
+            <ol className="flow">
+              {steps.map(([t, d], i) => (
+                <li key={t} className={i + 1 === now ? 'on' : i + 1 < now ? 'done' : ''}>
+                  <b>{i + 1 < now ? '✓ ' : ''}{t}</b>{i + 1 === now && <span className="here">← 現在</span>}<br /><span className="small">{d}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        );
+      })()}
       {(st.orders.some((o) => o.status === 'pending') || !!held) && <PushCard endpoint={`/api/t/${encodeURIComponent(code)}/push`} api={api} compact={false} />}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
@@ -406,6 +431,7 @@ export default function BookingApp({ code }: { code: string }) {
 
               {review && (
                 <div className="review">
+                  <div className="note err" style={{ marginBottom: 8, fontWeight: 700 }}>⚠ 還沒送出！核對無誤後，請按最下面的「資料正確，確認送出」。</div>
                   <h3>請確認您的資料</h3>
                   <p className="small" style={{ margin: '0 0 8px' }}>送出後就不能自行修改。劃位成功通知與入場 QR code 會寄到下面的 Email，請確認正確。</p>
                   <div className="bank">

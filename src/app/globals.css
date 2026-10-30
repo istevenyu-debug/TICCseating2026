@@ -226,3 +226,11 @@ tr.warnrow td { background: #fff4f4; }
 /* 持票人：自動帶入說明與每列 */
 .holder-help { margin: 8px 0 10px; line-height: 1.6; }
 .holder-row { align-items: end; margin-bottom: 6px; }
+/* 購票頁：劃位步驟 */
+ol.flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; list-style: none; margin: 0; padding: 0; counter-reset: s; }
+ol.flow li { padding: 8px 10px; border-radius: 8px; background: var(--surface-2, #f2f4f8); color: var(--muted, #5b6579); line-height: 1.45; }
+ol.flow li.done { color: var(--ok); }
+ol.flow li.on { background: #223a73; color: #fff; }
+ol.flow li.on .small { color: #dfe6f7; }
+ol.flow .here { margin-left: 6px; font-size: 12px; font-weight: 700; }
+@media (max-width: 760px) { ol.flow { grid-template-columns: 1fr; } ol.flow li:not(.on) .small { display: none; } }
