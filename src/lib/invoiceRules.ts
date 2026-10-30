@@ -30,7 +30,7 @@ export function invProblem(type: string, code: string, title: string): string | 
     case 'donate': return /^\d{3,7}$/.test(c) ? null : '愛心碼應為 3–7 位數字';
     case 'company':
       if (!ubnValid(c)) return '統一編號不正確，請確認 8 位數字';
-      return title.trim() ? null : '請填寫公司抬頭';
+      return title.trim() ? null : '請填寫公司名稱';
     default: return '請選擇發票開立方式';
   }
 }

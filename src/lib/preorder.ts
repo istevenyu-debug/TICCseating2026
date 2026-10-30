@@ -81,7 +81,9 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   if (!items.length) throw new BookingError('INVALID', '請至少選購一項');
   const lineMiss = lineNeeded(menu.line, items).filter((g) => !p.data.lineJoined.includes(g.name));
   if (lineMiss.length) throw new BookingError('INVALID', `請先加入 LINE 群：${lineMiss.map((g) => g.name).join('、')}，並勾選「我已加入」`);
-  const inv = menu.invoice ? { invType: p.data.invType, invCode: p.data.invType === 'member' ? '' : p.data.invCode, invTitle: p.data.invType === 'company' ? p.data.invTitle : '' }
+  // 發票：預購單只問二聯（個人）／三聯（公司名稱＋統編）；電子發票之後由後台統一開立
+  const inv = p.data.invType === 'company' ? { invType: 'company' as const, invCode: p.data.invCode, invTitle: p.data.invTitle }
+    : menu.invoice ? { invType: p.data.invType, invCode: p.data.invType === 'member' ? '' : p.data.invCode, invTitle: '' }
     : { invType: 'member' as const, invCode: '', invTitle: '' };
   const ip2 = invProblem(inv.invType, inv.invCode, inv.invTitle);
   if (ip2) throw new BookingError('INVALID', ip2);

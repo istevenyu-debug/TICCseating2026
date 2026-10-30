@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { phoneProblem } from '@/lib/validation';
 import PushCard from './PushCard';
-import { INV_TYPES, invDesc, invProblem, type InvType } from '@/lib/invoiceRules';
+import { invProblem, type InvType } from '@/lib/invoiceRules';
 
 type Menu = {
   open: boolean;
@@ -123,7 +123,7 @@ export default function PreorderApp() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) return bad('Email 格式不正確，劃位連結會寄到這個信箱', 'p-email');
     if (!(parseInt(paid.replace(/\D/g, '')) > 0)) return bad('請填寫匯款金額', 'p-paid');
     if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
-    if (menu!.invoice) { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, 'p-inv'); }
+    { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, inv.type === 'company' && !inv.title.trim() && inv.code.trim() ? 'p-inv-title' : 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
     const miss = lineGroups.find((g) => !lineJoined.includes(g.name));
     if (miss) return bad(lineOpened.includes(miss.name) ? `請勾選「我已加入 ${miss.name}」` : `請先按「加入 ${miss.name}」，加入後再勾選「我已加入」`, `p-line-${lineGroups.indexOf(miss)}`);
@@ -134,7 +134,7 @@ export default function PreorderApp() {
     const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree, lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
-      ...(menu!.invoice ? { invType: inv.type, invCode: inv.code.trim().toUpperCase(), invTitle: inv.title.trim() } : {}),
+      invType: inv.type, invCode: inv.type === 'company' ? inv.code.trim() : '', invTitle: inv.type === 'company' ? inv.title.trim() : '',
     });
     setBusy(false);
     if (!r.ok) { setReview(false); setErr(r.message); return; }
@@ -186,7 +186,7 @@ export default function PreorderApp() {
             <span className="muted">Email</span><span className="mono"><b>{f.email.trim()}</b></span>
             <span className="muted">匯款金額</span><span className="mono">{money(parseInt(paid.replace(/\D/g, '')) || 0)}{(parseInt(paid.replace(/\D/g, '')) || 0) !== total && <b style={{ color: 'var(--red)' }}>（與合計 {money(total)} 不同）</b>}</span>
             <span className="muted">帳號末五碼</span><span className="mono">{f.last5.trim()}</span>
-            {menu.invoice && <><span className="muted">電子發票</span><span>{invDesc(inv.type, inv.code.trim().toUpperCase(), inv.title.trim(), f.email.trim())}</span></>}
+            <span className="muted">發票</span><span>{inv.type === 'company' ? `三聯：${inv.title.trim()}（統編 ${inv.code.trim()}）` : '二聯（個人）'}</span>
           </div>
           <h3>選購內容</h3>
           <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name} × {qty[key(i)]}</span><span className="mono">{money(i.price * qty[key(i)])}</span></div>)}</div>
@@ -241,28 +241,20 @@ export default function PreorderApp() {
               <label className="f">匯款金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
               <label className="f">匯款帳號末五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
             </div>
-            {menu.invoice && (
-              <div style={{ marginTop: 12 }}>
-                <h3 style={{ margin: '0 0 6px' }}>電子發票</h3>
-                <p className="small muted" style={{ margin: '0 0 6px' }}>一筆訂單開立一張發票，恕不拆開；需要分開開立的，請分開下單。</p>
-                {INV_TYPES.map((x) => (
-                  <label key={x.id} className="check" style={{ marginBottom: 4 }}>
-                    <input type="radio" name="inv" checked={inv.type === x.id} onChange={() => { setInv({ type: x.id, code: '', title: '' }); setErr(''); }} />
-                    <span>{x.name}<br /><span className="small muted">{x.hint}</span></span>
-                  </label>
-                ))}
-                {inv.type !== 'member' && (
-                  <div className="fields" style={{ marginTop: 6 }}>
-                    <label className="f">{inv.type === 'mobile' ? '手機條碼' : inv.type === 'cert' ? '自然人憑證號碼' : inv.type === 'donate' ? '愛心碼' : '統一編號'}
-                      <input id="p-inv" value={inv.code} maxLength={inv.type === 'cert' ? 16 : 8} autoCapitalize="characters"
-                        inputMode={inv.type === 'donate' || inv.type === 'company' ? 'numeric' : 'text'}
-                        placeholder={inv.type === 'mobile' ? '/ABC1234' : inv.type === 'cert' ? 'AB12345678901234' : inv.type === 'donate' ? '例：168' : '8 位數字'}
-                        onChange={(e) => { setInv({ ...inv, code: e.target.value.toUpperCase() }); setErr(''); }} /></label>
-                    {inv.type === 'company' && <label className="f">公司抬頭<input value={inv.title} onChange={(e) => { setInv({ ...inv, title: e.target.value }); setErr(''); }} /></label>}
-                  </div>
-                )}
+            <div style={{ marginTop: 12 }}>
+              <h3 style={{ margin: '0 0 6px' }}>發票</h3>
+              <div className="row">
+                <label className="check"><input type="radio" name="inv" checked={inv.type !== 'company'} onChange={() => { setInv({ type: 'member', code: '', title: '' }); setErr(''); }} />二聯（個人）</label>
+                <label className="check"><input type="radio" name="inv" checked={inv.type === 'company'} onChange={() => { setInv({ type: 'company', code: '', title: '' }); setErr(''); }} />三聯（公司）</label>
               </div>
-            )}
+              {inv.type === 'company' && (
+                <div className="fields" style={{ marginTop: 6 }}>
+                  <label className="f">公司名稱<input id="p-inv-title" value={inv.title} maxLength={60} onChange={(e) => { setInv({ ...inv, title: e.target.value }); setErr(''); }} /></label>
+                  <label className="f">統一編號<input id="p-inv" value={inv.code} maxLength={8} inputMode="numeric" placeholder="8 位數字"
+                    onChange={(e) => { setInv({ ...inv, code: e.target.value.replace(/\D/g, '') }); setErr(''); }} /></label>
+                </div>
+              )}
+            </div>
             <label className="check" style={{ marginTop: 10 }}>
               <input id="p-agree" type="checkbox" checked={f.agree} onChange={(e) => upd({ agree: e.target.checked })} />
               我同意主辦方為售票、對帳及實名入場核對之目的，蒐集與處理上述個人資料。

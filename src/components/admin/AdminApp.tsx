@@ -1413,6 +1413,7 @@ function Preorders() {
                       <span className="muted">Email</span><span className="mono">{p.email || <b className="err-text">沒有 Email：確認後請複製劃位連結傳給他</b>}</span>
                       {p.source === 'form' && p.answers.map((x, i) => <Fragment key={i}><span className="muted small">{x.q.length > 24 ? `${x.q.slice(0, 24)}…` : x.q}</span><span style={{ whiteSpace: 'pre-wrap' }}>{x.a}</span></Fragment>)}
                       <span className="muted">內容</span><span>{p.items.map((i) => `${i.name} × ${i.qty}（${money(i.price * i.qty)}）`).join('、')}</span>
+                      {p.source !== 'form' && !st.einvoice.enabled && <><span className="muted">發票</span><span>{p.invType === 'company' ? `三聯：${p.invTitle}（統編 ${p.invCode}）` : '二聯（個人）'}</span></>}
                       {st.einvoice.enabled && <><span className="muted">發票</span><span>{p.invoice}{p.invoiceState && <>・<b>{INV_STATUS[p.invoiceState.status]}</b>{p.invoiceState.invoiceNo && ` ${p.invoiceState.invoiceNo}`}{p.invoiceState.status !== 'issued' && p.invoiceState.checks > 0 && <span className="err-text">（{p.invoiceState.checks} 項異常，請到「十、電子發票」）</span>}</>}</span></>}
                       {p.confirmedAt && <><span className="muted">確認</span><span>{tw(p.confirmedAt)}・{p.confirmedBy}</span></>}
                       {p.linkCode && <><span className="muted">劃位連結</span><span className="mono">{base}/t/{p.linkCode}</span></>}

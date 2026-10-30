@@ -181,3 +181,15 @@ describe('收款後劃位連結送到訂購人手機（也寄 Email）', () => {
     expect(JSON.stringify(st)).not.toContain(code);
   });
 });
+
+describe('預購單發票：二聯／三聯（電子發票未開也記下來，之後再開）', () => {
+  it('三聯要公司名稱與正確統編；二聯不用', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await expect(submitPreorder(db, body({ invType: 'company', invCode: '12345678', invTitle: '好公司' }), 'ip-inv')).rejects.toThrow('統一編號');
+    await expect(submitPreorder(db, body({ invType: 'company', invCode: '22099131', invTitle: '' }), 'ip-inv')).rejects.toThrow('公司名稱');
+    await submitPreorder(db, body({ invType: 'company', invCode: '22099131', invTitle: '好公司' }), 'ip-inv');
+    await submitPreorder(db, body(), 'ip-inv');
+    const rows = await db.select().from(t.preorder).orderBy(t.preorder.id);
+    expect(rows.map((r) => [r.invType, r.invCode, r.invTitle])).toEqual([['company', '22099131', '好公司'], ['member', '', '']]);
+  });
+});

@@ -31,7 +31,7 @@ describe('綠界加解密與格式', () => {
     expect(invProblem('mobile', 'ABC1234', '')).toContain('手機條碼');
     expect(invProblem('cert', 'AB12345678901234', '')).toBeNull();
     expect(invProblem('donate', '12', '')).toContain('愛心碼');
-    expect(invProblem('company', '22099131', '')).toContain('抬頭');
+    expect(invProblem('company', '22099131', '')).toContain('公司名稱');
   });
 });
 
