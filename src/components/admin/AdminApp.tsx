@@ -24,7 +24,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; lineUrl: string; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1277,18 +1277,46 @@ function FormCard() {
   );
 }
 
-/** 預購單的 LINE 群連結：填了就必須先按「加入 LINE 群」並勾選已加入才能送出 */
+/** 預購單的 LINE 群：可設多個群，每個選購項目指定要加入哪個群 */
 function LineUrlSetting() {
-  const { st, act, busy } = useAdmin();
-  const [v, setV] = useState(st.lineUrl);
+  const { st, act, busy, setMsg } = useAdmin();
+  const [groups, setGroups] = useState(st.line.groups.length ? st.line.groups : [{ name: '功德群', url: '' }, { name: '金群', url: '' }]);
+  const [map, setMap] = useState<Record<string, number>>(st.line.map);
+  const save = () => {
+    const keep = groups.map((g, i) => ({ ...g, i })).filter((g) => g.name.trim() || g.url.trim());
+    for (const g of keep) {
+      if (!g.name.trim()) { setMsg({ kind: 'err', text: '請填寫群組名稱' }); return; }
+      if (!/^https:\/\/\S+$/.test(g.url.trim())) { setMsg({ kind: 'err', text: `「${g.name}」的連結應為 https:// 開頭的網址` }); return; }
+    }
+    const newIdx = new Map(keep.map((g, n) => [g.i, n]));
+    const m: Record<string, number> = {};
+    for (const [k, v] of Object.entries(map)) if (newIdx.has(v)) m[k] = newIdx.get(v)!;
+    act({ action: 'preorder.line', groups: keep.map((g) => ({ name: g.name.trim(), url: g.url.trim() })), map: m }, '已儲存 LINE 群設定');
+  };
   return (
-    <div style={{ marginTop: 12 }}>
-      <label className="f">LINE 群邀請連結<span className="small muted">（填了以後，買方必須先按「加入 LINE 群」、再勾「我已加入」才能送出；留空＝不要求）</span>
-        <input value={v} placeholder="https://line.me/R/ti/g/…" onChange={(e) => setV(e.target.value)} /></label>
-      <div className="row" style={{ marginTop: 6 }}>
-        <button className="btn pri" disabled={busy || v.trim() === st.lineUrl} onClick={() => act({ action: 'preorder.lineUrl', url: v.trim() }, v.trim() ? '已設定 LINE 群連結：預購單必須先加入 LINE 群才能送出' : '已移除 LINE 群連結')}>儲存</button>
-        {st.lineUrl && <a className="btn" href={st.lineUrl} target="_blank" rel="noreferrer">測試連結</a>}
-      </div>
+    <div style={{ marginTop: 14 }}>
+      <h3 style={{ margin: '0 0 4px' }}>LINE 群（買方必須先加入才能送出）</h3>
+      <p className="small muted" style={{ margin: '0 0 8px' }}>先填各群的邀請連結，再指定每個項目要加入哪個群。買方選了哪些項目，就要加入對應的群（兩種都買就兩個群都要加入）。項目選「不需要」就不要求。</p>
+      {groups.map((g, i) => (
+        <div key={i} className="fields" style={{ marginTop: 6 }}>
+          <label className="f">群組名稱<input value={g.name} maxLength={20} onChange={(e) => setGroups(groups.map((x, n) => n === i ? { ...x, name: e.target.value } : x))} /></label>
+          <label className="f">邀請連結<input value={g.url} placeholder="https://line.me/R/ti/g/…" onChange={(e) => setGroups(groups.map((x, n) => n === i ? { ...x, url: e.target.value } : x))} /></label>
+        </div>
+      ))}
+      <button className="btn small" style={{ marginTop: 6 }} disabled={groups.length >= 8} onClick={() => setGroups([...groups, { name: '', url: '' }])}>＋再加一個群</button>
+      <div className="tbl" style={{ marginTop: 10 }}><table>
+        <thead><tr><th>選購項目</th><th>要加入的 LINE 群</th></tr></thead>
+        <tbody>{st.preMenu.map((m) => {
+          const k = `${m.kind}:${m.id}`;
+          return <tr key={k}><td>{m.name}</td><td>
+            <select value={map[k] ?? -1} style={{ width: 'auto' }} onChange={(e) => { const v = parseInt(e.target.value); const n = { ...map }; if (v < 0) delete n[k]; else n[k] = v; setMap(n); }}>
+              <option value={-1}>不需要</option>
+              {groups.map((g, i) => <option key={i} value={i}>{g.name || `（第 ${i + 1} 個群）`}</option>)}
+            </select></td></tr>;
+        })}
+        {!st.preMenu.length && <tr><td colSpan={2} className="muted">還沒有已發布的項目</td></tr>}</tbody>
+      </table></div>
+      <button className="btn pri" style={{ marginTop: 8 }} disabled={busy} onClick={save}>儲存 LINE 群設定</button>
     </div>
   );
 }

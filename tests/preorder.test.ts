@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineUrl, setPushLink, submitPreorder } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -48,13 +48,16 @@ describe('公開預購', () => {
     expect(await db.select().from(t.orders)).toHaveLength(0);
   });
 
-  it('設定 LINE 群連結後：沒勾「已加入 LINE 群」不能送出', async () => {
+  it('LINE 群依選購項目：買雙人套票要加入功德群；A區單張要加入金群；兩種都買兩個都要', async () => {
     await A.updateEventSettings(db, 'admin', { preorderOpen: true });
-    await setLineUrl(db, 'admin', 'https://line.me/R/ti/g/abc');
-    expect((await preorderMenu(db)).lineUrl).toBe('https://line.me/R/ti/g/abc');
-    await expect(submitPreorder(db, body())).rejects.toThrow('LINE');
-    expect((await submitPreorder(db, body({ lineJoined: true }))).no).toBe('P0001');
-    await expect(setLineUrl(db, 'admin', 'line.me/xx')).rejects.toThrow('https');
+    await setLineCfg(db, 'admin', { groups: [{ name: '功德群', url: 'https://line.me/R/ti/g/a' }, { name: '金群', url: 'https://line.me/R/ti/g/b' }],
+      map: { [`combo:${combo2}`]: 0, [`zone:${zoneA}`]: 1 } });
+    expect((await preorderMenu(db)).line.groups).toHaveLength(2);
+    await expect(submitPreorder(db, body())).rejects.toThrow('功德群、金群');
+    await expect(submitPreorder(db, body({ lineJoined: ['功德群'] }))).rejects.toThrow('金群');
+    expect((await submitPreorder(db, body({ lineJoined: ['功德群', '金群'] }))).no).toBe('P0001');
+    expect((await submitPreorder(db, body({ items: [{ kind: 'combo', id: combo2, qty: 1 }], lineJoined: ['功德群'] }))).no).toBe('P0002');
+    await expect(setLineCfg(db, 'admin', { groups: [{ name: 'x', url: 'line.me/xx' }], map: {} })).rejects.toThrow('https');
   });
 
   it('欄位檢查：末五碼、手機、Email、未選購', async () => {

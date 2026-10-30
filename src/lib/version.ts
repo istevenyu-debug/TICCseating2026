@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-10-31c 版（預購單加入 LINE 群）';
+export const APP_VERSION = '2026-10-31d 版（預購單 LINE 功德群／金群）';

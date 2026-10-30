@@ -9,7 +9,7 @@ type Menu = {
   open: boolean;
   mailFrom: string;
   pushLink: boolean;
-  lineUrl: string;
+  line: { groups: { name: string; url: string }[]; map: Record<string, number> };
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
   items: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[];
@@ -75,8 +75,9 @@ export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [err, setErr] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
-  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', agree: false, line: false });
-  const [lineOpened, setLineOpened] = useState(false);
+  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', agree: false });
+  const [lineOpened, setLineOpened] = useState<string[]>([]);
+  const [lineJoined, setLineJoined] = useState<string[]>([]);
   const [paidTouched, setPaidTouched] = useState(false);
   const [inv, setInv] = useState<{ type: InvType; code: string; title: string }>({ type: 'member', code: '', title: '' });
   const [review, setReview] = useState(false);
@@ -105,6 +106,9 @@ export default function PreorderApp() {
   const key = (i: Menu['items'][number]) => `${i.kind}-${i.id}`;
   const lines = menu.items.filter((i) => (qty[key(i)] ?? 0) > 0);
   const total = lines.reduce((a, i) => a + i.price * qty[key(i)], 0);
+  // 選了哪些項目，就要加入對應的 LINE 群（不重複、依後台設定順序）
+  const lineIdx = new Set(lines.map((i) => menu.line.map[`${i.kind}:${i.id}`]).filter((x) => x !== undefined));
+  const lineGroups = menu.line.groups.filter((_, n) => lineIdx.has(n));
   const paid = paidTouched ? f.paid : total ? String(total) : '';
   const setN = (i: Menu['items'][number], n: number) => { setQty({ ...qty, [key(i)]: Math.max(0, Math.min(200, n)) }); setErr(''); };
   const upd = (v: Partial<typeof f>) => { setF({ ...f, ...v }); setErr(''); };
@@ -121,14 +125,15 @@ export default function PreorderApp() {
     if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
     if (menu!.invoice) { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
-    if (menu!.lineUrl && !f.line) return bad(lineOpened ? '請勾選「我已加入 LINE 群」' : '請先按「加入 LINE 群」，加入後再勾選「我已加入 LINE 群」', 'p-line');
+    const miss = lineGroups.find((g) => !lineJoined.includes(g.name));
+    if (miss) return bad(lineOpened.includes(miss.name) ? `請勾選「我已加入 ${miss.name}」` : `請先按「加入 ${miss.name}」，加入後再勾選「我已加入」`, `p-line-${lineGroups.indexOf(miss)}`);
     setErr(''); setReview(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   async function send() {
     setBusy(true);
     const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
-      name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree, lineJoined: f.line,
+      name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree, lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
       ...(menu!.invoice ? { invType: inv.type, invCode: inv.code.trim().toUpperCase(), invTitle: inv.title.trim() } : {}),
     });
     setBusy(false);
@@ -262,16 +267,24 @@ export default function PreorderApp() {
               <input id="p-agree" type="checkbox" checked={f.agree} onChange={(e) => upd({ agree: e.target.checked })} />
               我同意主辦方為售票、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
             </label>
-            {menu.lineUrl && (
+            {lineGroups.length > 0 && (
               <div className="note" style={{ marginTop: 12 }}>
                 <b>加入 LINE 群（必做）</b>
-                <p className="small" style={{ margin: '4px 0 8px' }}>活動通知都在 LINE 群，請先加入才能送出。</p>
-                <a className="btn pri" href={menu.lineUrl} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
-                  onClick={() => { setLineOpened(true); setErr(''); }}>① 加入 LINE 群</a>
-                <label className="check" style={{ marginTop: 8, opacity: lineOpened ? 1 : 0.5 }}>
-                  <input id="p-line" type="checkbox" checked={f.line} disabled={!lineOpened} onChange={(e) => upd({ line: e.target.checked })} />
-                  <span>② 我已加入 LINE 群{!lineOpened && <><br /><span className="small muted">請先按上面的「加入 LINE 群」</span></>}</span>
-                </label>
+                <p className="small" style={{ margin: '4px 0 0' }}>依您選購的項目，請先加入下面的 LINE 群，才能送出。</p>
+                {lineGroups.map((g, n) => {
+                  const opened = lineOpened.includes(g.name);
+                  return (
+                    <div key={g.name} style={{ marginTop: 10 }}>
+                      <a className="btn pri" href={g.url} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
+                        onClick={() => { if (!opened) setLineOpened([...lineOpened, g.name]); setErr(''); }}>① 加入「{g.name}」</a>
+                      <label className="check" style={{ marginTop: 6, opacity: opened ? 1 : 0.5 }}>
+                        <input id={`p-line-${n}`} type="checkbox" checked={lineJoined.includes(g.name)} disabled={!opened}
+                          onChange={(e) => { setLineJoined(e.target.checked ? [...lineJoined, g.name] : lineJoined.filter((x) => x !== g.name)); setErr(''); }} />
+                        <span>② 我已加入「{g.name}」{!opened && <><br /><span className="small muted">請先按上面的「加入「{g.name}」」</span></>}</span>
+                      </label>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}

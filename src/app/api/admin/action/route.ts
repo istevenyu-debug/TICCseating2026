@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineUrl } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -80,7 +80,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
-  z.object({ action: z.literal('preorder.lineUrl'), url: z.string().max(500) }),
+  z.object({ action: z.literal('preorder.line'), groups: z.array(z.object({ name: z.string(), url: z.string() })).max(8), map: z.record(z.string(), z.number()) }),
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
   z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
   z.object({ action: z.literal('checkin.undo'), id }),
@@ -183,7 +183,7 @@ export async function POST(req: Request) {
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);
       case 'preorder.pushLink': return setPushLink(db, who, a.on);
-      case 'preorder.lineUrl': return setLineUrl(db, who, a.url);
+      case 'preorder.line': return setLineCfg(db, who, { groups: a.groups, map: a.map });
       case 'gate.create': return createGates(db, who, a.names);
       case 'gate.update': return updateGate(db, who, a.id, a.values);
       case 'checkin.undo': return undoCheckin(db, who, a.id);

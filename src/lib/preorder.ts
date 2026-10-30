@@ -39,7 +39,7 @@ export async function preorderMenu(db: Db) {
     open: ev.preorderOpen && items.length > 0,
     mailFrom: (await (await import('./notify')).getNotifyConfig(db)).email?.user ?? '',
     pushLink: await getPushLink(db),
-    lineUrl: await getLineUrl(db), // 有設定時：必須先按「加入 LINE 群」並勾選已加入才能送出
+    line: await getLineCfg(db), // 選了哪些項目，就必須先加入對應的 LINE 群才能送出
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
   };
@@ -56,7 +56,7 @@ const submitBody = z.object({
   invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']).default('member'),
   invCode: z.string().trim().toUpperCase().max(20).default(''),
   invTitle: z.string().trim().max(60).default(''),
-  lineJoined: z.boolean().optional().default(false),
+  lineJoined: z.array(z.string().max(20)).max(10).optional().default([]),
 });
 
 const recent = new Map<string, number[]>();
@@ -79,7 +79,8 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選購一項');
-  if (menu.lineUrl && !p.data.lineJoined) throw new BookingError('INVALID', '請先加入 LINE 群，並勾選「我已加入 LINE 群」');
+  const lineMiss = lineNeeded(menu.line, items).filter((g) => !p.data.lineJoined.includes(g.name));
+  if (lineMiss.length) throw new BookingError('INVALID', `請先加入 LINE 群：${lineMiss.map((g) => g.name).join('、')}，並勾選「我已加入」`);
   const inv = menu.invoice ? { invType: p.data.invType, invCode: p.data.invType === 'member' ? '' : p.data.invCode, invTitle: p.data.invType === 'company' ? p.data.invTitle : '' }
     : { invType: 'member' as const, invCode: '', invTitle: '' };
   const ip2 = invProblem(inv.invType, inv.invCode, inv.invTitle);
@@ -199,15 +200,36 @@ export async function markPreorderSeen(db: Db, id: number) {
 }
 
 /** 後台開關：劃位連結是否也送到訂購人手機（推播＋預購頁「開始劃位」按鈕）。預設開啟 */
-export async function getLineUrl(db: Db) {
-  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, 'preorder.lineUrl'));
-  return r?.value ?? '';
+/**
+ * 預購單的 LINE 群：可設定多個群（例如「功德群」「金群」），每個選購項目指定要加入哪個群。
+ * 買方選了哪些項目，就必須先按那些群的「加入」並勾選「已加入」才能送出。
+ */
+export type LineGroup = { name: string; url: string };
+export type LineCfg = { groups: LineGroup[]; map: Record<string, number> }; // map：'combo:3' → groups 的第幾個
+const LINE_KEY = 'preorder.lineGroups';
+const lineCfgSchema = z.object({
+  groups: z.array(z.object({
+    name: z.string().trim().min(1, '請填寫群組名稱').max(20),
+    url: z.string().trim().regex(/^https:\/\/\S+$/, 'LINE 群連結應為 https:// 開頭的網址').max(500),
+  })).max(8),
+  map: z.record(z.string().regex(/^(combo|zone):\d+$/), z.number().int().min(0)),
+});
+export async function getLineCfg(db: Db): Promise<LineCfg> {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, LINE_KEY));
+  try { const v = lineCfgSchema.parse(JSON.parse(r?.value || '{}')); return v; } catch { return { groups: [], map: {} }; }
 }
-export async function setLineUrl(db: Db, actor: string, url: string) {
-  const value = url.trim();
-  if (value && !/^https:\/\/\S+$/.test(value)) throw new BookingError('INVALID', 'LINE 群連結應為 https:// 開頭的網址');
-  await db.insert(t.appSetting).values({ key: 'preorder.lineUrl', value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
-  await db.insert(t.auditLog).values({ actor, action: 'preorder_line_url', target: 'app_setting', detail: value });
+export async function setLineCfg(db: Db, actor: string, raw: unknown) {
+  const p = lineCfgSchema.safeParse(raw);
+  if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? 'LINE 群設定不正確');
+  const map = Object.fromEntries(Object.entries(p.data.map).filter(([, i]) => i < p.data.groups.length));
+  const value = JSON.stringify({ groups: p.data.groups, map });
+  await db.insert(t.appSetting).values({ key: LINE_KEY, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_line_groups', target: 'app_setting', detail: value });
+}
+/** 這些選購項目需要加入的 LINE 群（不重複、依設定順序） */
+export function lineNeeded(cfg: LineCfg, items: { kind: string; id: number }[]) {
+  const idx = new Set(items.map((i) => cfg.map[`${i.kind}:${i.id}`]).filter((x): x is number => x !== undefined && x < cfg.groups.length));
+  return cfg.groups.filter((_, i) => idx.has(i));
 }
 
 export async function getPushLink(db: Db) {
