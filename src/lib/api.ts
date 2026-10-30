@@ -31,6 +31,12 @@ export function originOf(req: Request): string {
   return host ? `${proto.split(',')[0]}://${host.split(',')[0]}` : '';
 }
 
+/** 訪客的真實 IP：經過 Cloudflare 轉發（Worker）時由 x-ticc-client-ip 帶來，否則用 Cloudflare／代理的標頭 */
+export function clientIp(req: Request): string {
+  const h = req.headers;
+  return h.get('x-ticc-client-ip') ?? h.get('cf-connecting-ip') ?? h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '';
+}
+
 /** 公開連結的訪客代碼（由瀏覽器產生，放在 x-visitor 標頭） */
 export function visitor(req: Request): string | undefined {
   return req.headers.get('x-visitor') ?? undefined;

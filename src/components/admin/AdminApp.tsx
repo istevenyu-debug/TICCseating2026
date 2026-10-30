@@ -106,6 +106,7 @@ const useAdmin = () => useContext(AdminCtx)!;
 
 export default function AdminApp() {
   const [st, setSt] = useState<State | null>(null);
+  const [empty, setEmpty] = useState(false); // 全新的系統（雲端剛建好）：還沒有場次，先上傳備份
   const [tab, setTab] = useState<Tab>('home');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'warn'; text: string } | null>(null);
   useEffect(() => { if (msg?.kind !== 'ok') return; const id = setTimeout(() => setMsg(null), 6000); return () => clearTimeout(id); }, [msg]);
@@ -118,8 +119,8 @@ export default function AdminApp() {
   const load = useCallback(async () => {
     const r = await fetch('/api/admin/state', { cache: 'no-store' }).then((x) => x.json()).catch(() => null);
     if (!r) { setMsg({ kind: 'err', text: '網路連線異常，請稍後再試。' }); return; }
-    if (!r.ok) { if (r.code === 'UNAUTHORIZED') location.reload(); else setMsg({ kind: 'err', text: r.message }); return; }
-    setSt(r.data);
+    if (!r.ok) { if (r.code === 'UNAUTHORIZED') location.reload(); else if (r.code === 'NO_EVENT') setEmpty(true); else setMsg({ kind: 'err', text: r.message }); return; }
+    setEmpty(false); setSt(r.data);
   }, []);
 
   useEffect(() => {
@@ -149,6 +150,7 @@ export default function AdminApp() {
   }
   const confirm2 = (key: string, fn: () => void) => { if (sure === key) fn(); else setSure(key); };
 
+  if (!st && empty) return <main className="wrap" style={{ maxWidth: 640 }}><EmptyRestore onDone={load} /></main>;
   if (!st) return <main className="wrap"><div className="card muted">後台載入中…</div></main>;
 
   const zoneById = Object.fromEntries(st.zones.map((z) => [z.id, z]));
@@ -255,7 +257,60 @@ function BackupCard() {
       </p>
       <p className="small muted" style={{ margin: '4px 0 8px' }}>網站開著時每小時自動備份一次，存在：<span className="mono">{b.dir}</span>。設定好 Gmail 後，每天另寄一份到寄件信箱（異地備份）。</p>
       {st.user.role === 'admin' && <a className="btn" href="/api/admin/backup">立即備份並下載</a>}
+      {st.user.role === 'admin' && <RestoreUpload />}
     </div>
+  );
+}
+
+/** 全新的系統（例如剛搬上雲端）：上傳舊系統的備份檔，資料就搬過來了 */
+function EmptyRestore({ onDone }: { onDone: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  return (
+    <div className="card">
+      <h1>新的系統，還沒有資料</h1>
+      <p>請上傳從舊系統下載的備份檔（舊後台首頁「資料備份」→「立即備份並下載」，檔名像 <span className="mono">ticc-202610310500.json.gz</span>）。上傳後，訂單、劃位、連結、設定和後台帳號都會搬過來。</p>
+      <input type="file" accept=".gz,.json" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <button className="btn pri" style={{ marginTop: 10, width: '100%' }} disabled={busy || !file} onClick={async () => {
+        setBusy(true); setMsg('');
+        try {
+          const r = await fetch(`/api/admin/restore?confirm=${encodeURIComponent('還原')}`, { method: 'POST', body: file });
+          const j = await r.json() as { ok: boolean; message?: string };
+          if (!j.ok) setMsg(j.message ?? '還原失敗');
+          else { setMsg('已搬入資料。後台帳號密碼改為舊系統的，請重新登入。'); setTimeout(() => location.reload(), 2500); onDone(); }
+        } catch { setMsg('網路連線異常，請再試一次'); }
+        setBusy(false);
+      }}>{busy ? '上傳中…' : '上傳並搬入資料'}</button>
+      {msg && <p className="note" style={{ marginTop: 10 }}>{msg}</p>}
+    </div>
+  );
+}
+
+/** 從備份檔還原：搬家（家裡電腦 → 雲端）或萬一需要時使用 */
+function RestoreUpload() {
+  const { setMsg } = useAdmin();
+  const [file, setFile] = useState<File | null>(null);
+  const [word, setWord] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <details style={{ marginTop: 10 }}>
+      <summary className="small" style={{ cursor: 'pointer' }}><b style={{ color: 'var(--red)' }}>從備份檔還原</b>（搬家或救援用，會取代目前所有資料）</summary>
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <input type="file" accept=".gz,.json" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        <label className="f">請輸入「還原」確認<input value={word} onChange={(e) => setWord(e.target.value)} /></label>
+        <button className="btn danger" disabled={busy || !file || word !== '還原'} onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await fetch(`/api/admin/restore?confirm=${encodeURIComponent('還原')}`, { method: 'POST', body: file });
+            const j = await r.json() as { ok: boolean; message?: string; data?: { at: string; preorders: number; orders: number; links: number } };
+            if (!j.ok) setMsg({ kind: 'err', text: j.message ?? '還原失敗' });
+            else { setMsg({ kind: 'ok', text: `已還原 ${tw(j.data!.at)} 的備份：訂單 ${j.data!.preorders} 筆、劃位 ${j.data!.orders} 筆、連結 ${j.data!.links} 條。請重新整理頁面。` }); setWord(''); }
+          } catch { setMsg({ kind: 'err', text: '網路連線異常，還原沒有完成' }); }
+          setBusy(false);
+        }}>{busy ? '還原中…' : '用這個檔案還原'}</button>
+      </div>
+    </details>
   );
 }
 

@@ -1,7 +1,5 @@
 import { requireAdmin } from '@/lib/adminApi';
-import { backupNow, listBackups } from '@/lib/backup';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
+import { exportAll, listBackups, toGz } from '@/lib/backup';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,11 +8,12 @@ export async function GET() {
   try {
     const { db, user } = await requireAdmin();
     if (user.role !== 'admin') return new Response('這項操作需要主管或網管帳號', { status: 403 });
-    const { file } = await backupNow(db);
-    return new Response(readFileSync(file), {
+    const gz = toGz(await exportAll(db));
+    const name = `ticc-${new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/[-: ]/g, '').slice(0, 12)}.json.gz`;
+    return new Response(gz, {
       headers: {
         'Content-Type': 'application/gzip',
-        'Content-Disposition': `attachment; filename="${path.basename(file)}"`,
+        'Content-Disposition': `attachment; filename="${name}"`,
         'Cache-Control': 'no-store',
       },
     });

@@ -92,7 +92,7 @@ export function listBackups() {
 }
 
 /** 每天第一次備份時寄一份到寄件信箱自己（異地備份） */
-async function mailDaily(db: Db, now: Date) {
+export async function mailDaily(db: Db, now: Date) {
   const { getNotifyConfig } = await import('./notify');
   const cfg = (await getNotifyConfig(db)).email;
   if (!cfg) return;
@@ -113,7 +113,8 @@ async function mailDaily(db: Db, now: Date) {
 /** 網站啟動後：1 分鐘後備份一次，之後每小時一次 */
 export function startBackups(db: Db) {
   const g = globalThis as unknown as { __ticcBackup?: NodeJS.Timeout };
-  if (g.__ticcBackup || process.env.VITEST) return;
+  // 雲端（有 DATABASE_URL）：資料庫由 Cloud SQL 自動備份，每日備份信由排程呼叫 /api/cron 寄出
+  if (g.__ticcBackup || process.env.VITEST || process.env.DATABASE_URL) return;
   const tick = async () => {
     try {
       const now = new Date();

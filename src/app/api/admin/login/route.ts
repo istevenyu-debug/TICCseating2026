@@ -2,13 +2,14 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { login, loginBlocked, loginFailed, loginOk, makeSession, SESSION_COOKIE } from '@/lib/auth';
+import { clientIp } from '@/lib/api';
 
 export const dynamic = 'force-dynamic';
 
 const body = z.object({ username: z.string().trim().min(1).max(40), password: z.string().min(1).max(200) });
 
 export async function POST(req: Request) {
-  const key = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  const key = clientIp(req) || 'local';
   if (loginBlocked(key)) {
     return NextResponse.json({ ok: false, message: '登入失敗次數過多，請 10 分鐘後再試。' }, { status: 429 });
   }

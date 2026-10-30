@@ -1,0 +1,10 @@
+# 上傳到 Google Cloud 時不要帶的檔案（資料、備份、密碼都只在本機）
+.git
+.gitignore
+node_modules/
+.next/
+.data/
+備份/
+.env.local
+測試網址.txt
+tests/
