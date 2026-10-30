@@ -37,6 +37,7 @@ export async function preorderMenu(db: Db) {
   return {
     invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
     open: ev.preorderOpen && items.length > 0,
+    mailFrom: (await (await import('./notify')).getNotifyConfig(db)).email?.user ?? '',
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
   };
@@ -98,7 +99,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
-        content: `【${ev.name}】${row.name} 您好，已收到您的訂單 ${no}：${itemsText(items)}，合計 NT$${amount.toLocaleString('en-US')}（您填寫的匯款金額 NT$${row.paidAmount.toLocaleString('en-US')}、帳號末五碼 ${row.last5}）。主辦方確認收到款項後，會寄出您的專屬劃位連結到這個信箱。`,
+        content: `【${ev.name}】${row.name} 您好，已收到您的訂單 ${no}：${itemsText(items)}，合計 NT$${amount.toLocaleString('en-US')}（您填寫的匯款金額 NT$${row.paidAmount.toLocaleString('en-US')}、帳號末五碼 ${row.last5}）。主辦方確認收到款項後，會由寄這封信的同一個信箱寄出「付款確認・劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
       });
       // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
       return { no, amount, mismatch: amount !== row.paidAmount, token: viewToken };

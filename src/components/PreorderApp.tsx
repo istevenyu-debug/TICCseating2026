@@ -7,6 +7,7 @@ import { INV_TYPES, invDesc, invProblem, type InvType } from '@/lib/invoiceRules
 
 type Menu = {
   open: boolean;
+  mailFrom: string;
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
   items: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[];
@@ -143,7 +144,8 @@ export default function PreorderApp() {
         {head}
         <div className="card">
           <h2>已送出訂單 {done.no}</h2>
-          <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱（也請看看垃圾郵件匣）。</p>
+          <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
+          <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
           {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
           <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>

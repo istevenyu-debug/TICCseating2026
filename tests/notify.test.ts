@@ -197,3 +197,15 @@ describe('先匯款再給連結', () => {
     expect(m.extra!.html).toContain('王○明');
   });
 });
+
+describe('劃位通知信（不易被當垃圾信）', () => {
+  it('主旨帶演出名稱；HTML 有按鈕與網址文字', async () => {
+    const { linkMail } = await import('@/lib/notify');
+    const text = '【祈福音樂會】林大同 您好，已確認收到您的款項 NT$6,080（訂單 P0001：功德組 × 1）。請點以下專屬連結選位並填寫持票人資料：https://ticket.aolforgood.com/t/ABCD2345　連結有效至演出當天，請勿轉傳他人。';
+    const m = linkMail(text, '主辦單位');
+    expect(m.html).toContain('href="https://ticket.aolforgood.com/t/ABCD2345"');
+    expect(m.html).toContain('開始劃位（選座位）');
+    expect(m.html).toContain('訂單 P0001');
+    expect(m.html).not.toContain('ABCD2345　');
+  });
+});

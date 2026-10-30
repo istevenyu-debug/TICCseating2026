@@ -169,14 +169,39 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
   if (!c) return set({ status: 'simulated', error: isSms ? '尚未設定簡訊帳號，只存紀錄' : '尚未設定 Email 寄件帳號，只存紀錄' });
   try {
     if (isSms) await senders.sms(c as SmsConfig, n.recipient, n.content);
-    else await senders.email(c as EmailConfig, n.recipient, SUBJECT[n.template] ?? '通知', n.content,
-      n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content) : undefined);
+    else await senders.email(c as EmailConfig, n.recipient, subjectOf(n.template, n.content), n.content,
+      n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content)
+        : n.template === 'preorder_link' ? linkMail(n.content, (c as EmailConfig).fromName) : undefined);
     await set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1 });
   } catch (e) {
     const attempts = n.attempts + 1;
     const msg = String((e as Error).message ?? e).slice(0, 300);
     await set(attempts >= MAX_ATTEMPTS ? { status: 'failed', error: msg, attempts } : { error: msg, attempts });
   }
+}
+
+/** 主旨帶演出名稱，比較像正式通知（不易被當成垃圾信） */
+function subjectOf(template: string, content: string) {
+  const ev = content.match(/^【([^】]+)】/)?.[1];
+  if (template === 'preorder_link' && ev) return `【${ev}】付款確認・劃位通知`;
+  if (template === 'preorder_received' && ev) return `【${ev}】已收到您的訂單`;
+  if (template === 'order_confirmed' && ev) return `【${ev}】劃位成功通知`;
+  return SUBJECT[template] ?? '通知';
+}
+
+/** 劃位連結信：正式的 HTML（標題、按鈕、連結文字），純文字內容照樣附上 */
+export function linkMail(text: string, fromName = ''): MailExtra {
+  const url = text.match(/https?:\/\/\S+?(?=[　\s]|$)/)?.[0] ?? '';
+  const ev = text.match(/^【([^】]+)】/)?.[1] ?? '';
+  const body = esc(text.replace(/^【[^】]+】/, '').replace(url, '').replace(/請點以下專屬連結選位並填寫持票人資料：\s*/, '').replace(/　+/g, ' ').trim());
+  const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
+    <h2 style="margin:0 0 4px">付款確認・劃位通知</h2>
+    <div style="color:#5b6579;margin-bottom:12px">${esc(ev)}</div>
+    <p style="margin:0 0 16px">${body}</p>
+    ${url ? `<p style="margin:0 0 16px"><a href="${esc(url)}" style="display:inline-block;background:#223a73;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700">開始劃位（選座位）</a></p>
+    <p style="margin:0 0 6px;color:#5b6579;font-size:13px">按鈕無法點選時，請複製以下網址到瀏覽器開啟：<br><span style="font-family:monospace;word-break:break-all">${esc(url)}</span></p>` : ''}
+    <p style="color:#5b6579;font-size:13px;margin-top:16px">這是您專屬的劃位連結，請勿轉傳他人。${fromName ? `<br>${esc(fromName)}` : ''}</p></div>`;
+  return { html };
 }
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
