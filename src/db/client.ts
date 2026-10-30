@@ -19,13 +19,15 @@ export function getDb(): Promise<Db> {
   if (!g.__ticcDb) {
     g.__ticcDb = connect().then(async (db) => {
       (await import('@/lib/notify')).startDispatcher(db); // 每 30 秒補寄通知
+      (await import('@/lib/backup')).startBackups(db); // 每小時自動備份
       return db;
     });
   }
   return g.__ticcDb;
 }
 
-async function connect(): Promise<Db> {
+/** 直接開資料庫（不啟動背景寄信與備份；還原工具用） */
+export async function connect(): Promise<Db> {
   const url = process.env.DATABASE_URL;
   if (url) {
     const { Pool } = await import('pg');

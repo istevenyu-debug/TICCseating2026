@@ -23,7 +23,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -240,6 +240,25 @@ export default function AdminApp() {
 }
 
 /* ---------- 首頁 ---------- */
+/** 備份：每小時自動一份；可立即備份並下載 */
+function BackupCard() {
+  const { st } = useAdmin();
+  const b = st.backups;
+  const last = b.list[0];
+  const stale = !last || Date.now() - Date.parse(last.at) > 2 * 3600_000;
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <h2>資料備份</h2>
+      <p style={{ margin: 0 }}>
+        {last ? <>最近一次：{tw(last.at)}（{Math.max(1, Math.round(last.size / 1024))} KB）・共 {b.count} 份</> : '還沒有備份（網站開著 1 分鐘後會自動備份第一份）'}
+        {last && stale && <b className="err-text">　超過 2 小時沒有新備份，請確認網站是否正常開著</b>}
+      </p>
+      <p className="small muted" style={{ margin: '4px 0 8px' }}>網站開著時每小時自動備份一次，存在：<span className="mono">{b.dir}</span>。設定好 Gmail 後，每天另寄一份到寄件信箱（異地備份）。</p>
+      {st.user.role === 'admin' && <a className="btn" href="/api/admin/backup">立即備份並下載</a>}
+    </div>
+  );
+}
+
 function Home() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   const items: [Tab, string, string, string][] = [
@@ -257,6 +276,7 @@ function Home() {
         <button key={k} className={`hcard${i === 0 ? ' main' : ''}`} onClick={() => go(k)}><b>{t}</b><span>{d}</span><em>{m}</em></button>
       ))}
       {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放訂購」按「發布到購票頁」。</div>}
+      <BackupCard />
       <ResetCard />
     </div>
   );

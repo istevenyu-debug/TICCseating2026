@@ -5,6 +5,7 @@ import { getAdminState } from '@/lib/admin';
 import { listNotifications, publicNotifyConfig } from '@/lib/notify';
 import { listInvoices, publicEinvConfig } from '@/lib/einvoice';
 import { listVips } from '@/lib/vip';
+import { backupDir, listBackups } from '@/lib/backup';
 import { listPreorders } from '@/lib/preorder';
 import { checkinSummary, listGates } from '@/lib/ticket';
 
@@ -14,6 +15,6 @@ export async function GET(req: Request) {
   return handle(async () => {
     const { db, user } = await requireAdmin();
     await rememberOrigin(db, originOf(req));
-    return { user, ...(await getAdminState(db)), notify: await publicNotifyConfig(db), einvoice: await publicEinvConfig(db), invoices: await listInvoices(db), vips: await listVips(db), notifications: await listNotifications(db), preorders: await listPreorders(db), gates: await listGates(db), checkins: await checkinSummary(db) };
+    return { user, ...(await getAdminState(db)), notify: await publicNotifyConfig(db), einvoice: await publicEinvConfig(db), invoices: await listInvoices(db), vips: await listVips(db), backups: { dir: backupDir(), list: listBackups().slice(0, 3), count: listBackups().length }, notifications: await listNotifications(db), preorders: await listPreorders(db), gates: await listGates(db), checkins: await checkinSummary(db) };
   });
 }
