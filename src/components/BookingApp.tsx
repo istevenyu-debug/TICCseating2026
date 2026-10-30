@@ -280,7 +280,10 @@ export default function BookingApp({ code }: { code: string }) {
     setBusy(false);
     if (!r.ok) { setReview(false); setMsg({ kind: 'err', text: r.message }); if (r.code.startsWith('HOLD')) await load(); return; }
     setLastOrder(r.data.orderNo); setReview(false);
-    setMsg({ kind: 'ok', text: `劃位資料已送出（劃位編號 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。` });
+    // 買了多種：還有其他沒劃的，提示並自動切換到下一種（cur 會自動選還可劃的那一種）
+    const rest = (st?.paid?.rows ?? []).filter((x) => x.left > 0 && !(x.kind === 'combo' && x.id === held.comboId));
+    setMsg({ kind: 'ok', text: `劃位資料已送出（劃位編號 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
+      + (rest.length ? `　還有「${rest.map((x) => `${x.name} ${x.left} ${x.unit}`).join('、')}」要劃，已幫您切換，請繼續在座位圖上選位。` : '') });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
   }
@@ -320,7 +323,8 @@ export default function BookingApp({ code }: { code: string }) {
         // 劃位步驟：一開始就說明，並標出現在在哪一步
         const pending = st.orders.some((o) => o.status === 'pending');
         const paidDone = st.orders.some((o) => o.status === 'paid');
-        const now = held ? (review ? 3 : 2) : pending ? 4 : paidDone ? 5 : 1;
+        const moreToBook = !!st.paid && !st.paid.done; // 買了多種、還有沒劃的：回到第 1 步繼續劃
+        const now = held ? (review ? 3 : 2) : moreToBook ? 1 : pending ? 4 : paidDone ? 5 : 1;
         const steps = [
           ['選座位', '先選購票方式，在座位圖點選座位，按「暫存座位」（保留 20 分鐘）'],
           ['填持票人', '填購票人資料與每張票的持票人，按「下一步：確認資料」'],
@@ -349,8 +353,12 @@ export default function BookingApp({ code }: { code: string }) {
           <h2>第一步：選擇購票方式</h2>
           {paid ? (
             <div className={`note ${paid.done ? 'warn' : 'ok'} small`} style={{ margin: '0 0 8px' }}>
-              您已付款：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}><b>{r.name} × {r.qty}</b>（已劃 {r.used}，還可劃 <b>{Math.max(0, r.left)}</b> {r.unit}）</span>)}
-              {paid.done ? '您付款購買的座位都已經劃完了。' : '已幫您選好購票方式，直接在座位圖上選位即可。'}
+              您已付款：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}>
+                {r.left <= 0 ? '✓ ' : '・'}<b>{r.name} × {r.qty}</b>（{r.left <= 0 ? '已劃完' : <>已劃 {r.used}，還可劃 <b>{r.left}</b> {r.unit}</>}）</span>)}
+              {paid.done ? '您付款購買的座位都已經劃完了。'
+                : paid.rows.length > 1
+                  ? <b style={{ display: 'block', marginTop: 4 }}>您買了 {paid.rows.length} 種，請一種一種劃：下面先選一種購票方式 → 選位 → 送出，完成後再回來選下一種。</b>
+                  : '已幫您選好購票方式，直接在座位圖上選位即可。'}
             </div>
           ) : st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您已購買：<b>{st.prefill.bought}</b>。已幫您選好購票方式，直接在座位圖上選位即可。</p>}
           <div className="combos">
