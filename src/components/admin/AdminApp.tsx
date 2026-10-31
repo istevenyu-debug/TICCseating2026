@@ -24,7 +24,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1389,7 +1389,7 @@ function inviteText(st: State, url: string) {
   return [`【${st.event.name}】贊助登記`, '', ...first, '',
     '👉 請點以下連結，選擇贊助方案並完成登記：', url, '',
     '・依登記的先後順序安排劃位',
-    '・完成匯款並加入 LINE 群組後，我們會依序通知您劃位',
+    '・完成匯款後，我們會依序通知您劃位',
     '・有任何問題，歡迎直接與我們聯繫 🙏'].join('\n');
 }
 
@@ -1405,6 +1405,7 @@ function PreorderSettings() {
       <h3 style={{ margin: '0 0 4px' }}>預購單開頭文字</h3>
       <p className="small muted" style={{ margin: '0 0 6px' }}>顯示在預購單最上面。「## 」開頭的一行是小標題，「1. 」開頭是步驟，空一行就分段。</p>
       <textarea value={intro} rows={12} style={{ width: '100%' }} onChange={(e) => setIntro(e.target.value)} />
+      <button className="btn small" style={{ marginTop: 4 }} onClick={() => setIntro(ps.defaultIntro)}>恢復系統預設文字（按了還要按下方「儲存」）</button>
       <div className="fields" style={{ marginTop: 8 }}>
         <label className="f">每個方案可候補幾份（0＝不開放候補）<input value={wait} inputMode="numeric" onChange={(e) => setWait(e.target.value.replace(/\D/g, ''))} /></label>
         <label className="f">同一網路 10 分鐘內最多送出幾張（防灌單）<input value={rate} inputMode="numeric" onChange={(e) => setRate(e.target.value.replace(/\D/g, ''))} /></label>

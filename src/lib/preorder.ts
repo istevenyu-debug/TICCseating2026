@@ -91,23 +91,22 @@ export const DEFAULT_INTRO = `感謝您慷慨贊助古儒吉蒞臨台灣的活�
 
 ## 贊助流程
 1. 確認贊助方案：請確認您欲贊助的席次項目與數量。
-2. 加入 LINE 專屬群組：請依您選擇的贊助項目，加入對應的 LINE 群組。
-3. 完成匯款：請至銀行臨櫃或使用網銀 App 完成匯款轉帳。
-4. 填寫回報資料：回到本頁面，填寫您的轉帳帳號後五碼與聯絡資訊後送出。
+2. 完成匯款：請至銀行臨櫃或使用網銀 App 完成匯款轉帳。
+3. 填寫回報資料：回到本頁面，填寫您的轉帳帳號後五碼與聯絡資訊後送出。
 
-小提醒：前往匯款或加入 LINE 群組時會暫時離開本頁面，請不必擔心。只要使用同一支手機與相同的開啟方式重新打開連結，您先前選擇與填寫的資料都會完整保留。
+小提醒：前往匯款時會暫時離開本頁面，請不必擔心。只要使用同一支手機與相同的開啟方式重新打開連結，您先前選擇與填寫的資料都會完整保留。
 
 ## 劃位順序說明
 1. 系統將依您送出本贊助登記的先後順序進行劃位。
-2. 主辦方於確認匯款入帳並核對您已加入 LINE 群組後，將依序通知您劃位。
-3. 若尚未完成匯款或未加入 LINE 群組，劃位順序將順延給下一位已完成流程的贊助者。
+2. 主辦方於確認匯款入帳後，將依序通知您劃位。
+3. 若尚未完成匯款，劃位順序將順延給下一位已完成流程的贊助者。
 4. 輪到您劃位時，專屬劃位連結將寄送至您的 Email，主辦方亦可能透過電話或 LINE 主動與您聯繫。`;
 
 export async function getPreorderSettings(db: Db) {
   const rows = await db.select().from(t.appSetting).where(inArray(t.appSetting.key, ['preorder.rateLimit', 'preorder.waitlistCap', 'preorder.intro']));
   const v = (k: string) => rows.find((r) => r.key === k)?.value;
   const num = (x: string | undefined, d: number) => (x !== undefined && /^\d+$/.test(x) ? parseInt(x) : d);
-  return { rateLimit: num(v('preorder.rateLimit'), 100), waitlistCap: num(v('preorder.waitlistCap'), 5), intro: v('preorder.intro') ?? DEFAULT_INTRO };
+  return { rateLimit: num(v('preorder.rateLimit'), 100), waitlistCap: num(v('preorder.waitlistCap'), 5), intro: v('preorder.intro') ?? DEFAULT_INTRO, defaultIntro: DEFAULT_INTRO };
 }
 export async function setPreorderSettings(db: Db, actor: string, x: { rateLimit?: number; waitlistCap?: number; intro?: string }) {
   const put = async (key: string, value: string) => db.insert(t.appSetting).values({ key, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
