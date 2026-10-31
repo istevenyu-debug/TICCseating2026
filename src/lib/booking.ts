@@ -463,7 +463,14 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
 
     await tx.insert(t.notification).values({
       orderId: order.id, linkId: link.id, channel: 'email', template: 'order_received', recipient: input.buyer.email,
-      content: `【${ev.name}】已收到您的劃位資料（劃位編號 ${order.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code。`,
+      content: await (async () => {
+        // 劃位送出的立即回應：列出座位與持票人，讓買方馬上核對
+        const vs = await tx.select().from(t.venueSeat).where(inArray(t.venueSeat.id, holders.map((h) => h.seatId)));
+        const byId = Object.fromEntries(vs.map((v) => [v.id, v]));
+        const list = holders.map((h) => byId[h.seatId]).filter(Boolean).sort((a, b) => a.y - b.y || a.x - b.x)
+          .map((v) => `${seatLabel(v)}（持票人 ${holders.find((h) => h.seatId === v.id)?.name ?? ''}）`).join('、');
+        return `【${ev.name}】${input.buyer.name} 您好，已收到您的劃位資料。劃位編號 ${order.orderNo}。您選的座位：${list}。主辦方確認後，會寄出劃位成功通知與入場 QR code。如需更改座位或持票人，請直接回覆本信或聯繫主辦單位。`;
+      })(),
     });
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'submit', target: `order:${order.id}` });
     return { orderNo: order.orderNo!, amount: order.amount };

@@ -189,6 +189,8 @@ function subjectOf(template: string, content: string) {
   if (template === 'preorder_link' && ev) return `【${ev}】劃位通知`;
   if (template === 'preorder_received' && ev) return `【${ev}】已收到您的訂單`;
   if (template === 'order_confirmed' && ev) return `【${ev}】劃位成功通知`;
+  if (template === 'order_received' && ev) return `【${ev}】已收到您的劃位資料`;
+  if (template === 'order_cancelled' && ev) return `【${ev}】劃位取消通知`;
   return SUBJECT[template] ?? '通知';
 }
 
@@ -213,7 +215,12 @@ function partsOf(text: string) {
 
 export function mailLayout(o: { ev: string; title: string; greet?: string; paras: string[]; url?: string; button?: string; extraHtml?: string; note?: string; fromName?: string }) {
   const C = { ink: '#1f2a44', muted: '#6b7488', line: '#e3e7ef', brand: '#7a5a1e', bg: '#f6f3ec', btn: '#8a6a2a' };
-  const p = (x: string) => `<p style="margin:0 0 12px">${esc(x)}</p>`;
+  // 「您選的座位：A、B、C。」這類清單：拆成一行一個，方便核對
+  const p = (x: string) => {
+    const m = x.match(/^(您選的座位|劃位成功)[：:](.+?)。?$/);
+    if (m && m[2].includes('、')) return `<p style="margin:0 0 6px;font-weight:700">${esc(m[1])}</p><table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;width:100%;border:1px solid ${C.line};border-radius:8px;background:#fbfaf6">${m[2].split('、').map((it) => `<tr><td style="padding:8px 14px;border-bottom:1px solid ${C.line}">${esc(it)}</td></tr>`).join('')}</table>`;
+    return `<p style="margin:0 0 12px">${esc(x)}</p>`;
+  };
   return `<!doctype html><html><body style="margin:0;padding:0;background:${C.bg}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.bg};padding:24px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid ${C.line};font-family:'PingFang TC','Microsoft JhengHei','Noto Sans TC',sans-serif;color:${C.ink}">

@@ -56,7 +56,7 @@ describe('通知寄送', () => {
     const id = await order();
     const { s, sent } = fake();
     await dispatchQueued(db, s);
-    expect(sent).toEqual([expect.objectContaining({ ch: 'email', to: 'wang@example.com', subject: '已收到您的劃位資料' })]);
+    expect(sent).toEqual([expect.objectContaining({ ch: 'email', to: 'wang@example.com', subject: expect.stringContaining('已收到您的劃位資料') })]);
     await A.confirmPayment(db, 'tester', id, { date: '2026-11-15', amount: 3200 }, T0, 'https://abc-def.trycloudflare.com');
     await dispatchQueued(db, s);
     const last = sent.slice(1);

@@ -276,7 +276,8 @@ export default function BookingApp({ code }: { code: string }) {
     setLastOrder(r.data.orderNo); setReview(false);
     // 買了多種：還有其他沒劃的，提示並自動切換到下一種（cur 會自動選還可劃的那一種）
     const rest = (st?.paid?.rows ?? []).filter((x) => x.left > 0 && !(x.kind === 'combo' && x.id === held.comboId));
-    setMsg({ kind: 'ok', text: `劃位資料已送出（劃位編號 ${r.data.orderNo}）。主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
+    const seatsText = held.seatIds.map((id, i) => `・${seatById[id]?.label ?? id}　持票人 ${holderOf(id, i).name}`).join('\n');
+    setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
       + (rest.length ? `　還有「${rest.map((x) => `${x.name} ${x.left} ${x.unit}`).join('、')}」要劃，已幫您切換，請繼續在座位圖上選位。` : '') });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
@@ -307,8 +308,8 @@ export default function BookingApp({ code }: { code: string }) {
       </div>
       {msg?.kind === 'ok' && lastOrder && !held && (
         <div className="alertbox ok" role="status" style={{ position: 'static' }}>
-          <div className="alertbox-title">✅ 已送出</div>
-          <div>{msg.text}</div>
+          <div className="alertbox-title">✅ 劃位已送出</div>
+          <div style={{ whiteSpace: 'pre-line', fontSize: 16 }}>{msg.text}</div>
         </div>
       )}
       {alerts.length > 0 && (() => {
