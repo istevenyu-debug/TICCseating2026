@@ -50,8 +50,14 @@ const submitBody = z.object({
   name: z.string().trim().min(1, '請填寫身分證上的姓名').max(40),
   phone: z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機應為 09 開頭的 10 位數字')),
   email: z.string().trim().email('Email 格式不正確，劃位連結會寄到這個信箱').max(120),
-  paidAmount: z.number().int().min(1, '請填寫匯款金額').max(10_000_000),
-  last5: z.string().trim().regex(/^\d{5}$/, '匯款帳號末 5 碼應為 5 位數字'),
+  paidAmount: z.number().int().min(0).max(10_000_000).optional().default(0),
+  last5: z.string().trim().max(5).optional().default(''),
+  // 用兩個以上帳號匯款：分別列出末五碼與金額
+  remits: z.array(z.object({
+    last5: z.string().trim().regex(/^\d{5}$/, '匯款帳號末 5 碼應為 5 位數字'),
+    amount: z.number().int().min(1, '請填寫每一筆的匯款金額').max(10_000_000),
+  })).max(5).optional(),
+  lineName: z.string().trim().max(40).optional().default(''),
   agree: z.literal(true, { errorMap: () => ({ message: '請勾選同意個資蒐集' }) }),
   invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']).default('member'),
   invCode: z.string().trim().toUpperCase().max(20).default(''),
@@ -79,6 +85,13 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選購一項');
+  const remits = p.data.remits?.length ? p.data.remits : [{ last5: p.data.last5, amount: p.data.paidAmount }];
+  for (const r of remits) {
+    if (!/^\d{5}$/.test(r.last5)) throw new BookingError('INVALID', '匯款帳號末 5 碼應為 5 位數字');
+    if (!(r.amount > 0)) throw new BookingError('INVALID', '請填寫匯款金額');
+  }
+  const paidAmount = remits.reduce((a, r) => a + r.amount, 0);
+  const last5 = remits.length > 1 ? remits.map((r) => `${r.last5}（NT$${r.amount.toLocaleString('en-US')}）`).join('、') : remits[0].last5;
   const lineMiss = lineNeeded(menu.line, items).filter((g) => !p.data.lineJoined.includes(g.name));
   if (lineMiss.length) throw new BookingError('INVALID', `請先加入 LINE 群：${lineMiss.map((g) => g.name).join('、')}，並勾選「我已加入」`);
   // 發票：預購單只問二聯（個人）／三聯（公司名稱＋統編）；電子發票之後由後台統一開立
@@ -102,7 +115,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       const viewToken = randomBytes(18).toString('base64url');
       const [row] = await db.insert(t.preorder).values({
         eventId: ev.id, no, items, amount, name: p.data.name, phone: p.data.phone, email: p.data.email,
-        paidAmount: p.data.paidAmount, last5: p.data.last5, createdAt: now, viewToken, ...inv,
+        paidAmount, last5, lineName: p.data.lineName, createdAt: now, viewToken, ...inv,
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
@@ -119,15 +132,33 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
 
 export const itemsText = (items: t.PreorderItem[]) => items.map((x) => `${x.name} × ${x.qty}`).join('、');
 
+export const itemKey = (i: { kind: string; id: number }) => `${i.kind}:${i.id}`;
+
 export async function listPreorders(db: Db) {
   const ev = await currentEvent(db);
   const rows = await db.select().from(t.preorder).where(eq(t.preorder.eventId, ev.id)).orderBy(desc(t.preorder.id));
+  const cfg = await getLineCfg(db);
+  // 送單順序：依送出時間（取消的不算）
+  const seq = new Map([...rows].filter((r) => r.status !== 'cancelled').sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id).map((r, i) => [r.id, i + 1]));
+  // 已發連結的：劃位進度（還剩幾張沒劃、選位中、待確認、已確認）
+  const { linkEntitle } = await import('./booking');
+  const prog = new Map<number, { left: number; held: number; pending: number; paid: number }>();
+  for (const r of rows.filter((x) => x.linkId && x.status === 'confirmed')) {
+    const ent = await linkEntitle(db, r.linkId!);
+    const os = await db.select({ status: t.orders.status }).from(t.orders).where(eq(t.orders.linkId, r.linkId!));
+    const n = (s: string) => os.filter((o) => o.status === s).length;
+    prog.set(r.id, { left: ent ? ent.rows.reduce((a, x) => a + Math.max(0, x.left), 0) : 0, held: n('held'), pending: n('pending'), paid: n('paid') });
+  }
   const linkIds = rows.map((r) => r.linkId).filter((x): x is number => !!x);
   const links = linkIds.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code }).from(t.inviteLink).where(inArray(t.inviteLink.id, linkIds)) : [];
   const invs = rows.length ? await db.select().from(t.invoice).where(inArray(t.invoice.preorderId, rows.map((r) => r.id))).orderBy(t.invoice.id) : [];
   return rows.map((r) => ({
     id: r.id, no: r.no, items: r.items, amount: r.amount, name: r.name, phone: r.phone, email: r.email, paidAmount: r.paidAmount, last5: r.last5,
     source: r.source, answers: r.answers, invType: r.invType, invTitle: r.invTitle, invCode: r.invCode,
+    seq: seq.get(r.id) ?? null, lineName: r.lineName, paidOkAt: r.paidOkAt?.toISOString() ?? null, paidOkBy: r.paidOkBy, lineOk: r.lineOk,
+    released: r.released ?? (r.linkId ? r.items.map(itemKey) : []),
+    needGroups: Object.fromEntries(r.items.map((i) => [itemKey(i), lineNeeded(cfg, [i]).map((g) => g.name)])) as Record<string, string[]>,
+    progress: prog.get(r.id) ?? null,
     status: r.status, note: r.note, createdAt: r.createdAt.toISOString(), confirmedAt: r.confirmedAt?.toISOString() ?? null, confirmedBy: r.confirmedBy,
     isNew: r.status === 'submitted' && !r.seenAt, linkCode: links.find((l) => l.id === r.linkId)?.code ?? null,
     invoice: invDesc(r.invType, r.invCode, r.invTitle, r.email),
@@ -182,6 +213,79 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_confirm', target: `preorder:${id}`, detail: JSON.stringify({ link: link.code }) });
   return { code: link.code, linkId: link.id, fromForm, email: po.email };
+}
+
+/** 老大核對：已匯款、已入 LINE 群。只記錄，不寄任何東西 */
+export async function checkPreorder(db: Db, actor: string, id: number, v: { paid?: boolean; line?: string[] }, now = new Date()) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這張訂單已取消');
+  const set: Partial<typeof t.preorder.$inferInsert> = { seenAt: po.seenAt ?? now };
+  if (v.paid !== undefined) Object.assign(set, v.paid ? { paidOkAt: now, paidOkBy: actor } : { paidOkAt: null, paidOkBy: null });
+  if (v.line) set.lineOk = [...new Set(v.line.map((x) => x.trim()).filter(Boolean))].slice(0, 10);
+  await db.update(t.preorder).set(set).where(eq(t.preorder.id, id));
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_check', target: `preorder:${id}`, detail: JSON.stringify(v) });
+}
+
+/** 表單來的（沒有數量）：由後台設定他可以劃的內容 */
+export async function setPreorderItems(db: Db, actor: string, id: number, pick: { kind: 'combo' | 'zone'; id: number; qty: number }[]) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.linkId) throw new BookingError('INVALID', '已發出劃位連結，不能再改內容');
+  const menu = await preorderMenu(db);
+  const items: t.PreorderItem[] = [];
+  for (const it of pick.filter((x) => x.qty > 0)) {
+    const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
+    if (!m) throw new BookingError('INVALID', '選擇的項目已變更，請重新整理頁面。');
+    items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
+  }
+  if (!items.length) throw new BookingError('INVALID', '請至少填一項的數量');
+  await db.update(t.preorder).set({ items, amount: items.reduce((a, x) => a + x.price * x.qty, 0) }).where(eq(t.preorder.id, id));
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_items', target: `preorder:${id}`, detail: itemsText(items) });
+}
+
+/**
+ * 發出劃位連結（老大按第三顆鈕才寄）。可以分批：例如週二只發功德、週三再發金區。
+ * 第一次發出時建立專屬連結；之後同一個連結再開放下一批，並再寄一封信。
+ * 必須已勾「已匯款」，以及這批項目需要的 LINE 群都已勾。
+ */
+export async function releasePreorder(db: Db, actor: string, id: number, keys: string[], base?: string, now = new Date()) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這張訂單已取消');
+  if (!po.items.length) throw new BookingError('INVALID', '請先設定他可以劃的內容與數量');
+  if (!po.paidOkAt) throw new BookingError('INVALID', '請先勾「已匯款」');
+  const done = po.released ?? (po.linkId ? po.items.map(itemKey) : []);
+  const rel = po.items.filter((i) => keys.includes(itemKey(i)) && !done.includes(itemKey(i)));
+  if (!rel.length) throw new BookingError('INVALID', '這些項目已經發過劃位連結了');
+  const missing = lineNeeded(await getLineCfg(db), rel).filter((g) => !po.lineOk.includes(g.name));
+  if (missing.length) throw new BookingError('INVALID', `請先勾「已入 ${missing.map((g) => g.name).join('、')}」`);
+  let linkId = po.linkId;
+  let code = '';
+  if (!linkId) {
+    const expiresAt = new Date(`${ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })}T23:59:59+08:00`);
+    const link = await createInviteLink(db, actor, {
+      name: po.name, phone: po.phone, quota: 0, expiresAt,
+      note: `訂單 ${po.no}・${itemsText(po.items)}・匯款 ${po.source === 'form' ? po.last5 : `NT$${po.paidAmount.toLocaleString('en-US')}・末五碼 ${po.last5}`}`.slice(0, 300),
+    }, base, { sms: false });
+    linkId = link.id; code = link.code;
+  } else {
+    const [l] = await db.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, linkId));
+    code = l.code;
+  }
+  const released = [...done, ...rel.map(itemKey)];
+  await db.update(t.preorder).set({ status: 'confirmed', linkId, released, confirmedAt: po.confirmedAt ?? now, confirmedBy: po.confirmedBy ?? actor, seenAt: po.seenAt ?? now }).where(eq(t.preorder.id, id));
+  const rest = po.items.filter((i) => !released.includes(itemKey(i)));
+  const url = linkUrl(code, base);
+  if (po.email) await db.insert(t.notification).values({
+    linkId, channel: 'email', template: 'preorder_link', recipient: po.email,
+    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項，現在輪到您劃位：${itemsText(rel)}。請點以下專屬連結選位並填寫持票人資料：${url}　${rest.length ? `（${itemsText(rest)} 輪到時會再通知您，用同一個連結劃位）` : ''}連結有效至演出當天，請勿轉傳他人。`,
+  });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_release', target: `preorder:${id}`, detail: JSON.stringify({ link: code, items: rel.map(itemKey) }) });
+  return { code, linkId, email: po.email, items: itemsText(rel), rest: itemsText(rest) };
 }
 
 export async function cancelPreorder(db: Db, actor: string, id: number, reason = '') {

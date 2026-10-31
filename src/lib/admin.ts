@@ -558,7 +558,7 @@ export function linkUrl(code: string, base?: string) {
   return `${b}/t/${code}`;
 }
 
-export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date; note?: string }, base?: string) {
+export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date; note?: string }, base?: string, opt: { sms?: boolean } = {}) {
   const ev = await currentEvent(db);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
@@ -566,7 +566,7 @@ export async function createInviteLink(db: Db, actor: string, v: { name: string;
     if (exists) continue;
     const [l] = await db.insert(t.inviteLink).values({ eventId: ev.id, code, ...v, note: v.note ?? '' }).returning();
     // 有填手機才寄簡訊；沒填就由主辦方自行複製連結貼給當事人
-    if (v.phone) await db.insert(t.notification).values({
+    if (v.phone && opt.sms !== false) await db.insert(t.notification).values({
       linkId: l.id, channel: 'sms', template: 'invite', recipient: v.phone,
       content: `【${ev.name}】${v.name} 您好，您的專屬購票連結：${linkUrl(code, base)} 可訂 ${v.quota || '不限'} 張，${v.expiresAt.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' })} 前有效。`,
     });

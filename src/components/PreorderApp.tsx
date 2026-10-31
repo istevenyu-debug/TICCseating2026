@@ -36,6 +36,15 @@ async function call<T>(url: string, body?: unknown): Promise<Res<T>> {
 /** 這台裝置送出過的訂單（只存隨機查詢碼，不存個資）。瀏覽器不允許儲存時就略過 */
 const STORE = 'ticc.preorders';
 type Saved = { token: string; no: string };
+/** 草稿：去匯款、去加 LINE 群再回來，選的、填的都還在（只存在這支手機的這個瀏覽器） */
+const DRAFT = 'ticc.buyDraft';
+type Draft = { qty: Record<string, number>; f: Record<string, string>; extra: { last5: string; amount: string }[]; lineOpened: string[]; lineJoined: string[]; inv: { type: InvType; code: string; title: string }; paidTouched: boolean; at: number };
+function loadDraft(): Draft | null {
+  try { const v = JSON.parse(localStorage.getItem(DRAFT) ?? 'null') as Draft | null; return v && Date.now() - v.at < 30 * 86400_000 ? v : null; } catch { return null; }
+}
+function saveDraft(d: Omit<Draft, 'at'>) { try { localStorage.setItem(DRAFT, JSON.stringify({ ...d, at: Date.now() })); } catch { /* 無痕模式等 */ } }
+function clearDraft() { try { localStorage.removeItem(DRAFT); } catch { /* 忽略 */ } }
+
 function loadSaved(): Saved[] {
   try { const v = JSON.parse(localStorage.getItem(STORE) ?? '[]'); return Array.isArray(v) ? v.filter((x) => x && typeof x.token === 'string') : []; } catch { return []; }
 }
@@ -75,7 +84,9 @@ export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [err, setErr] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
-  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', agree: false });
+  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', lineName: '', agree: false });
+  const [extra, setExtra] = useState<{ last5: string; amount: string }[]>([]); // 第二個以上的匯款帳號
+  const [restored, setRestored] = useState<boolean | null>(null);
   const [lineOpened, setLineOpened] = useState<string[]>([]);
   const [lineJoined, setLineJoined] = useState<string[]>([]);
   const [paidTouched, setPaidTouched] = useState(false);
@@ -92,6 +103,22 @@ export default function PreorderApp() {
     if (r.ok) setMine(r.data);
   }, []);
   useEffect(() => { api<Menu>().then((r) => (r.ok ? setMenu(r.data) : setErr(r.message))); reload(); }, [reload]);
+  // 讀回草稿（只做一次）
+  useEffect(() => {
+    if (!menu || restored !== null) return;
+    const d = loadDraft();
+    if (d && (Object.values(d.qty).some((n) => n > 0) || d.f.name)) {
+      setQty(d.qty); setF((x) => ({ ...x, ...d.f, agree: false })); setExtra(d.extra ?? []); setLineOpened(d.lineOpened ?? []); setLineJoined(d.lineJoined ?? []);
+      setInv(d.inv ?? { type: 'member', code: '', title: '' }); setPaidTouched(!!d.paidTouched); setRestored(true);
+    } else setRestored(false);
+  }, [menu, restored]);
+  // 自動存草稿
+  useEffect(() => {
+    if (!restored && restored !== false) return;
+    if (done) return;
+    const { agree: _a, ...rest } = f; void _a;
+    saveDraft({ qty, f: rest, extra, lineOpened, lineJoined, inv, paidTouched });
+  }, [qty, f, extra, lineOpened, lineJoined, inv, paidTouched, restored, done]);
   // 等待收款期間：回到這頁或每分鐘自動更新一次
   useEffect(() => {
     if (!mine.some((m) => m.status === 'submitted')) return;
@@ -109,7 +136,11 @@ export default function PreorderApp() {
   // 選了哪些項目，就要加入對應的 LINE 群（不重複、依後台設定順序）
   const lineIdx = new Set(lines.map((i) => menu.line.map[`${i.kind}:${i.id}`]).filter((x) => x !== undefined));
   const lineGroups = menu.line.groups.filter((_, n) => lineIdx.has(n));
-  const paid = paidTouched ? f.paid : total ? String(total) : '';
+  const extraSum = extra.reduce((a, r) => a + (parseInt(r.amount.replace(/\D/g, '')) || 0), 0);
+  const paid = paidTouched ? f.paid : total ? String(Math.max(0, total - extraSum)) : '';
+  const remits = [{ last5: f.last5.trim(), amount: parseInt(paid.replace(/\D/g, '')) || 0 }, ...extra.map((r) => ({ last5: r.last5.trim(), amount: parseInt(r.amount.replace(/\D/g, '')) || 0 }))];
+  const paidSum = remits.reduce((a, r) => a + r.amount, 0);
+  const ex = menu.items[0];
   const setN = (i: Menu['items'][number], n: number) => { setQty({ ...qty, [key(i)]: Math.max(0, Math.min(200, n)) }); setErr(''); };
   const upd = (v: Partial<typeof f>) => { setF({ ...f, ...v }); setErr(''); };
 
@@ -123,6 +154,10 @@ export default function PreorderApp() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) return bad('Email 格式不正確，劃位連結會寄到這個信箱', 'p-email');
     if (!(parseInt(paid.replace(/\D/g, '')) > 0)) return bad('請填寫匯款金額', 'p-paid');
     if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
+    for (const [n, r] of extra.entries()) {
+      if (!/^\d{5}$/.test(r.last5.trim())) return bad(`第 ${n + 2} 筆匯款：帳號末 5 碼應為 5 位數字`, `p-x5-${n}`);
+      if (!(parseInt(r.amount.replace(/\D/g, '')) > 0)) return bad(`第 ${n + 2} 筆匯款：請填寫金額`, `p-xa-${n}`);
+    }
     { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, inv.type === 'company' && !inv.title.trim() && inv.code.trim() ? 'p-inv-title' : 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
     const miss = lineGroups.find((g) => !lineJoined.includes(g.name));
@@ -133,12 +168,14 @@ export default function PreorderApp() {
     setBusy(true);
     const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
-      name: f.name.trim(), phone: f.phone, email: f.email.trim(), paidAmount: parseInt(paid.replace(/\D/g, '')) || 0, last5: f.last5.trim(), agree: f.agree, lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
+      name: f.name.trim(), phone: f.phone, email: f.email.trim(), agree: f.agree, lineName: f.lineName.trim(),
+      remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
       invType: inv.type, invCode: inv.type === 'company' ? inv.code.trim() : '', invTitle: inv.type === 'company' ? inv.title.trim() : '',
     });
     setBusy(false);
     if (!r.ok) { setReview(false); setErr(r.message); return; }
     addSaved({ token: r.data.token, no: r.data.no });
+    clearDraft();
     setDone(r.data); window.scrollTo({ top: 0 });
   }
 
@@ -146,7 +183,17 @@ export default function PreorderApp() {
     <div className="card">
       <h1>{menu.event.name}</h1>
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
-      <p className="small" style={{ margin: '8px 0 0' }}>本頁為<b>預購單</b>，不在這裡劃位。匯款並送出資料後，主辦方確認收到款項，會把<b>專屬劃位連結寄到您的 Email</b>，再用連結選位。</p>
+      <h3 style={{ margin: '12px 0 4px' }}>怎麼訂</h3>
+      <ol className="small" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
+        <li>選好要訂的項目，畫面會算出<b>應匯金額</b>。</li>
+        {menu.line.groups.length > 0 && <li>加入 LINE 群（依您選的項目）。</li>}
+        <li>到銀行或網銀 App <b>匯款</b>。</li>
+        <li>回到這個頁面，填<b>匯款帳號後五碼</b>和聯絡資料，送出。</li>
+      </ol>
+      {ex && <p className="small" style={{ margin: '6px 0 0' }}>例：{ex.name} 1 {ex.unit} {money(ex.price)} → 匯 {money(ex.price)} 到下方帳戶 → 回來填帳號後五碼送出。</p>}
+      <p className="small" style={{ margin: '6px 0 0' }}>去匯款或加 LINE 群會離開這頁，沒關係：<b>用同一支手機、同一個方式再打開這個連結</b>，您選的、填的都還在。</p>
+      <h3 style={{ margin: '12px 0 4px' }}>劃位順序</h3>
+      <p className="small" style={{ margin: 0 }}>依<b>送出預購單的先後順序</b>劃位。主辦方核對<b>匯款已入帳</b>、並確認您<b>已加入 LINE 群</b>後，會依序通知您劃位；尚未匯款或還沒加入 LINE 群的，先輪給後面已完成的人。輪到您時，劃位連結會寄到您的 Email，主辦方也可能用電話或 LINE 與您聯繫。</p>
     </div>
   );
 
@@ -175,6 +222,10 @@ export default function PreorderApp() {
     <main className="wrap" style={{ maxWidth: 640 }}>
       {head}
       <MyPreorders mine={mine} reload={reload} />
+      {restored && !review && lines.length > 0 && (
+        <div className="note ok">歡迎回來，您上次選的是 <b>{lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}</b>，應匯 <b>{money(total)}</b>。匯好了嗎？請在下面填帳號後五碼送出。
+          <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => { clearDraft(); location.reload(); }}>清除重填</button></div>
+      )}
 
       {review ? (
         <div className="card review" style={{ marginTop: 0 }}>
@@ -184,8 +235,9 @@ export default function PreorderApp() {
             <span className="muted">姓名</span><span><b>{f.name.trim()}</b></span>
             <span className="muted">手機</span><span className="mono"><b>{f.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
             <span className="muted">Email</span><span className="mono"><b>{f.email.trim()}</b></span>
-            <span className="muted">匯款金額</span><span className="mono">{money(parseInt(paid.replace(/\D/g, '')) || 0)}{(parseInt(paid.replace(/\D/g, '')) || 0) !== total && <b style={{ color: 'var(--red)' }}>（與合計 {money(total)} 不同）</b>}</span>
-            <span className="muted">帳號末五碼</span><span className="mono">{f.last5.trim()}</span>
+            {f.lineName.trim() && <><span className="muted">LINE 名稱</span><span>{f.lineName.trim()}</span></>}
+            <span className="muted">匯款</span><span className="mono">{remits.map((r, n) => <div key={n}>末五碼 {r.last5}・{money(r.amount)}</div>)}
+              {remits.length > 1 && <div>合計 {money(paidSum)}</div>}{paidSum !== total && <b style={{ color: 'var(--red)' }}>（與應付 {money(total)} 不同）</b>}</span>
             <span className="muted">發票</span><span>{inv.type === 'company' ? `三聯：${inv.title.trim()}（統編 ${inv.code.trim()}）` : '二聯（個人）'}</span>
           </div>
           <h3>選購內容</h3>
@@ -216,8 +268,28 @@ export default function PreorderApp() {
             <div className="total"><span className="muted">合計{lines.length ? `（${lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}）` : ''}</span><b>{money(total)}</b></div>
           </div>
 
+          {lineGroups.length > 0 && (
+            <div className="card">
+              <h2>二、加入 LINE 群（必做）</h2>
+              <p className="small" style={{ margin: 0 }}>依您選購的項目，請先加入下面的 LINE 群，才能送出。加入後請<b>回到這個頁面</b>繼續（iPhone 按左上角返回；在 LINE 裡打開的，請再點一次預購單連結，資料都還在）。</p>
+              {lineGroups.map((g, n) => {
+                const opened = lineOpened.includes(g.name);
+                return (
+                  <div key={g.name} style={{ marginTop: 10 }}>
+                    <a className="btn pri" href={g.url} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
+                    onClick={() => { if (!opened) setLineOpened([...lineOpened, g.name]); setErr(''); }}>① 加入「{g.name}」</a>
+                    <label className="check" style={{ marginTop: 6, opacity: opened ? 1 : 0.5 }}>
+                    <input id={`p-line-${n}`} type="checkbox" checked={lineJoined.includes(g.name)} disabled={!opened}
+                      onChange={(e) => { setLineJoined(e.target.checked ? [...lineJoined, g.name] : lineJoined.filter((x) => x !== g.name)); setErr(''); }} />
+                    <span>② 我已加入「{g.name}」{!opened && <><br /><span className="small muted">請先按上面的「加入「{g.name}」」</span></>}</span>
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <div className="card">
-            <h2>二、請先匯款</h2>
+            <h2>{lineGroups.length ? '三' : '二'}、請先匯款</h2>
             <div className="bank">
               <span className="muted">銀行</span><span>{menu.event.bankName || '（主辦方尚未設定）'}</span>
               <span className="muted">帳號</span><span className="mono">{menu.event.bankAccount}</span>
@@ -229,7 +301,7 @@ export default function PreorderApp() {
           </div>
 
           <div className="card">
-            <h2>三、匯款後填寫資料</h2>
+            <h2>{lineGroups.length ? '四' : '三'}、匯款後填寫資料</h2>
             <label className="f">姓名（與身分證相同）<input id="p-name" value={f.name} autoComplete="name" onChange={(e) => upd({ name: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
               <label className="f">手機<input id="p-phone" value={f.phone} maxLength={13} inputMode="tel" autoComplete="tel" placeholder="09xxxxxxxx"
@@ -237,10 +309,20 @@ export default function PreorderApp() {
                 {phoneProblem(f.phone) && <span className="small" style={{ color: 'var(--red)' }}>{phoneProblem(f.phone)}</span>}</label>
               <label className="f">Email（劃位連結寄到這裡）<input id="p-email" type="email" value={f.email} autoComplete="email" onChange={(e) => upd({ email: e.target.value })} /></label>
             </div>
+            <label className="f" style={{ marginTop: 8 }}>LINE 顯示名稱（選填，方便主辦方在群裡找到您）<input value={f.lineName} maxLength={40} onChange={(e) => upd({ lineName: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
+              <label className="f">匯款帳號後五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
               <label className="f">匯款金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
-              <label className="f">匯款帳號末五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
             </div>
+            {extra.map((r, n) => (
+              <div key={n} className="fields" style={{ marginTop: 6 }}>
+                <label className="f">第 {n + 2} 個帳號後五碼<input id={`p-x5-${n}`} value={r.last5} maxLength={5} inputMode="numeric" onChange={(e) => { setExtra(extra.map((x, m) => m === n ? { ...x, last5: e.target.value.replace(/\D/g, '') } : x)); setErr(''); }} /></label>
+                <label className="f">金額<span className="row" style={{ flexWrap: 'nowrap' }}><input id={`p-xa-${n}`} value={r.amount} inputMode="numeric" onChange={(e) => { setExtra(extra.map((x, m) => m === n ? { ...x, amount: e.target.value } : x)); setErr(''); }} />
+                  <button type="button" className="btn small" aria-label="刪除這筆" onClick={() => setExtra(extra.filter((_, m) => m !== n))}>✕</button></span></label>
+              </div>
+            ))}
+            {extra.length < 4 && <button type="button" className="btn small" style={{ marginTop: 6 }} onClick={() => setExtra([...extra, { last5: '', amount: '' }])}>＋用了兩個以上帳號匯款，再加一筆</button>}
+            {extra.length > 0 && <div className="small" style={{ marginTop: 4 }}>匯款合計 <b>{money(paidSum)}</b>{paidSum !== total && <span style={{ color: 'var(--red)' }}>（應付 {money(total)}）</span>}</div>}
             <div style={{ marginTop: 12 }}>
               <h3 style={{ margin: '0 0 6px' }}>發票</h3>
               <div className="row">
@@ -259,26 +341,6 @@ export default function PreorderApp() {
               <input id="p-agree" type="checkbox" checked={f.agree} onChange={(e) => upd({ agree: e.target.checked })} />
               我同意主辦方為售票、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
             </label>
-            {lineGroups.length > 0 && (
-              <div className="note" style={{ marginTop: 12 }}>
-                <b>加入 LINE 群（必做）</b>
-                <p className="small" style={{ margin: '4px 0 0' }}>依您選購的項目，請先加入下面的 LINE 群，才能送出。</p>
-                {lineGroups.map((g, n) => {
-                  const opened = lineOpened.includes(g.name);
-                  return (
-                    <div key={g.name} style={{ marginTop: 10 }}>
-                      <a className="btn pri" href={g.url} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
-                        onClick={() => { if (!opened) setLineOpened([...lineOpened, g.name]); setErr(''); }}>① 加入「{g.name}」</a>
-                      <label className="check" style={{ marginTop: 6, opacity: opened ? 1 : 0.5 }}>
-                        <input id={`p-line-${n}`} type="checkbox" checked={lineJoined.includes(g.name)} disabled={!opened}
-                          onChange={(e) => { setLineJoined(e.target.checked ? [...lineJoined, g.name] : lineJoined.filter((x) => x !== g.name)); setErr(''); }} />
-                        <span>② 我已加入「{g.name}」{!opened && <><br /><span className="small muted">請先按上面的「加入「{g.name}」」</span></>}</span>
-                      </label>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
             {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
             <button className="btn pri" type="submit" style={{ width: '100%', marginTop: 12 }}>下一步：確認資料</button>
           </div>

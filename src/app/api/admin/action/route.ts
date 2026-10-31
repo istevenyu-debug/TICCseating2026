@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -80,6 +80,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
+  z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
+  z.object({ action: z.literal('preorder.items'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30) }),
+  z.object({ action: z.literal('preorder.release'), id, keys: z.array(z.string().regex(/^(combo|zone):\d+$/)).min(1).max(30) }),
   z.object({ action: z.literal('preorder.line'), groups: z.array(z.object({ name: z.string(), url: z.string() })).max(8), map: z.record(z.string(), z.number()) }),
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
   z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
@@ -183,6 +186,12 @@ export async function POST(req: Request) {
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);
       case 'preorder.pushLink': return setPushLink(db, who, a.on);
+      case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
+      case 'preorder.items': return setPreorderItems(db, who, a.id, a.items);
+      case 'preorder.release': {
+        const r = await releasePreorder(db, who, a.id, a.keys, originOf(req));
+        return { ...r, delivery: r.email ? (await deliver(db, { linkId: r.linkId, templates: ['preorder_link'] })).slice(0, 1) : [] };
+      }
       case 'preorder.line': return setLineCfg(db, who, { groups: a.groups, map: a.map });
       case 'gate.create': return createGates(db, who, a.names);
       case 'gate.update': return updateGate(db, who, a.id, a.values);

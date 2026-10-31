@@ -4,8 +4,8 @@ import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
-import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder } from '@/lib/preorder';
+import { getBookingState, holdSeats, linkEntitle, submitOrder } from '@/lib/booking';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -191,5 +191,38 @@ describe('預購單發票：二聯／三聯（電子發票未開也記下來，�
     await submitPreorder(db, body(), 'ip-inv');
     const rows = await db.select().from(t.preorder).orderBy(t.preorder.id);
     expect(rows.map((r) => [r.invType, r.invCode, r.invTitle])).toEqual([['company', '22099131', '好公司'], ['member', '', '']]);
+  });
+});
+
+describe('老大依序發劃位：打勾不寄，按「發出」才寄；可分批（週二功德、週三金區）', () => {
+  it('勾已匯款、已入群後，分批發出；劃位只限已發出的項目', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await setLineCfg(db, 'admin', { groups: [{ name: '功德群', url: 'https://line.me/R/ti/g/a' }, { name: '金群', url: 'https://line.me/R/ti/g/b' }],
+      map: { [`combo:${combo2}`]: 0, [`zone:${zoneA}`]: 1 } });
+    await submitPreorder(db, body({ lineJoined: ['功德群', '金群'], lineName: '小林', remits: [{ last5: '11111', amount: 15000 }, { last5: '22222', amount: 360 }] }), 'ip-q');
+    const p = (await listPreorders(db))[0];
+    expect(p).toMatchObject({ seq: 1, lineName: '小林', paidAmount: 15360, last5: '11111（NT$15,000）、22222（NT$360）', released: [] });
+    expect(p.needGroups).toEqual({ [`combo:${combo2}`]: ['功德群'], [`zone:${zoneA}`]: ['金群'] });
+    await expect(releasePreorder(db, 'admin', p.id, [`combo:${combo2}`])).rejects.toThrow('已匯款');
+    await checkPreorder(db, 'admin', p.id, { paid: true });
+    await expect(releasePreorder(db, 'admin', p.id, [`combo:${combo2}`])).rejects.toThrow('功德群');
+    await checkPreorder(db, 'admin', p.id, { line: ['功德群'] });
+    const before = (await db.select().from(t.notification)).length;
+    // 週二：只發功德（雙人套票）
+    const r1 = await releasePreorder(db, 'admin', p.id, [`combo:${combo2}`], 'https://x');
+    expect(r1.rest).toBe('A區 單張 × 1');
+    const mails = (await db.select().from(t.notification)).slice(before);
+    expect(mails).toHaveLength(1); // 只有 Email，不發簡訊
+    expect(mails[0].content).toContain('A區 單張 × 1 輪到時會再通知您');
+    const ent1 = await linkEntitle(db, r1.linkId);
+    expect(ent1!.rows.map((x) => x.name)).toEqual(['雙人套票']);
+    // 週三：發金區（要先勾金群）
+    await expect(releasePreorder(db, 'admin', p.id, [`zone:${zoneA}`])).rejects.toThrow('金群');
+    await checkPreorder(db, 'admin', p.id, { line: ['功德群', '金群'] });
+    const r2 = await releasePreorder(db, 'admin', p.id, [`zone:${zoneA}`], 'https://x');
+    expect(r2.code).toBe(r1.code); // 同一個連結
+    expect((await linkEntitle(db, r1.linkId))!.rows).toHaveLength(2);
+    await expect(releasePreorder(db, 'admin', p.id, [`zone:${zoneA}`])).rejects.toThrow('已經發過');
+    expect((await listPreorders(db))[0]).toMatchObject({ status: 'confirmed', released: [`combo:${combo2}`, `zone:${zoneA}`] });
   });
 });

@@ -215,6 +215,13 @@ export const preorder = pgTable('preorder', {
   source: text('source').notNull().default('web'), // web 本站預購頁／form Google 表單
   formId: text('form_id'), // Google 表單回覆編號（避免重複匯入）
   answers: jsonb('answers').$type<{ q: string; a: string }[]>().notNull().default([]), // Google 表單原始回答
+  lineName: text('line_name').notNull().default(''), // 買方自填的 LINE 顯示名稱（選填）
+  // 老大核對：已匯款、已入 LINE 群（群名清單）；勾了不會寄任何東西
+  paidOkAt: timestamp('paid_ok_at', { withTimezone: true }),
+  paidOkBy: text('paid_ok_by'),
+  lineOk: jsonb('line_ok').$type<string[]>().notNull().default([]),
+  // 已發出劃位的項目（'combo:3'、'zone:5'）。null＝舊資料，全部可劃
+  released: jsonb('released').$type<string[]>(),
   // 電子發票開立方式：member 綠界會員載具（Email）／mobile 手機條碼／cert 自然人憑證／donate 捐贈／company 公司統編
   invType: text('inv_type').notNull().default('member'),
   invCode: text('inv_code').notNull().default(''), // 手機條碼、憑證號碼、愛心碼或統編

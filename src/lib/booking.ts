@@ -115,7 +115,9 @@ export async function linkEntitle(db: Exec, linkId: number) {
       .innerJoin(t.eventSeat, and(eq(t.eventSeat.seatId, t.orderSeat.seatId), eq(t.eventSeat.eventId, po.eventId)))
       .where(inArray(t.orderSeat.orderId, os.map((o) => o.id)))
     : [];
-  return entitle(po.items, os.map((o) => ({ comboId: o.comboId, sets: o.sets, isSingle: o.isSingle, zoneIds: zs.filter((z) => z.orderId === o.id).map((z) => z.zoneId) })));
+  // 分批發出（例：週二功德、週三金區）：只算已發出的項目
+  const items = po.released ? po.items.filter((i) => po.released!.includes(`${i.kind}:${i.id}`)) : po.items;
+  return entitle(items, os.map((o) => ({ comboId: o.comboId, sets: o.sets, isSingle: o.isSingle, zoneIds: zs.filter((z) => z.orderId === o.id).map((z) => z.zoneId) })));
 }
 
 /* ---------- 逾時釋放 ---------- */
@@ -206,13 +208,14 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const secret = await qrSecret(db);
   // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
   const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
-  const comboItem = po?.items.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
+  const poItems = po ? (po.released ? po.items.filter((i) => po.released!.includes(`${i.kind}:${i.id}`)) : po.items) : [];
+  const comboItem = poItems.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
   const ent = await linkEntitle(db, link.id);
   const { invoiceForLink } = await import('./einvoice');
   const inv = await invoiceForLink(db, link.id); // 只有「即開」時顯示
   const prefill = {
     name: link.name, phone: link.phone, email: po?.email ?? '',
-    comboId: comboItem?.id ?? 0, bought: po ? po.items.map((i) => `${i.name} × ${i.qty}`).join('、') : '',
+    comboId: comboItem?.id ?? 0, bought: poItems.map((i) => `${i.name} × ${i.qty}`).join('、'),
   };
   return {
     now: now.toISOString(),
