@@ -245,3 +245,16 @@ ol.flow li.on { font-weight: 700; }
 /* 預購單座位圖縮到整張放得下時：座位太小就不顯示號碼 */
 .hall.tiny .seat { font-size: 0; }
 .hall.tiny .rl { font-size: 9px; }
+/* 手機寬度：欄位上下排、表格縮小可滑、分頁列可橫滑、按鈕好點 */
+@media (max-width: 640px) {
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .tbl table { font-size: 13px; }
+  .tbl td, .tbl th { padding: 6px 5px; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tabs button { white-space: nowrap; flex: none; }
+  .home { grid-template-columns: minmax(0, 1fr) !important; }
+  .card { padding-left: 12px; padding-right: 12px; }
+  .row { flex-wrap: wrap; }
+  input[type="checkbox"], input[type="radio"] { min-width: 18px; min-height: 18px; }
+  select { max-width: 100%; }
+}
