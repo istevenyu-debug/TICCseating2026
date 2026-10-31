@@ -321,7 +321,7 @@ function RestoreUpload() {
 function Home() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   const items: [Tab, string, string, string][] = [
-    ['price', '價格設定', '票種名稱、票價與座位底色，依排數和區塊指定座位，組合票，開放訂購與發布', st.zones.slice(0, 3).map((z) => `${z.name || '未命名'} ${money(z.price)}`).join('・')],
+    ['price', '價格設定', '票種名稱、票價與座位底色，依排數和區塊指定座位，組合票，開放劃位與發布', st.zones.slice(0, 3).map((z) => `${z.name || '未命名'} ${money(z.price)}`).join('・')],
     ['usage', '席位用途', '保留公關席、贊助席、不開放座位，加裝 VIP 排', `保留／不開放 ${st.stats.reserved} 席`],
     ['links', '專屬購票連結', '發給受邀對象的購票連結與可購張數', `已發出 ${st.links.length} 條`],
     ['pre', '表單／收款', '依送單順序：核帳、勾入群，輪到時按「發出劃位連結」寄出', `${st.preorders.filter((x) => x.status === 'submitted').length} 張待發連結`],
@@ -334,7 +334,7 @@ function Home() {
       {items.map(([k, t, d, m], i) => (
         <button key={k} className={`hcard${i === 0 ? ' main' : ''}`} onClick={() => go(k)}><b>{t}</b><span>{d}</span><em>{m}</em></button>
       ))}
-      {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放訂購」按「發布到購票頁」。</div>}
+      {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放劃位」按「發布到購票頁」。</div>}
       <BackupCard />
       <AuditCard />
       <ResetCard />
@@ -596,12 +596,12 @@ function Price() {
         <p className="small muted">「單張購票」固定提供，依各票種票價計算，可在下方設定是否開放。</p>
       </div>
 
-      {/* 四、開放訂購 */}
+      {/* 四、開放劃位 */}
       <div className="card">
-        <h2>四、開放訂購 <span className="small muted">勾選要開放的項目，按「發布到購票頁」後消費者才看得到、才能訂購</span></h2>
+        <h2>四、開放劃位 <span className="small muted">管拿到劃位連結的人能不能選座位（贊助登記頁 /buy 另在「四、訂單核帳」開關）。勾選要開放的項目，按「發布到購票頁」後才生效</span></h2>
         <div className="pubgrid">
           <div><h3>總開關</h3>
-            <label className="switch"><input type="checkbox" checked={st.event.saleOpen} disabled={busy} onChange={(e) => act({ action: 'event.update', values: { saleOpen: e.target.checked } })} />開放訂購</label>
+            <label className="switch"><input type="checkbox" checked={st.event.saleOpen} disabled={busy} onChange={(e) => act({ action: 'event.update', values: { saleOpen: e.target.checked } })} />開放劃位</label>
           </div>
           <div><h3>開放的票種</h3><div className="checks">
             {st.zones.map((z) => (
@@ -618,7 +618,7 @@ function Price() {
         </div>
         <div className={`pubbar${st.dirty ? ' dirty' : ''}`}>
           <div className="small">
-            <b>購票頁目前：</b>{pub?.open ? '開放訂購中' : '未開放'}｜票種：{pub ? pub.zoneIds.map((id) => zoneById[id]?.name).filter(Boolean).join('、') || '無' : '無'}｜購票方式：{pub ? st.combos.filter((c) => pub.comboIds.includes(c.id)).map((c) => c.name).join('、') || '無' : '無'}
+            <b>購票頁目前：</b>{pub?.open ? '開放劃位中' : '未開放'}｜票種：{pub ? pub.zoneIds.map((id) => zoneById[id]?.name).filter(Boolean).join('、') || '無' : '無'}｜購票方式：{pub ? st.combos.filter((c) => pub.comboIds.includes(c.id)).map((c) => c.name).join('、') || '無' : '無'}
             <br /><span className="muted">最後發布：{pub ? tw(pub.at) : '尚未發布'}</span>
             {st.dirty && <><br /><b style={{ color: 'var(--warn)' }}>有尚未發布的變更，消費者目前還看不到</b></>}
           </div>
@@ -1749,9 +1749,9 @@ function Preorders() {
       </div>
 
       <details className="card">
-        <summary style={{ cursor: 'pointer' }}><b>本站預購單（/buy）設定</b> <span className="small muted">{st.event.preorderOpen ? '開放中' : '關閉中：/buy 會轉到老闆的 Google 表單'}</span></summary>
+        <summary style={{ cursor: 'pointer' }}><b>本站預購單（/buy）設定</b> <span className="small muted">{st.event.preorderOpen ? '開放中' : '關閉中：/buy 顯示「目前尚未開放贊助登記」'}</span></summary>
         <label className="switch" style={{ marginTop: 8 }}><input type="checkbox" checked={st.event.preorderOpen} disabled={busy}
-          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放本站預購單</label>
+          onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放本站預購單（贊助登記頁 /buy 能不能送出）</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
           <button className="btn pri" onClick={() => navigator.clipboard?.writeText(inviteText(st, buyUrl)).then(() => setMsg({ kind: 'ok', text: '已複製「連結＋邀請文字」，可直接貼到 LINE' }), () => undefined)}>複製連結＋邀請文字（貼 LINE 用）</button>

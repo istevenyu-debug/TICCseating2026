@@ -1,4 +1,3 @@
-import { redirect } from 'next/navigation';
 import PreorderApp from '@/components/PreorderApp';
 import { getDb } from '@/db/client';
 import * as t from '@/db/schema';
@@ -16,12 +15,7 @@ export async function generateMetadata() {
   return { title, description, openGraph: { title, description, type: 'website', locale: 'zh_TW', siteName: ev?.name ?? '贊助登記' } };
 }
 
-/** 報名改用老闆的 Google 表單：本站預購單關閉時，/buy 直接轉到表單 */
-const FORM_URL = 'https://forms.gle/irEzAvs9YyCv19Ga7';
-
-export default async function BuyPage() {
-  const db = await getDb();
-  const [ev] = await db.select({ open: t.event.preorderOpen }).from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev?.open) redirect(FORM_URL);
+/** 預購單關閉時不轉到別處：留在本頁，顯示活動說明與「目前尚未開放贊助登記」 */
+export default function BuyPage() {
   return <PreorderApp />;
 }

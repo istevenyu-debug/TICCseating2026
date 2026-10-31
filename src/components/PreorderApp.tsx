@@ -224,7 +224,7 @@ export default function PreorderApp() {
     );
   }
 
-  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<MyPreorders mine={mine} reload={reload} /><div className="note err">目前未開放預購。</div></main>;
+  if (!menu.open) return <main className="wrap" style={{ maxWidth: 640 }}>{head}<MyPreorders mine={mine} reload={reload} /><div className="note" style={{ fontSize: 16, textAlign: 'center', padding: 16 }}>目前尚未開放贊助登記，敬請期待。</div></main>;
 
   return (
     <main className="wrap" style={{ maxWidth: 640 }}>

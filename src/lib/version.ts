@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-10-31q 版（複製連結自動帶版本）';
+export const APP_VERSION = '2026-10-31r 版（關閉時不轉 Google 表單）';
