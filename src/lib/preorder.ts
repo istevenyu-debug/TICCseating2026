@@ -31,9 +31,15 @@ export async function preorderMenuFull(db: Db) {
   const combos = (await loadCombos(db, ev.id)).filter((c) => pub.comboIds.includes(c.id) && !c.isSingle && c.price > 0);
   const singleOpen = (await loadCombos(db, ev.id)).some((c) => c.isSingle && pub.comboIds.includes(c.id));
   const items = [
-    ...combos.map((c) => ({ kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: `每組 ${comboDesc(c, zoneName)}`, unit: '組' })),
+    ...combos.map((c) => {
+      // 白話：一組＝付哪幾張＋送哪幾張（送的票種＝票價 0）
+      const isGift = (zid: number) => zones.find((z) => z.id === zid)?.price === 0;
+      const buy = c.items.filter((i) => !isGift(i.zoneId)).map((i) => `${zoneName(i.zoneId)} ${i.qty} 張`);
+      const gift = c.items.filter((i) => isGift(i.zoneId)).map((i) => `送 ${zoneName(i.zoneId)} ${i.qty} 張${i.qty > 1 ? '（相連）' : ''}`);
+      return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: `一組：${[...buy, ...gift].join('＋')}`, unit: '組', zoneIds: c.items.map((i) => i.zoneId) };
+    }),
     ...(singleOpen ? zones.filter((z) => pub.zoneIds.includes(z.id) && z.price > 0).sort((a, b) => a.sort - b.sort)
-      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: '單張購票', unit: '張' })) : []),
+      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `${z.name} 1 張`, unit: '張', zoneIds: [z.id] })) : []),
   ];
   return {
     invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
@@ -49,7 +55,8 @@ export async function preorderMenuFull(db: Db) {
 /** 公開給預購頁：不含任何金額 */
 export async function preorderMenu(db: Db) {
   const m = await preorderMenuFull(db);
-  return { ...m, items: m.items.map(({ price: _p, ...x }) => { void _p; return x; }) };
+  const { publicSeatMap } = await import('./booking');
+  return { ...m, items: m.items.map(({ price: _p, ...x }) => { void _p; return x; }), map: await publicSeatMap(db) };
 }
 
 const submitBody = z.object({

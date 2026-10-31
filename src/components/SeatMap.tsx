@@ -20,12 +20,16 @@ interface Props {
   allowed?: Set<number>;
   /** 送出後：只框出這些座位，其他全部淡化 */
   focus?: Set<string> | null;
+  /** 只看、不能點（預購單用）：不顯示勾選相關說明 */
+  view?: boolean;
 }
 
 const ROW_LABEL_COLS = [8, 45];
 
-export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus }: Props) {
-  const [cell, setCell] = useState(22);
+export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus, view }: Props) {
+  // 只看模式：一開始縮到整張圖放得進畫面（手機上看得到全場）
+  const maxX = Math.max(52, ...seats.map((x) => x.x));
+  const [cell, setCell] = useState(() => (view && typeof window !== 'undefined' ? Math.max(6, Math.min(22, Math.floor((Math.min(window.innerWidth, 1100) - 72) / maxX))) : 22));
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const { linkRight, groups } = bundleIndex(seats);
 
@@ -40,22 +44,22 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
           {zones.filter((z) => seats.some((s) => s.zoneId === z.id)).map((z) => (
             <span key={z.id}><i style={{ background: z.color }} />{z.name}</span>
           ))}
-          <span><i style={{ outline: '2px solid var(--red)', outlineOffset: -2 }} />已勾選</span>
-          <span><i style={{ background: 'repeating-linear-gradient(-45deg,var(--sold) 0 2px,transparent 2px 5px)' }} />他人暫存中</span>
-          <span><i style={{ background: 'var(--pending)' }} />待確認</span>
-          <span><i style={{ background: 'var(--sold)' }} />已售出</span>
-          <span><i style={{ borderStyle: 'dashed' }} />不開放</span>
-          {groups.size > 0 && <span><i className="pairi" />連座：按一下選整組</span>}
+          {!view && <span><i style={{ outline: '2px solid var(--red)', outlineOffset: -2 }} />已勾選</span>}
+          {!view && <span><i style={{ background: 'repeating-linear-gradient(-45deg,var(--sold) 0 2px,transparent 2px 5px)' }} />他人暫存中</span>}
+          {!view && <span><i style={{ background: 'var(--pending)' }} />待確認</span>}
+          <span><i style={{ background: 'var(--sold)' }} />{view ? '已劃走' : '已售出'}</span>
+          <span><i style={{ borderStyle: 'dashed' }} />{view ? '保留' : '不開放'}</span>
+          {groups.size > 0 && <span><i className="pairi" />{view ? '相連的為一組' : '連座：按一下選整組'}</span>}
         </div>
         <span className="row zoom small muted">
           縮放
-          <button className="btn" aria-label="縮小" onClick={() => setCell((c) => Math.max(14, c - 2))}>−</button>
+          <button className="btn" aria-label="縮小" onClick={() => setCell((c) => Math.max(view ? 6 : 14, c - 2))}>−</button>
           <button className="btn" aria-label="放大" onClick={() => setCell((c) => Math.min(34, c + 2))}>＋</button>
         </span>
       </div>
       <div className="mapscroll">
         <div className="stage">舞台</div>
-        <div className="hall" style={{ ['--cell' as string]: `${cell}px` }}>
+        <div className={`hall${cell < 13 ? ' tiny' : ''}`} style={{ ['--cell' as string]: `${cell}px` }}>
           {rows.flatMap((r) => ROW_LABEL_COLS.map((c) => (
             <div key={`${r.y}-${c}`} className="rl" style={{ gridColumn: c, gridRow: r.y }}>{r.label}</div>
           )))}
@@ -64,7 +68,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
             const isFocus = !!focus && focus.has(s.id);
             const isSel = selected.has(s.id) || isFocus;
             const off = focus ? !isFocus : !!allowed && s.status === 'free' && !allowed.has(s.zoneId) && !isSel; // 不屬於目前購票方式的座位
-            const clickable = !locked && !off && (s.status === 'free' || isSel);
+            const clickable = !view && !locked && !off && (s.status === 'free' || isSel);
             const title = `${s.label}・${s.code}${z ? `・${z.name}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
             return (
               <button
@@ -76,8 +80,9 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
                 title={title}
                 aria-label={title}
                 aria-pressed={isSel}
-                aria-disabled={!clickable}
-                onClick={() => (clickable ? onToggle(s.id) : !locked && onBlocked?.(s.id, off ? 'off' : s.status === 'blocked' ? 'blocked' : 'taken'))}
+                aria-disabled={view ? undefined : !clickable}
+                tabIndex={view ? -1 : undefined}
+                onClick={() => (view ? undefined : clickable ? onToggle(s.id) : !locked && onBlocked?.(s.id, off ? 'off' : s.status === 'blocked' ? 'blocked' : 'taken'))}
               >
                 {s.no}
               </button>
@@ -86,7 +91,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
         </div>
       </div>
       <p className="small muted" style={{ margin: '10px 0 0' }}>
-        單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消；連座（下緣有粗線、彼此相連）按一下會同時選整組。游標停在座位上可看座位編號（排-席次-區）。
+        {view ? '單號在左、雙號在右，由中央往兩側編號。相連的座位為一組。這張圖只供參考，選座位請等收到劃位連結。' : '單號在左、雙號在右，由中央往兩側編號。右上角圓點為輪椅席。按一下座位出現紅框表示勾選，再按一下取消；連座（下緣有粗線、彼此相連）按一下會同時選整組。游標停在座位上可看座位編號（排-席次-區）。'}
       </p>
     </div>
   );

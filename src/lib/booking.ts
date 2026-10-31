@@ -147,6 +147,33 @@ export async function sweepExpired(db: Db, eventId: number, now: Date) {
 
 export type ViewSeatStatus = 'free' | 'mine' | 'held' | 'pending' | 'sold' | 'blocked';
 
+/** 預購單用的座位圖（只看）：座位、票種名稱與顏色、已劃走／保留，不含任何金額 */
+export async function publicSeatMap(db: Db) {
+  const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
+  if (!ev) return null;
+  const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
+  const openZones = new Set(pub.zoneIds);
+  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
+  const combos = (await loadCombos(db, ev.id)).filter((c) => pub.comboIds.includes(c.id));
+  for (const c of combos) if (!c.isSingle) for (const i of c.items) openZones.add(i.zoneId);
+  const rows = await db.select({
+    id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, code: t.venueSeat.code,
+    seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType,
+    zoneId: t.eventSeat.zoneId, status: t.eventSeat.status, bundle: t.eventSeat.bundle, sellable: t.seatUsage.sellable,
+  }).from(t.eventSeat)
+    .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
+    .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+    .where(eq(t.eventSeat.eventId, ev.id));
+  const seats = rows.filter((s) => s.seatType !== 'vip' || ev.vipInstalled).map((s) => ({
+    id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, bundle: s.bundle,
+    status: (s.status !== 'free' ? 'sold' : !s.sellable || !openZones.has(s.zoneId) ? 'blocked' : 'free') as ViewSeatStatus,
+  }));
+  return {
+    vipInstalled: ev.vipInstalled, seats,
+    zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, gift: z.price === 0 })),
+  };
+}
+
 export async function getBookingState(db: Db, code: string, now = new Date(), _visitorIdIn?: string) {
   const { link, ev } = await loadLink(db, code, now);
   await sweepExpired(db, ev.id, now);

@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { phoneProblem } from '@/lib/validation';
 import { invProblem, type InvType } from '@/lib/invoiceRules';
+import SeatMap from './SeatMap';
+import type { BookingState } from '@/lib/booking';
+type Seat = BookingState['seats'][number];
 
 type Menu = {
   open: boolean;
@@ -11,7 +14,8 @@ type Menu = {
   line: { groups: { name: string; url: string }[]; map: Record<string, number> };
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
-  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string }[];
+  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[] }[];
+  map: { vipInstalled: boolean; seats: Seat[]; zones: { id: number; name: string; color: string; gift: boolean }[] } | null;
 };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
 
@@ -85,6 +89,7 @@ export default function PreorderApp() {
   const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', lineName: '', agree: false });
   const [extra, setExtra] = useState<{ last5: string; amount: string }[]>([]); // 第二個以上的匯款帳號
   const [restored, setRestored] = useState<boolean | null>(null);
+  const [hl, setHl] = useState<string | null>(null); // 座位圖上要亮起哪個項目的區域
   const [lineOpened, setLineOpened] = useState<string[]>([]);
   const [lineJoined, setLineJoined] = useState<string[]>([]);
   const [paidTouched, setPaidTouched] = useState(false);
@@ -239,11 +244,29 @@ export default function PreorderApp() {
         </div>
       ) : (
         <form onSubmit={next} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {menu.map && (() => {
+            const pick = hl ? menu.items.filter((i) => key(i) === hl) : lines;
+            const zs = new Set(pick.flatMap((i) => i.zoneIds));
+            return (
+              <div>
+                <div className="small" style={{ margin: '0 0 6px' }}>{pick.length ? <>亮起來的是 <b>{pick.map((i) => i.name).join('、')}</b> 的座位區，其他區淡化。</> : '點下面的項目，座位圖會亮起它的座位區。'}</div>
+                <SeatMap view seats={menu.map.seats} zones={menu.map.zones} vipInstalled={menu.map.vipInstalled} selected={new Set()} onToggle={() => undefined} locked
+                  allowed={zs.size ? zs : undefined} />
+              </div>
+            );
+          })()}
           <div className="card">
             <h2>一、選購</h2>
             {menu.items.map((i) => (
               <div key={key(i)} className="selitem" style={{ alignItems: 'center', padding: '8px 0' }}>
-                <span><b>{i.name}</b><br /><span className="small muted">{i.desc}</span></span>
+                <span style={{ cursor: 'pointer' }} onClick={() => setHl(hl === key(i) ? null : key(i))}>
+                  <b>{i.name}</b>{hl === key(i) && <span className="small" style={{ color: 'var(--accent)' }}>（座位圖已亮起）</span>}<br />
+                  <span className="small muted">{i.desc}</span><br />
+                  {i.zoneIds.map((z) => menu.map?.zones.find((x) => x.id === z)).filter(Boolean).map((z) => (
+                    <span key={z!.id} className="small" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 8 }}>
+                      <i style={{ width: 12, height: 12, borderRadius: 3, background: z!.color, display: 'inline-block' }} />{z!.name}</span>))}
+                  <span className="small" style={{ color: 'var(--accent)' }}>　看座位 ›</span>
+                </span>
                 <span className="row" style={{ flexWrap: 'nowrap' }}>
                   <button type="button" className="btn" aria-label={`減少 ${i.name}`} onClick={() => setN(i, (qty[key(i)] ?? 0) - 1)}>−</button>
                   <input aria-label={`${i.name} 數量`} value={qty[key(i)] ?? 0} inputMode="numeric" style={{ width: 52, textAlign: 'center' }}

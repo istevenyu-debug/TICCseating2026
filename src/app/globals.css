@@ -242,3 +242,6 @@ ol.flow li.on { font-weight: 700; }
 /* 送出後只框出自己的座位：其他明顯淡化，自己的保持亮色 */
 .hall .seat.off { opacity: .18; }
 .hall .seat.sel[aria-disabled="true"] { opacity: 1; }
+/* 預購單座位圖縮到整張放得下時：座位太小就不顯示號碼 */
+.hall.tiny .seat { font-size: 0; }
+.hall.tiny .rl { font-size: 9px; }
