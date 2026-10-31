@@ -239,3 +239,6 @@ ol.flow .here { margin-left: 6px; font-size: 12px; font-weight: 700; }
 ol.flow li { background: transparent; font-size: 13px; padding: 4px 8px; }
 ol.flow li.on { font-weight: 700; }
 @media (max-width: 760px) { ol.flow { grid-template-columns: repeat(5, auto); gap: 2px; overflow-x: auto; } ol.flow li { white-space: nowrap; font-size: 12px; padding: 3px 6px; } }
+/* 送出後只框出自己的座位：其他明顯淡化，自己的保持亮色 */
+.hall .seat.off { opacity: .18; }
+.hall .seat.sel[aria-disabled="true"] { opacity: 1; }

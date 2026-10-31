@@ -309,7 +309,7 @@ export default function BookingApp({ code }: { code: string }) {
         </div>
       </div>
       {msg?.kind === 'ok' && lastOrder && !held && (
-        <div className="alertbox ok" role="status">
+        <div className="alertbox ok" role="status" style={{ position: 'static' }}>
           <div className="alertbox-title">✅ 已送出</div>
           <div>{msg.text}</div>
         </div>
@@ -358,7 +358,7 @@ export default function BookingApp({ code }: { code: string }) {
       {open && st.startsAt && <div className="note small">提醒：預定 {fmtDate(st.startsAt)} 開始劃位。</div>}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
-      {!held && (
+      {!held && !focus && (
         <div className="card">
           <h2>第一步：選擇購票方式</h2>
           {paid ? (
@@ -408,7 +408,7 @@ export default function BookingApp({ code }: { code: string }) {
         <div className="side">
           {msg && !(msg.kind === 'ok' && lastOrder && !held) && <div className={`note ${msg.kind}`} role="status">{msg.text}</div>}
 
-          {!held && (
+          {!held && !focus && (
             <div className="card">
               <h2>已選座位 <span className="small muted">{ids.length} / {limit} 張</span></h2>
               {ids.length ? (

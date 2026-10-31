@@ -288,6 +288,25 @@ export async function releasePreorder(db: Db, actor: string, id: number, keys: s
   return { code, linkId, email: po.email, items: itemsText(rel), rest: itemsText(rest) };
 }
 
+/** 改 Email（買方打錯時）；已發過劃位連結的，可以順便補寄一封到新信箱 */
+export async function updatePreorderEmail(db: Db, actor: string, id: number, email: string, resend: boolean, base?: string) {
+  const ev = await currentEvent(db);
+  const e = email.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new BookingError('INVALID', 'Email 格式不正確');
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  await db.update(t.preorder).set({ email: e }).where(eq(t.preorder.id, id));
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_email', target: `preorder:${id}`, detail: JSON.stringify({ from: po.email, to: e, resend }) });
+  if (!resend || !po.linkId) return { linkId: po.linkId, resent: false };
+  const [l] = await db.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, po.linkId));
+  const rel = po.items.filter((i) => (po.released ?? po.items.map(itemKey)).includes(itemKey(i)));
+  await db.insert(t.notification).values({
+    linkId: po.linkId, channel: 'email', template: 'preorder_link', recipient: e,
+    content: `【${ev.name}】${po.name} 您好，這是您的專屬劃位連結（補寄）：${itemsText(rel)}。請點以下連結選位並填寫持票人資料：${linkUrl(l.code, base)}　請勿轉傳他人。`,
+  });
+  return { linkId: po.linkId, resent: true };
+}
+
 export async function cancelPreorder(db: Db, actor: string, id: number, reason = '') {
   const ev = await currentEvent(db);
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));

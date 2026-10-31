@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -80,6 +80,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
+  z.object({ action: z.literal('preorder.email'), id, email: z.string().max(120), resend: z.boolean().optional() }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
   z.object({ action: z.literal('preorder.items'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30) }),
   z.object({ action: z.literal('preorder.release'), id, keys: z.array(z.string().regex(/^(combo|zone):\d+$/)).min(1).max(30) }),
@@ -186,6 +187,10 @@ export async function POST(req: Request) {
       case 'preorder.cancel': await cancelPreorder(db, who, a.id, a.reason); dispatchQueued(db).catch(() => undefined); return true;
       case 'preorder.seen': return markPreorderSeen(db, a.id);
       case 'preorder.pushLink': return setPushLink(db, who, a.on);
+      case 'preorder.email': {
+        const r = await updatePreorderEmail(db, who, a.id, a.email, !!a.resend, originOf(req));
+        return { ...r, delivery: r.resent && r.linkId ? (await deliver(db, { linkId: r.linkId, templates: ['preorder_link'] })).slice(0, 1) : [] };
+      }
       case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
       case 'preorder.items': return setPreorderItems(db, who, a.id, a.items);
       case 'preorder.release': {

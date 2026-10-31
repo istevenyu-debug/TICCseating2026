@@ -21,4 +21,5 @@ export function entitle(items: PaidItem[], orders: UsedOrder[]) {
   return { rows, over: extra || rows.some((r) => r.left < 0), done: rows.every((r) => r.left <= 0) };
 }
 
-export const entText = (rows: EntRow[]) => rows.map((r) => `${r.name} ${r.used}/${r.qty} ${r.unit}`).join('、');
+/** 白話：「功德組：已付 1 組，已劃 0 組（還沒劃）」；劃完顯示「✅ 已劃完」 */
+export const entText = (rows: EntRow[]) => rows.map((r) => `${r.name}：已付 ${r.qty} ${r.unit}，${r.used >= r.qty ? '✅ 已劃完' : r.used === 0 ? `已劃 0 ${r.unit}（還沒劃）` : `已劃 ${r.used} ${r.unit}（還差 ${r.qty - r.used}）`}${r.used > r.qty ? `　⚠ 多劃了 ${r.used - r.qty}` : ''}`).join('；');

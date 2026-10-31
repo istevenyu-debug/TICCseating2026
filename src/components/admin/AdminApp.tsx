@@ -49,8 +49,8 @@ type Order = State['orders'][number];
 type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates' | 'einv' | 'vip';
 
 const TABS: [Tab, string][] = [
-  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、表單／收款'],
-  ['links', '五、專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
+  ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單核帳'],
+  ['links', '五、劃位專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
   // 十、電子發票、十一、招待：先收起來（賣完再開發票）；要用時把下一行加回來
   // ['einv', '十、電子發票'], ['vip', '十一、招待'],
 ];
@@ -180,8 +180,9 @@ export default function AdminApp() {
       <nav className="tabs">
         {TABS.map(([k, n]) => (
           <button key={k} className={tab === k ? 'on' : ''} onClick={() => go(k)}>
-            {n}{k === 'orders' && st.stats.newOrders ? <span className="badge">{st.stats.newOrders}</span> : null}
-            {k === 'pre' && st.preorders.some((x) => x.isNew) ? <span className="badge">{st.preorders.filter((x) => x.isNew).length}</span> : null}
+            {n}{k === 'orders' && st.orders.some((o) => o.status === 'pending') ? <span className="badge" title="等你確認">{st.orders.filter((o) => o.status === 'pending').length}</span> : null}
+            {k === 'pre' && st.preorders.some(needsCheck) ? <span className="badge" title="待核帳">{st.preorders.filter(needsCheck).length}</span> : null}
+            {k === 'links' && st.preorders.some((p) => p.status === 'confirmed' && inProgress(p)) ? <span className="badge" title="劃位中">{st.preorders.filter((p) => p.status === 'confirmed' && inProgress(p)).length}</span> : null}
             {k === 'notify' && (!st.notify.email.ready || !st.notify.sms.ready || st.notifications.some((x) => x.status === 'failed')) ? <span className="badge">!</span> : null}
           </button>
         ))}
@@ -233,7 +234,7 @@ export default function AdminApp() {
       {tab === 'pre' && <Preorders />}
       {tab === 'gates' && <Gates />}
       {tab === 'links' && <Links />}
-      {tab === 'orders' && <><NextUp /><div style={{ height: 12 }} /><Orders /></>}
+      {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
       {tab === 'einv' && <Invoices />}
       {tab === 'vip' && <Vips />}
@@ -645,7 +646,11 @@ function Links() {
   const base = typeof window !== 'undefined' ? location.origin : '';
   return (
     <div className="pstack">
-    <p className="small muted" style={{ margin: 0 }}>劃位連結通常由「四、表單／收款」按「發出劃位連結」後建立並以 Email 寄出，會列在下面。特殊狀況（例如貴賓、沒填預購單直接匯款）可用右側「手動發劃位連結」。</p>
+    <div className="card" style={{ paddingBottom: 8 }}><h2 style={{ margin: 0 }}>五、劃位專屬連結 <span className="small muted">依送單順序發出，一次服務一位</span></h2></div>
+    <NextUp />
+    <Queue />
+    <h3 style={{ margin: '8px 0 0' }}>所有劃位連結</h3>
+    <p className="small muted" style={{ margin: 0 }}>上面「發出劃位連結」建立的連結都列在這裡。特殊狀況（例如貴賓、沒填預購單直接匯款）可用右側「手動發劃位連結」。</p>
     <div className="grid2">
       <div className="card">
         <h2>已發出的劃位連結</h2>
@@ -656,7 +661,7 @@ function Links() {
               <tr key={l.id}>
                 <td className="mono">{l.code}</td><td>{l.name}</td><td className="small"><span className="mono">{l.phone || '—'}</span>{l.note && <div className="muted">{l.note}</div>}</td>
                 <td className="small">{l.paid
-                  ? <span className={l.paid.over ? 'err-text' : ''}>已付／已劃：{l.paid.text}{l.paid.over && <b>（超過付款內容）</b>}</span>
+                  ? <span className={l.paid.over ? 'err-text' : ''}>{l.paid.text}{l.paid.over && <b>（超過付款內容）</b>}</span>
                   : <span className="mono">{l.quota || '不限'} / {l.used}</span>}</td><td className="small">{tw(l.expiresAt)}</td>
                 <td>{l.status === 'active' ? <span className="pill p-paid">使用中</span> : <span className="pill p-cancelled">已停用</span>}</td>
                 <td><div className="row">
@@ -731,11 +736,32 @@ function Links() {
 }
 
 /* ---------- 訂單 ---------- */
+const ORDER_RANK: Record<string, number> = { pending: 0, held: 1, paid: 2, cancelled: 3, expired: 4 };
 function Orders() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
-  const list = st.orders.filter((o) => filter === 'all' || o.status === filter);
+  const list = st.orders.filter((o) => filter === 'all' || o.status === filter)
+    .sort((a, b) => (ORDER_RANK[a.status] ?? 9) - (ORDER_RANK[b.status] ?? 9) || (a.status === 'pending' ? Date.parse(a.submittedAt ?? a.createdAt) - Date.parse(b.submittedAt ?? b.createdAt) : b.id - a.id));
   const o = st.orders.find((x) => x.id === openId) ?? null;
+  const [modal, setModal] = useState<number | null>(() => (st.orders.find((x) => x.id === openId)?.status === 'pending' ? openId : null));
+  const [after, setAfter] = useState<string | null>(null);
+  const mo = st.orders.find((x) => x.id === modal && x.status === 'pending') ?? null;
+  const next = (() => {
+    const waiting = st.preorders.filter((p) => p.status !== 'cancelled' && unreleased(p).length > 0).sort(bySeq);
+    return waiting.find((p) => unreleased(p).every((i) => readyFor(p, ik(i)))) ?? null;
+  })();
   return (
+    <div className="pstack">
+      <div className="card" style={{ paddingBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>六、劃位確認 <span className="small muted">核對座位與持票人，確認後寄出 QR code。「等你確認」的排在最上面。</span></h2>
+        {typeof window !== 'undefined' && window.innerWidth < 760 && <div className="note warn small" style={{ marginTop: 6 }}>建議用電腦核定，看座位比較清楚。</div>}
+      </div>
+      {after && (
+        <div className="note ok" style={{ fontSize: 16 }}>✅ {after}
+          {next ? <> 下一位：<b>第 {next.seq} 位 {next.name}</b> {next.phone && <a className="btn small" href={`tel:${next.phone}`}>📞 {next.phone}</a>}　<button className="btn small pri" onClick={() => go('links')}>到五發連結 →</button></> : ' 目前沒有已核好、等著發連結的人。'}
+          <button className="btn small" style={{ marginLeft: 8 }} onClick={() => setAfter(null)}>知道了</button>
+        </div>
+      )}
+      {mo && <ConfirmModal o={mo} onClose={() => setModal(null)} onDone={(text) => { setModal(null); setAfter(text); }} />}
     <div className="grid2">
       <div className="card">
         <h2>劃位
@@ -747,12 +773,12 @@ function Orders() {
           <thead><tr><th>劃位編號</th><th>姓名</th><th>座位</th><th>金額</th><th>狀態</th></tr></thead>
           <tbody>
             {list.map((x) => (
-              <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} onClick={() => openOrder(x)}>
+              <tr key={x.id} className={`click${o?.id === x.id ? ' cur' : ''}`} style={x.status === 'pending' ? { background: '#fff6e0' } : undefined} onClick={() => { openOrder(x); if (x.status === 'pending') setModal(x.id); }}>
                 <td className="mono">{x.orderNo}</td><td>{x.buyerName}{x.linkNote && <><br /><span className="small muted">{x.linkNote}</span></>}
                   {st.paidByLink[x.linkId]?.over && <><br /><b className="small err-text">⚠ 劃的座位超過付款內容</b></>}</td>
                 <td className="small">{x.seats.map((s) => s.code).join('、')}</td>
                 <td className="mono">{money(x.amount)}</td>
-                <td><span className={`pill p-${x.status}`}>{STATUS[x.status]}</span>{x.vip && <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63', marginLeft: 4 }}>招待</span>}{x.isNew && <span className="badge">新</span>}
+                <td><span className={`pill p-${x.status}`}>{x.status === 'pending' ? '等你確認' : STATUS[x.status]}</span>{x.vip && <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63', marginLeft: 4 }}>招待</span>}{x.isNew && <span className="badge">新</span>}
                   {x.status === 'held' && x.holdUntil && <><br /><span className="small muted">剩 {mmss(Date.parse(x.holdUntil) - now)}</span></>}</td>
               </tr>
             ))}
@@ -760,12 +786,70 @@ function Orders() {
           </tbody>
         </table></div>
       </div>
-      <div className="side">{o ? <OrderDetail o={o} /> : <div className="card"><p className="muted small" style={{ margin: 0 }}>點選左側劃位查看明細、確認到帳。</p></div>}</div>
+      <div className="side">{o ? <OrderDetail o={o} onOpen={() => setModal(o.id)} /> : <div className="card"><p className="muted small" style={{ margin: 0 }}>點「等你確認」的那一筆，會打開核定畫面。</p></div>}</div>
+    </div>
     </div>
   );
 }
 
-function OrderDetail({ o }: { o: Order }) {
+/** 劃位核定：整張座位圖＋他的資料＋兩個必勾，確認後寄 QR code */
+function ConfirmModal({ o, onClose, onDone }: { o: Order; onClose: () => void; onDone: (text: string) => void }) {
+  const { st, act, busy, sure, confirm2, zoneById } = useAdmin();
+  const [c1, setC1] = useState(false);
+  const [c2, setC2] = useState(false);
+  const mine = new Set(o.seats.map((x) => x.seatId));
+  const pre = st.preorders.find((p) => p.linkCode && p.linkCode === o.linkCode);
+  const paid = st.paidByLink[o.linkId];
+  const look = (s: Seat): SeatLook => {
+    const z = zoneById[s.zoneId];
+    if (mine.has(s.id)) return { kind: 'free', bg: z?.color ?? '#f5c242', ink: z ? inkFor(z.color) : '#000', sel: true, title: `${s.label}（他選的）` };
+    if (s.status !== 'free') return { kind: 'sold', bg: '#9aa3b2', ink: '#fff', title: `${s.label}・已有人` };
+    return { kind: 'free', bg: z?.color, ink: z ? inkFor(z.color) : undefined, dim: true, title: `${s.label}・空位` };
+  };
+  const ok = c1 && c2;
+  return createPortal(
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 60, overflow: 'auto', padding: 16 }} onClick={onClose}>
+      <div className="card" style={{ maxWidth: 1280, margin: '0 auto' }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0 }}>核定劃位 {o.orderNo}</h2>
+          <button className="btn" onClick={onClose}>關閉</button>
+        </div>
+        <div className="grid2" style={{ marginTop: 8 }}>
+          <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} caption="紅框＝他選的；灰色＝別人已劃或待確認；淡色＝空位" />
+          <div className="side">
+            <div style={{ fontSize: 18 }}><b>{pre?.seq ? `第 ${pre.seq} 位　` : ''}{o.buyerName}</b></div>
+            <div className="row" style={{ margin: '6px 0' }}>
+              {o.buyerPhone && <a className="btn small" href={`tel:${o.buyerPhone}`}>📞 {o.buyerPhone}</a>}
+              {pre?.lineName && <span className="small">LINE：{pre.lineName}</span>}
+            </div>
+            {paid && <div className={`note ${paid.over ? 'err' : 'ok'} small`}>{paid.over ? '⚠ 劃的座位超過付款內容，請核對' : '✅ 付款內容與劃位相符（系統已檢查）'}<br />{paid.text}</div>}
+            <h3>座位</h3>
+            <div style={{ fontSize: 16 }}>{o.seats.map((x) => x.label).join('、')}</div>
+            <h3>持票人</h3>
+            <div className="tbl"><table><tbody>
+              {o.seats.map((x) => <tr key={x.seatId}><td className="small">{x.label}</td><td>{x.holderName ?? <span className="muted">未填</span>}</td></tr>)}
+            </tbody></table></div>
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={CHK}><input type="checkbox" style={CHKI} checked={c1} onChange={(e) => setC1(e.target.checked)} />座位已和他確認</label>
+              <label style={CHK}><input type="checkbox" style={CHKI} checked={c2} onChange={(e) => setC2(e.target.checked)} />持票人名字已確認</label>
+            </div>
+            {!st.notify.email.ready && <div className="note err small" style={{ marginTop: 8 }}>尚未設定 Gmail：確認後<b>不會寄出 Email</b>，QR code 只會顯示在他的劃位頁。</div>}
+            <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !ok} onClick={() => confirm2(`cf${o.id}`, async () => {
+              const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery } | null;
+              if (r) { const d = deliveryText(r.delivery); onDone(`已確認 ${o.buyerName} 的劃位${d.bad ? `（${d.text}）` : '，已寄出 QR code'}。`); }
+            })}>{!ok ? '請先勾上面兩項' : sure === `cf${o.id}` ? '再按一次：確認劃位，寄出 QR code' : '確認劃位，寄出 QR code'}</button>
+            <button className="btn danger" style={{ width: '100%', marginTop: 8 }} disabled={busy} onClick={() => confirm2(`rj${o.id}`, async () => {
+              const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null;
+              if (r) onDone(`已退回 ${o.buyerName} 的劃位，座位已釋放，他可以用同一個連結重選。`);
+            })}>{sure === `rj${o.id}` ? '再按一次：退回讓他重選' : '退回讓他重選'}</button>
+          </div>
+        </div>
+      </div>
+    </div>, document.body);
+}
+
+
+function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   return (
     <div className="card">
@@ -794,7 +878,8 @@ function OrderDetail({ o }: { o: Order }) {
         <button className="btn danger" style={{ marginTop: 10 }} disabled={busy} onClick={() => confirm2(`cancel${o.id}`, () => act({ action: 'order.cancel', id: o.id }, '已取消暫存，座位已釋放'))}>{sure === `cancel${o.id}` ? '再按一次確認取消' : '取消暫存（釋放座位）'}</button>
       </>}
 
-      {o.status === 'pending' && <>
+      {o.status === 'pending' && onOpen && <button className="btn pri" style={{ width: '100%', marginTop: 12 }} onClick={onOpen}>打開核定畫面（座位圖＋核對）</button>}
+      {o.status === 'pending' && !onOpen && <>
         <h3>確認劃位</h3>
         {!st.notify.email.ready && <div className="note err" style={{ margin: '0 0 8px' }}>尚未設定 Gmail：按下後<b>不會寄出 Email</b>，只會顯示在對方的購票頁。請先到「八、通知設定」設定。</div>}
         <p className="small muted" style={{ margin: '0 0 6px' }}>款項已在預購單收訖。核對座位與持票人無誤後按下方按鈕：座位改為已售出，Email 寄出劃位成功通知並附每張票的入場 QR code，劃位頁也會顯示。{st.einvoice.enabled && st.einvoice.timing === 'auto' && ' 這筆訂單的電子發票已開立時，號碼會一併寫在信裡。'}</p>
@@ -1316,6 +1401,10 @@ function LineUrlSetting() {
         })}
         {!st.preMenu.length && <tr><td colSpan={2} className="muted">還沒有已發布的項目</td></tr>}</tbody>
       </table></div>
+      {(() => {
+        const none = st.preMenu.filter((m) => st.line.map[`${m.kind}:${m.id}`] === undefined);
+        return st.line.groups.length > 0 && none.length > 0 && <div className="note warn small" style={{ marginTop: 8 }}>目前<b>不需要</b>加 LINE 群的項目：{none.map((m) => m.name).join('、')}。買這些的人不會被要求入群，後台也不會出現「已入群」可以勾。如果應該要，請在上表選好群再儲存。</div>;
+      })()}
       <button className="btn pri" style={{ marginTop: 8 }} disabled={busy} onClick={save}>儲存 LINE 群設定</button>
     </div>
   );
@@ -1328,6 +1417,11 @@ const readyFor = (p: Pre, k: string) => !!p.paidOkAt && (p.needGroups[k] ?? []).
 const allGroups = (p: Pre) => [...new Set(Object.values(p.needGroups).flat())];
 const inProgress = (p: Pre) => !!p.progress && (p.progress.left > 0 || p.progress.held > 0 || p.progress.pending > 0);
 const bySeq = (a: Pre, b: Pre) => (a.seq ?? 1e9) - (b.seq ?? 1e9);
+/** 四、訂單核帳：還沒核好（沒設定內容、沒勾已匯款或入群）且還有沒發的 */
+const needsCheck = (p: Pre) => p.status !== 'cancelled' && (unreleased(p).length > 0 || !p.items.length)
+  && (!p.items.length || !p.paidOkAt || !allGroups(p).every((g) => p.lineOk.includes(g)));
+const isReady = (p: Pre) => p.status !== 'cancelled' && p.items.length > 0 && unreleased(p).length > 0 && unreleased(p).every((i) => readyFor(p, ik(i)));
+const progressText = (p: Pre) => !p.progress ? '' : p.progress.pending > 0 ? '已送出，等你確認' : p.progress.held > 0 ? '選位中' : p.progress.left > 0 ? (p.progress.paid + p.progress.pending > 0 ? '還沒劃完' : '還沒開始劃') : '✅ 完成';
 const linkText = (st: State, p: Pre, base: string) => `【${st.event.name}】${p.name} 您好，輪到您劃位了，請點以下連結選位並填寫持票人資料：\n${base}/t/${p.linkCode}\n劃位時有任何問題，請直接回覆我。`;
 
 /** 發出劃位連結（第三顆鈕）：按兩次才寄。前面還有人沒發時，第二次的按鈕會提醒 */
@@ -1376,7 +1470,7 @@ function Checks({ p }: { p: Pre }) {
 
 /** 劃位中的人＋下一位（四、六 都顯示） */
 function NextUp() {
-  const { st, go, setMsg } = useAdmin();
+  const { st, go, setMsg, openOrder } = useAdmin();
   const base = typeof window !== 'undefined' ? location.origin : '';
   const [day, setDay] = useState<string>(() => { try { return localStorage.getItem('ticc.releaseKey') || 'all'; } catch { return 'all'; } });
   const pick = (v: string) => { setDay(v); try { localStorage.setItem('ticc.releaseKey', v); } catch { /* 忽略 */ } };
@@ -1402,7 +1496,7 @@ function NextUp() {
           <div className="row">
             <a className="btn small" href={`/t/${p.linkCode}`} target="_blank" rel="noreferrer">開他的劃位頁（電話中幫他劃）</a>
             <button className="btn small" onClick={() => navigator.clipboard?.writeText(linkText(st, p, base)).then(() => setMsg({ kind: 'ok', text: '已複製連結＋說明，可貼到 LINE' }), () => undefined)}>複製連結＋說明</button>
-            {p.progress!.pending > 0 && <button className="btn small pri" onClick={() => go('orders')}>到「六、劃位確認」</button>}
+            {p.progress!.pending > 0 && <button className="btn small pri" onClick={() => { const o = st.orders.find((x) => x.linkCode === p.linkCode && x.status === 'pending'); if (o) openOrder(o); go('orders'); }}>到六確認他的座位 →</button>}
           </div>
         </div>
       ))}
@@ -1421,7 +1515,72 @@ function NextUp() {
           <ReleaseButton p={next} keys={keysOf(next)} label="發出劃位連結" />
         </div>
       ) : <p className="small muted" style={{ margin: 0 }}>{waiting.length ? '還沒有勾好「已匯款」「已入 LINE 群」的人。' : '這個項目都發完了。'}</p>}
-      {skipped.length > 0 && <p className="small muted" style={{ margin: '8px 0 0' }}>排在前面、還沒勾好的：{skipped.slice(0, 8).map((p) => `第 ${p.seq} 位 ${p.name}（${!p.paidOkAt ? '未勾已匯款' : '未勾入群'}）`).join('、')}{skipped.length > 8 ? '…' : ''}</p>}
+      {skipped.length > 0 && <p className="small muted" style={{ margin: '8px 0 0' }}>排在前面、還沒核好的：{skipped.slice(0, 8).map((p) => `第 ${p.seq} 位 ${p.name}（${!p.items.length ? '未設定內容' : !p.paidOkAt ? '未勾已匯款' : '未勾入群'}）`).join('、')}{skipped.length > 8 ? '…' : ''}　<button className="btn small" onClick={() => go('pre')}>到四核帳</button></p>}
+    </div>
+  );
+}
+
+/** 改 Email；已發連結的可順便補寄 */
+function EmailEdit({ p }: { p: Pre }) {
+  const { act, busy, setMsg } = useAdmin();
+  const [edit, setEdit] = useState(false);
+  const [v, setV] = useState(p.email);
+  if (!edit) return <span onClick={(e) => e.stopPropagation()}><span className="mono">{p.email || <b className="err-text">沒有 Email</b>}</span>
+    <button className="btn small" style={{ marginLeft: 8 }} onClick={() => { setV(p.email); setEdit(true); }}>改 Email{p.linkCode ? '／補寄連結' : ''}</button></span>;
+  const save = async (resend: boolean) => {
+    const r = await act({ action: 'preorder.email', id: p.id, email: v.trim(), resend }) as { resent: boolean; delivery?: Delivery } | null;
+    if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已改為 ${v.trim()}${r.resent ? `，並補寄劃位連結。${d.text}` : ''}` }); setEdit(false); }
+  };
+  return (
+    <span className="row" onClick={(e) => e.stopPropagation()}>
+      <input value={v} type="email" style={{ width: 240 }} onChange={(e) => setV(e.target.value)} />
+      <button className="btn small" disabled={busy} onClick={() => save(false)}>儲存</button>
+      {p.linkCode && <button className="btn small pri" disabled={busy} onClick={() => save(true)}>儲存並補寄劃位連結</button>}
+      <button className="btn small" onClick={() => setEdit(false)}>取消</button>
+    </span>
+  );
+}
+
+/** 五：排隊名單與已發出名單 */
+function Queue() {
+  const { st, go } = useAdmin();
+  const waiting = st.preorders.filter((p) => p.status !== 'cancelled' && (unreleased(p).length > 0 || !p.items.length)).sort(bySeq);
+  const sent = st.preorders.filter((p) => p.status === 'confirmed').sort(bySeq);
+  if (!waiting.length && !sent.length) return null;
+  return (
+    <div className="card">
+      <h2>排隊名單 <span className="small muted">還沒發連結的人，依送單順序</span></h2>
+      <div className="tbl"><table>
+        <thead><tr><th>順位</th><th>姓名／電話</th><th>要發的項目</th><th>核帳</th><th></th></tr></thead>
+        <tbody>
+          {waiting.map((p) => {
+            const ready = isReady(p);
+            return (
+              <tr key={p.id} style={ready ? undefined : { opacity: 0.55 }}>
+                <td className="mono"><b>{p.seq}</b></td>
+                <td>{p.name}{p.lineName && <span className="small muted">（LINE：{p.lineName}）</span>}<br />{p.phone && <a className="small mono" href={`tel:${p.phone}`}>{p.phone}</a>}</td>
+                <td className="small">{p.items.length ? unreleased(p).map((i) => `${i.name} × ${i.qty}`).join('、') : '未設定內容'}</td>
+                <td className="small">{ready ? <span style={{ color: 'var(--ok)' }}>✓ 已核好</span> : !p.items.length ? '未設定內容' : !p.paidOkAt ? '未勾已匯款' : '未勾入群'}</td>
+                <td>{ready
+                  ? <ReleaseButton p={p} keys={unreleased(p).map(ik)} label="發出劃位連結" />
+                  : <button className="btn small" onClick={() => go('pre')}>到四核帳</button>}</td>
+              </tr>
+            );
+          })}
+          {!waiting.length && <tr><td colSpan={5} className="muted">都發完了</td></tr>}
+        </tbody>
+      </table></div>
+      {sent.length > 0 && <>
+        <h3>已發出</h3>
+        <div className="tbl"><table>
+          <thead><tr><th>順位</th><th>姓名</th><th>已發的項目</th><th>進度</th></tr></thead>
+          <tbody>{sent.map((p) => (
+            <tr key={p.id}><td className="mono">{p.seq}</td><td>{p.name}</td>
+              <td className="small">{p.items.filter((i) => p.released.includes(ik(i))).map((i) => `${i.name} × ${i.qty}`).join('、')}{unreleased(p).length > 0 && <span className="muted">（{unreleased(p).map((i) => i.name).join('、')} 未發）</span>}</td>
+              <td className="small">{progressText(p)}</td></tr>
+          ))}</tbody>
+        </table></div>
+      </>}
     </div>
   );
 }
@@ -1453,31 +1612,35 @@ function FormItems({ p }: { p: Pre }) {
 const PRE_STATUS: Record<string, string> = { submitted: '待發連結', confirmed: '已發連結', cancelled: '已取消' };
 
 function Preorders() {
-  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const { st, act, busy, setMsg, sure, confirm2, go } = useAdmin();
   const [filter, setFilter] = useState('todo');
   const [openId, setOpenId] = useState<number | null>(null);
   const [q, setQ] = useState('');
   const base = typeof window !== 'undefined' ? location.origin : '';
   const buyUrl = `${base}/buy`;
-  const todo = (p: Pre) => p.status !== 'cancelled' && (unreleased(p).length > 0 || !p.items.length);
-  const match = (p: Pre, k: string) => k === 'all' || (k === 'todo' ? todo(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
+  const mismatch = (p: Pre) => p.source !== 'form' && p.status !== 'cancelled' && p.items.length > 0 && p.paidAmount !== p.amount;
+  const match = (p: Pre, k: string) => k === 'all' || (k === 'todo' ? needsCheck(p) : k === 'ready' ? isReady(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
   const list = st.preorders.filter((p) => match(p, filter)
     && (!q.trim() || [p.no, p.name, p.phone, p.email, p.last5, p.lineName].some((x) => x.includes(q.trim())))).sort(bySeq);
   const cnt = (k: string) => st.preorders.filter((p) => match(p, k)).length;
   const open = (p: Pre) => { setOpenId(openId === p.id ? null : p.id); if (p.isNew) act({ action: 'preorder.seen', id: p.id }); };
   return (
     <div className="pstack">
-      <NextUp />
+      <div className="card" style={{ paddingBottom: 8 }}>
+        <h2 style={{ margin: 0 }}>四、訂單核帳 <span className="small muted">依送單順序。核對入帳、確認入群後打勾（只記錄，不會寄東西）</span></h2>
+        <div style={{ marginTop: 6 }}>待核帳 <b>{cnt('todo')}</b> 筆・金額不符 <b className={st.preorders.some(mismatch) ? 'err-text' : ''}>{st.preorders.filter(mismatch).length}</b> 筆・已核好待發 <b>{cnt('ready')}</b> 筆　
+          {cnt('ready') > 0 && <button className="btn small pri" onClick={() => go('links')}>到五依序發連結 →</button>}</div>
+      </div>
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div className="row">
-            {[['todo', '待處理'], ['confirmed', '已發連結'], ['cancelled', '已取消'], ['all', '全部']].map(([k, n]) => (
+            {[['todo', '待核帳'], ['ready', '已核好'], ['confirmed', '已發連結'], ['all', '全部'], ['cancelled', '已取消']].map(([k, n]) => (
               <button key={k} className={`chip${filter === k ? ' on' : ''}`} onClick={() => setFilter(k)}>{n}（{cnt(k)}）</button>
             ))}
           </div>
           <input value={q} placeholder="搜尋姓名、手機、LINE、末五碼" style={{ width: 240 }} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <p className="small muted" style={{ margin: '6px 0 0' }}>依<b>送出預購單的先後</b>排序。核帳後直接在列上勾「已匯款」「已入群」（只記錄，不會寄東西）；要發時按「發出劃位連結」才寄。</p>
+
         <div className="tbl" style={{ marginTop: 8 }}><table>
           <thead><tr><th>順位</th><th>姓名／電話</th><th>內容</th><th>匯款／末五碼</th><th>核對</th><th>狀態</th></tr></thead>
           <tbody>
@@ -1498,7 +1661,7 @@ function Preorders() {
                 {openId === p.id && (
                   <tr><td colSpan={6}>
                     <div className="bank">
-                      <span className="muted">Email</span><span className="mono">{p.email || <b className="err-text">沒有 Email：發出後請按「複製連結＋說明」用 LINE 傳給他</b>}</span>
+                      <span className="muted">Email</span><span><EmailEdit p={p} /></span>
                       {p.source === 'form' && p.answers.map((x, i) => <Fragment key={i}><span className="muted small">{x.q.length > 24 ? `${x.q.slice(0, 24)}…` : x.q}</span><span style={{ whiteSpace: 'pre-wrap' }}>{x.a}</span></Fragment>)}
                       {p.items.length > 0 && <><span className="muted">內容</span><span>{p.items.map((i) => `${i.name} × ${i.qty}（${money(i.price * i.qty)}）`).join('、')}・合計 {money(p.amount)}</span></>}
                       {p.source !== 'form' && <><span className="muted">發票</span><span>{p.invType === 'company' ? `三聯：${p.invTitle}（統編 ${p.invCode}）` : '二聯（個人）'}</span></>}
@@ -1509,7 +1672,7 @@ function Preorders() {
                     {p.status !== 'cancelled' && !p.items.length && <div style={{ marginTop: 10 }}><FormItems p={p} /></div>}
                     {p.status !== 'cancelled' && p.items.length > 0 && !st.notify.email.ready && <div className="note err" style={{ marginTop: 10 }}>尚未設定 Gmail：發出後劃位連結<b>不會寄出</b>，請用「複製連結＋說明」傳給對方，或先到「八、通知設定」設定。</div>}
                     <div className="row" style={{ marginTop: 10 }}>
-                      {p.status !== 'cancelled' && unreleased(p).map((i) => <ReleaseButton key={ik(i)} p={p} keys={[ik(i)]} label={`發出劃位連結：${i.name} × ${i.qty}`} />)}
+                      {isReady(p) && <button className="btn" onClick={() => go('links')}>已核好，到五依序發連結 →</button>}
                       {p.linkCode && <button className="btn" onClick={() => navigator.clipboard?.writeText(linkText(st, p, base)).then(() => setMsg({ kind: 'ok', text: '已複製連結＋說明，可貼到 LINE' }), () => undefined)}>複製連結＋說明</button>}
                       {p.linkCode && <a className="btn" href={`/t/${p.linkCode}`} target="_blank" rel="noreferrer">開他的劃位頁</a>}
                       {p.status === 'submitted' && <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消 ${p.no}${p.source === 'form' ? '' : '，並寄信通知'}`)) setOpenId(null); })}>

@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, linkEntitle, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder, updatePreorderEmail } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -143,7 +143,7 @@ describe('劃位連結只能劃付款買的內容', () => {
 
     const s = await A.getAdminState(db, now);
     const lk = s.links.find((l) => l.code === code)!;
-    expect(lk.paid).toMatchObject({ preorderNo: 'P0001', over: false, done: true, text: '雙人套票 2/2 組、A區 單張 1/1 張' });
+    expect(lk.paid).toMatchObject({ preorderNo: 'P0001', over: false, done: true, text: '雙人套票：已付 2 組，✅ 已劃完；A區 單張：已付 1 張，✅ 已劃完' });
     expect((await getBookingState(db, code, now)).paid?.done).toBe(true);
   });
   it('手動發的連結不受付款內容限制（沿用可購張數）', async () => {
@@ -224,5 +224,15 @@ describe('老大依序發劃位：打勾不寄，按「發出」才寄；可分�
     expect((await linkEntitle(db, r1.linkId))!.rows).toHaveLength(2);
     await expect(releasePreorder(db, 'admin', p.id, [`zone:${zoneA}`])).rejects.toThrow('已經發過');
     expect((await listPreorders(db))[0]).toMatchObject({ status: 'confirmed', released: [`combo:${combo2}`, `zone:${zoneA}`] });
+    // 買方 Email 打錯：改正並補寄
+    await expect(updatePreorderEmail(db, 'admin', p.id, 'bad', true)).rejects.toThrow('Email');
+    const n0 = (await db.select().from(t.notification)).length;
+    expect(await updatePreorderEmail(db, 'admin', p.id, 'right@example.com', true, 'https://x')).toMatchObject({ resent: true });
+    const last = (await db.select().from(t.notification)).slice(n0);
+    expect(last).toHaveLength(1);
+    expect(last[0]).toMatchObject({ recipient: 'right@example.com', template: 'preorder_link' });
+    expect(last[0].content).toContain('補寄');
+    const { entText, entitle } = await import('@/lib/entitle');
+    expect(entText(entitle([{ kind: 'combo', id: 1, name: '功德組', qty: 1 }], []).rows)).toBe('功德組：已付 1 組，已劃 0 組（還沒劃）');
   });
 });
