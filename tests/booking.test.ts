@@ -145,8 +145,8 @@ describe('購票端', () => {
     await expectCode(submitOrder(db, 'AAA111', submitBody(h.orderId, ['9-1'], h.amount), min(25)), 'HOLD_EXPIRED');
   });
 
-  it('過期或停用的連結無法使用', async () => {
-    await expectCode(getBookingState(db, 'AAA111', new Date('2026-12-11T00:00:00+08:00')), 'LINK_EXPIRED');
+  it('有效期限只當提醒（過期仍可用）；停用的連結無法使用', async () => {
+    expect((await getBookingState(db, 'AAA111', new Date('2026-12-11T00:00:00+08:00'))).link.name).toBeTruthy();
     await db.update(t.inviteLink).set({ status: 'disabled' }).where(eq(t.inviteLink.code, 'BBB222'));
     await expectCode(getBookingState(db, 'BBB222', T0), 'LINK_DISABLED');
     await expectCode(getBookingState(db, 'NOPE00', T0), 'LINK_NOT_FOUND');
@@ -330,6 +330,16 @@ describe('持票人：自動帶入，購票人可修改', () => {
     expect(ids.map((id) => bySeat[id].holderName)).toEqual(['王大明', '王大明02', '李小華', ...Array.from({ length: 9 }, (_, i) => `王大明${String(i + 4).padStart(2, '0')}`)]);
     expect(bySeat[ids[2]].holderId4).toBe('A123');
     expect(bySeat[ids[11]].holderId4).toBe('523412');
+  });
+
+  it('不填身分證也能送出（持票人只要姓名）', async () => {
+    const h3 = await holdSeats(db, 'BBB222', ['2-2'], SINGLE(), T0);
+    const ok = submitBody(h3.orderId, ['2-2'], h3.amount); ok.holders[0].id4 = '';
+    await submitOrder(db, 'BBB222', ok, min(1));
+    const h4 = await holdSeats(db, 'AAA111', ['2-3'], SINGLE(), T0);
+    const ok2 = submitBody(h4.orderId, ['2-3'], h4.amount) as Record<string, unknown> & { holders: Record<string, unknown>[] };
+    delete ok2.holders[0].id4;
+    await submitOrder(db, 'AAA111', ok2 as never, min(1));
   });
 
   it('證號格式不對不能送出', async () => {

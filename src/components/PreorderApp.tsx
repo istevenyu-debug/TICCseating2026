@@ -161,7 +161,7 @@ export default function PreorderApp() {
     { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, inv.type === 'company' && !inv.title.trim() && inv.code.trim() ? 'p-inv-title' : 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
     const miss = lineGroups.find((g) => !lineJoined.includes(g.name));
-    if (miss) return bad(lineOpened.includes(miss.name) ? `請勾選「我已加入 ${miss.name}」` : `請先按「加入 ${miss.name}」，加入後再勾選「我已加入」`, `p-line-${lineGroups.indexOf(miss)}`);
+    if (miss) return bad(`請先加入「${miss.name}」並勾選「我已加入」（已經在群裡的，直接打勾即可）`, `p-line-${lineGroups.indexOf(miss)}`);
     setErr(''); setReview(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   async function send() {
@@ -200,14 +200,14 @@ export default function PreorderApp() {
   if (done) {
     return (
       <main className="wrap" style={{ maxWidth: 640 }}>
-        {head}
-        <div className="card">
-          <h2>已送出訂單 {done.no}</h2>
+        <div className="card" style={{ borderTop: '4px solid var(--ok)' }}>
+          <h2>✅ 已送出訂單 {done.no}</h2>
           <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
           <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
           {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
           <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度{menu.pushLink ? '；確認收款後會出現「開始劃位」按鈕' : ''}。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>
+        {head}
         <PushCard endpoint={`/api/buy/push?t=${encodeURIComponent(done.token)}`} api={call} compact={false}
           title={menu.pushLink ? '📱 收款確認後，劃位連結直接送到這支手機' : '📱 收款確認時通知這支手機'}
           offText={menu.pushLink ? <>開啟後，主辦方確認收到款項時，這支手機會跳出通知，<b>點一下就能開始選位</b>。Email 也會照常寄出。</> : <>開啟後，主辦方確認收到款項時，這支手機會跳出通知，提醒您<b>到 Email 收劃位連結</b>。</>}
@@ -278,10 +278,10 @@ export default function PreorderApp() {
                   <div key={g.name} style={{ marginTop: 10 }}>
                     <a className="btn pri" href={g.url} target="_blank" rel="noreferrer" style={{ background: '#06c755', borderColor: '#06c755', display: 'inline-block' }}
                     onClick={() => { if (!opened) setLineOpened([...lineOpened, g.name]); setErr(''); }}>① 加入「{g.name}」</a>
-                    <label className="check" style={{ marginTop: 6, opacity: opened ? 1 : 0.5 }}>
-                    <input id={`p-line-${n}`} type="checkbox" checked={lineJoined.includes(g.name)} disabled={!opened}
+                    <label className="check" style={{ marginTop: 6 }}>
+                    <input id={`p-line-${n}`} type="checkbox" checked={lineJoined.includes(g.name)}
                       onChange={(e) => { setLineJoined(e.target.checked ? [...lineJoined, g.name] : lineJoined.filter((x) => x !== g.name)); setErr(''); }} />
-                    <span>② 我已加入「{g.name}」{!opened && <><br /><span className="small muted">請先按上面的「加入「{g.name}」」</span></>}</span>
+                    <span>② 我已加入「{g.name}」<br /><span className="small muted">{opened ? '加入後回到這裡打勾' : '已經在群裡的，直接打勾即可'}</span></span>
                     </label>
                   </div>
                 );

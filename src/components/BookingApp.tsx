@@ -196,11 +196,11 @@ export default function BookingApp({ code }: { code: string }) {
     setSel((p) => new Set([...p].filter((sid) => seatById[sid] && ok.has(seatById[sid].zoneId))));
   };
   // 持票人：先自動帶入（第 1 張本人，之後「姓名02、03…」，證號＝末 4 碼＋序號），購票人改過的欄位以他填的為準
-  const autoList = held && form ? autoHolders(form.name, form.idBase, held.seatIds.length) : [];
-  const idOk = !!form && /^[0-9A-Za-z]{4}$/.test(form.idBase.trim());
+  // 持票人：一進來就帶好（第 1 張本人，之後「姓名02、03…」），要給別人的那張直接改名字。不填身分證
+  const autoList = held && form ? autoHolders(form.name, '', held.seatIds.length) : [];
   const holderOf = (id: string, i: number) => ({
     name: form?.edited[id]?.name ? form.holders[id]?.name ?? '' : autoList[i]?.name ?? '',
-    id4: form?.edited[id]?.id4 ? (form.holders[id]?.id4 ?? '').toUpperCase() : idOk ? autoList[i]?.id4 ?? '' : '',
+    id4: '',
   });
 
   const bidx = bundleIndex(st.seats);
@@ -256,11 +256,9 @@ export default function BookingApp({ code }: { code: string }) {
     const pp = form.phone.trim() ? phoneProblem(form.phone) : '請填寫手機';
     if (pp) return bad(pp, 'b-phone');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return bad('Email 格式不正確，劃位成功與入場 QR code 會寄到這個信箱', 'b-email');
-    if (!idOk) return bad('請填寫購票人身分證末 4 碼（4 個英數字），用來自動編號每張票', 'b-idbase');
     for (const [i, id] of held.seatIds.entries()) {
       const h = holderOf(id, i);
       if (!h.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的持票人姓名`, `h-n-${id}`);
-      if (!/^[0-9A-Za-z]{4}(\d{2,3})?$/.test(h.id4.trim())) return bad(`${seatById[id]?.label ?? id} 的證號應為身分證末 4 碼`, `h-i-${id}`);
     }
     if (!form.agree) return bad('請勾選同意個資蒐集', 't-agree');
     setMsg(null); setReview(true);
@@ -274,7 +272,6 @@ export default function BookingApp({ code }: { code: string }) {
       orderId: held.orderId,
       buyer: { name: form.name, phone: form.phone, email: form.email },
       holders: held.seatIds.map((id, i) => ({ seatId: id, ...holderOf(id, i) })),
-      idBase: form.idBase.trim().toUpperCase(),
       agree: form.agree,
     });
     setBusy(false);
@@ -287,6 +284,13 @@ export default function BookingApp({ code }: { code: string }) {
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
   }
+
+  // 送出後（沒有要再劃的）：座位圖只框出自己的座位，其他淡化
+  const mine = st.orders.filter((o) => o.status === 'pending' || o.status === 'paid');
+  const nothingLeft = st.paid ? st.paid.done : !!lastOrder;
+  const focusCodes = new Set(mine.flatMap((o) => o.seats.map((x) => x.code)));
+  const focus = !held && nothingLeft && mine.length ? new Set(st.seats.filter((x) => focusCodes.has(x.code)).map((x) => x.id)) : null;
+  const focusList = mine.flatMap((o) => o.seats.map((x) => x.label));
 
   const upd = (patch: Partial<Form>) => setForm((f) => (f ? { ...f, ...patch } : f));
   const updHolder = (id: string, patch: Partial<{ name: string; id4: string }>) =>
@@ -304,6 +308,12 @@ export default function BookingApp({ code }: { code: string }) {
           {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 張（已劃 {st.link.used} 張）</> : ''}，有效至 {fmtDate(st.link.expiresAt)}。請勿轉傳他人。
         </div>
       </div>
+      {msg?.kind === 'ok' && lastOrder && !held && (
+        <div className="alertbox ok" role="status">
+          <div className="alertbox-title">✅ 已送出</div>
+          <div>{msg.text}</div>
+        </div>
+      )}
       {alerts.length > 0 && (() => {
         const n = alerts[0];
         const a = ALERT[n.template];
@@ -326,26 +336,26 @@ export default function BookingApp({ code }: { code: string }) {
         const moreToBook = !!st.paid && !st.paid.done; // 買了多種、還有沒劃的：回到第 1 步繼續劃
         const now = held ? (review ? 3 : 2) : moreToBook ? 1 : pending ? 4 : paidDone ? 5 : 1;
         const steps = [
-          ['選座位', '先選購票方式，在座位圖點選座位，按「暫存座位」（保留 20 分鐘）'],
-          ['填持票人', '填購票人資料與每張票的持票人，按「下一步：確認資料」'],
-          ['確認送出', '核對無誤，按「資料正確，確認送出」，看到綠字「劃位資料已送出」才算完成'],
-          ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知'],
-          ['收到 QR code', '入場時出示 QR code 與身分證件'],
+          ['選座位', '在座位圖上點選座位，再按「暫存座位」。'],
+          ['填持票人', '確認聯絡資料；持票人已幫您填好，要給別人的改名字，再按「下一步」。'],
+          ['確認送出', '核對後按「資料正確，確認送出」。'],
+          ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知與 QR code。'],
+          ['收到 QR code', '入場時出示 QR code 即可。'],
         ];
         return (
           <div className="card steps-card">
-            <h2 style={{ marginBottom: 6 }}>劃位步驟</h2>
+            <div className="now-step">現在請{steps[now - 1][0]}</div>
+            <div className="small" style={{ margin: '2px 0 8px' }}>{steps[now - 1][1]}</div>
             <ol className="flow">
-              {steps.map(([t, d], i) => (
-                <li key={t} className={i + 1 === now ? 'on' : i + 1 < now ? 'done' : ''}>
-                  <b>{i + 1 < now ? '✓ ' : ''}{t}</b>{i + 1 === now && <span className="here">← 現在</span>}<br /><span className="small">{d}</span>
-                </li>
+              {steps.map(([t], i) => (
+                <li key={t} className={i + 1 === now ? 'on' : i + 1 < now ? 'done' : ''}>{i + 1 < now ? '✓' : i + 1}. {t}</li>
               ))}
             </ol>
           </div>
         );
       })()}
       {(st.orders.some((o) => o.status === 'pending') || !!held) && <PushCard endpoint={`/api/t/${encodeURIComponent(code)}/push`} api={api} compact={false} />}
+      {open && st.startsAt && <div className="note small">提醒：預定 {fmtDate(st.startsAt)} 開始劃位。</div>}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
       {!held && (
@@ -379,8 +389,14 @@ export default function BookingApp({ code }: { code: string }) {
         </div>
       )}
 
+      {focus && (
+        <div className="note ok" style={{ fontSize: 16 }}>
+          <b>您的座位</b>（地圖上框起來的）：{focusList.join('、')}
+          <div className="small muted">其他座位已淡化。{st.orders.some((o) => o.status === 'pending') ? '主辦方確認後會寄出 QR code。' : ''}</div>
+        </div>
+      )}
       <div className="grid2">
-        <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} onToggle={toggle} locked={!!held || !open}
+        <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} focus={focus} onToggle={toggle} locked={!!focus || !!held || !open}
           onBlocked={(id, why) => {
             const seat = seatById[id];
             setMsg({ kind: 'err', text: why === 'off'
@@ -390,7 +406,7 @@ export default function BookingApp({ code }: { code: string }) {
           allowed={held ? undefined : allowed} />
 
         <div className="side">
-          {msg && <div className={`note ${msg.kind}`} role="status">{msg.text}</div>}
+          {msg && !(msg.kind === 'ok' && lastOrder && !held) && <div className={`note ${msg.kind}`} role="status">{msg.text}</div>}
 
           {!held && (
             <div className="card">
@@ -452,7 +468,7 @@ export default function BookingApp({ code }: { code: string }) {
                   <div className="sellist">
                     {held.seatIds.map((id, i) => {
                       const h = holderOf(id, i);
-                      return <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small">{h?.name}・{(h?.id4 ?? '').toUpperCase()}</span></div>;
+                      return <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small">{h?.name}</span></div>;
                     })}
                   </div>
                   {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
@@ -473,28 +489,23 @@ export default function BookingApp({ code }: { code: string }) {
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
 
-                <h3>持票人實名（每張一位）</h3>
-                <label className="f">購票人身分證末 4 碼<input id="b-idbase" value={form.idBase} maxLength={4} autoCapitalize="characters" placeholder="例：5234"
-                  onChange={(e) => upd({ idBase: e.target.value.toUpperCase() })} /></label>
-                <div className="note ok holder-help">
-                  <b>每張票的持票人已自動帶入</b>：第 1 張是您本人，其他張是「您的姓名02、03…」；證號是您的身分證末 4 碼加序號（例：5234<b>01</b>、5234<b>02</b>…）。
-                  <br />如果其他張是<b>別人要用</b>，請直接把那一張改成他的<b>姓名與身分證末 4 碼</b>；入場時會核對姓名與證號。
-                </div>
+                <h3 style={{ marginBottom: 2 }}>每張票的持票人</h3>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>已幫您填好；要給別人的那張，直接改成他的名字。</p>
                 {held.seatIds.map((id, i) => {
                   const h = holderOf(id, i);
-                  const mine = !!form.edited[id]?.name || !!form.edited[id]?.id4;
+                  const mine = !!form.edited[id]?.name;
                   return (
-                    <div className="fields holder-row" key={id}>
-                      <label className="f">{i + 1}. {seatById[id]?.label ?? id} 姓名<input id={`h-n-${id}`} value={h.name} placeholder="（先填上方購票人姓名）" onChange={(e) => updHolder(id, { name: e.target.value })} /></label>
-                      <label className="f">證號<input id={`h-i-${id}`} value={h.id4} maxLength={7} autoCapitalize="characters" placeholder="（先填上方證末 4 碼）" onChange={(e) => updHolder(id, { id4: e.target.value.toUpperCase() })} /></label>
-                      {mine && <button type="button" className="btn small" title="改回自動編號" onClick={() => setForm((f) => (f ? { ...f, edited: { ...f.edited, [id]: {} } } : f))}>還原</button>}
+                    <div className="holder-line" key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span className="small" style={{ minWidth: 92 }}>{seatById[id]?.label ?? id}</span>
+                      <input id={`h-n-${id}`} value={h.name} aria-label={`${seatById[id]?.label ?? id} 持票人`} style={{ flex: 1 }} onChange={(e) => updHolder(id, { name: e.target.value })} />
+                      {mine && <button type="button" className="btn small" title="改回自動帶入的名字" onClick={() => setForm((f) => (f ? { ...f, edited: { ...f.edited, [id]: {} } } : f))}>還原</button>}
                     </div>
                   );
                 })}
 
                 <label className="check" style={{ marginTop: 10 }}>
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />
-                  我同意主辦方為售票及實名入場核對之目的，蒐集與處理上述個人資料。
+                  我同意主辦方為售票及入場核對之目的，蒐集與處理上述個人資料。
                 </label>
                 {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
                 <div className="row" style={{ marginTop: 10 }}>
@@ -517,7 +528,7 @@ export default function BookingApp({ code }: { code: string }) {
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">
-                    <div className="small"><b>劃位成功</b>。入場時請出示下方 QR code 與身分證件。</div>
+                    <div className="small"><b>劃位成功</b>。入場時請出示下方 QR code。</div>
                     <div className="small muted">購票人：{o.buyerName}・{o.buyerPhone}・{o.buyerEmail}</div>
                     {o.seats.map((s) => (
                       <div key={s.code} className="etk">
@@ -526,7 +537,7 @@ export default function BookingApp({ code }: { code: string }) {
                           <div className="etk-seat">{s.label}</div>
                           <div className="mono">座位編號 {s.code}</div>
                           <div>{s.zoneName}</div>
-                          <div>持票人 {s.holder}（{(s.holderId4 ?? '').length > 4 ? '證號' : '證末4碼'} {s.holderId4}）</div>
+                          <div>持票人 {s.holder}</div>
                           <div className="mono muted">序號 {s.serial}</div>
                         </div>
                       </div>

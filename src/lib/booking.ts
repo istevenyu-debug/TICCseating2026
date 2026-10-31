@@ -35,7 +35,7 @@ async function loadLink(db: Exec, code: string, now: Date) {
   const [link] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, code));
   if (!link) throw new BookingError('LINK_NOT_FOUND', '找不到此購票連結，請確認網址是否完整。');
   if (link.status !== 'active' || link.kind === 'public') throw new BookingError('LINK_DISABLED', '此購票連結已停用，請聯繫主辦方。');
-  if (link.expiresAt < now) throw new BookingError('LINK_EXPIRED', '此購票連結已過期，請聯繫主辦方。');
+  // 有效期限只當提醒，不擋人（要停止某人劃位，請在後台「停用」連結）
   const [ev] = await db.select().from(t.event).where(eq(t.event.id, link.eventId));
   return { link, ev };
 }
@@ -56,7 +56,9 @@ function ownedBy(link: LinkRow) {
 
 export function saleStateFor(ev: EventRow, _link: LinkRow, now: Date): { state: ReturnType<typeof saleState>; startsAt: string | null } {
   const base = saleState(ev, now);
-  return { state: base, startsAt: base === 'not_started' && ev.saleStart ? ev.saleStart.toISOString() : null };
+  // 開賣、截止時間只當提醒：拿到專屬連結的人就能劃（是否發連結由主辦方決定）
+  const startsAt = ev.saleStart && now < ev.saleStart ? ev.saleStart.toISOString() : null;
+  return { state: base === 'not_started' || base === 'ended' ? 'open' : base, startsAt };
 }
 
 /** 購票端看到的開放狀態，依已發布的設定與開賣時間判斷 */
@@ -417,7 +419,7 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     // 持票人：畫面上先依購票人姓名與證末 4 碼自動帶入（姓名02、03…／證號末 4 碼＋序號），購票人可逐張修改。
     // 證號可為某人的末 4 碼，或自動編號的「末 4 碼＋2–3 位序號」
     const holders = input.holders;
-    if (holders.some((h) => !/^[0-9A-Z]{4}(\d{2,3})?$/.test(h.id4))) throw new BookingError('INVALID', '持票人證號應為身分證末 4 碼（或自動編號的末 4 碼＋序號）');
+    if (holders.some((h) => !/^([0-9A-Z]{4}(\d{2,3})?)?$/.test(h.id4))) throw new BookingError('INVALID', '持票人證號格式不正確'); // 不再要求填身分證，空白可
     for (const h of holders) {
       await tx.update(t.orderSeat).set({ holderName: h.name, holderId4: h.id4 })
         .where(and(eq(t.orderSeat.orderId, order.id), eq(t.orderSeat.seatId, h.seatId)));

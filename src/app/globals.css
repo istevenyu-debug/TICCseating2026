@@ -234,3 +234,8 @@ ol.flow li.on { background: #223a73; color: #fff; }
 ol.flow li.on .small { color: #dfe6f7; }
 ol.flow .here { margin-left: 6px; font-size: 12px; font-weight: 700; }
 @media (max-width: 760px) { ol.flow { grid-template-columns: 1fr; } ol.flow li:not(.on) .small { display: none; } }
+/* 劃位步驟：只突顯「現在」這一步 */
+.now-step { font-size: 20px; font-weight: 800; color: #223a73; }
+ol.flow li { background: transparent; font-size: 13px; padding: 4px 8px; }
+ol.flow li.on { font-weight: 700; }
+@media (max-width: 760px) { ol.flow { grid-template-columns: repeat(5, auto); gap: 2px; overflow-x: auto; } ol.flow li { white-space: nowrap; font-size: 12px; padding: 3px 6px; } }

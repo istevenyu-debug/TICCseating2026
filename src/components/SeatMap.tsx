@@ -18,11 +18,13 @@ interface Props {
   locked: boolean; // 暫存中：不可再改選
   /** 目前購票方式可選的票種；其他座位變淡、不能選 */
   allowed?: Set<number>;
+  /** 送出後：只框出這些座位，其他全部淡化 */
+  focus?: Set<string> | null;
 }
 
 const ROW_LABEL_COLS = [8, 45];
 
-export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed }: Props) {
+export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus }: Props) {
   const [cell, setCell] = useState(22);
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
   const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
@@ -60,15 +62,16 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
           )))}
           {seats.map((s) => {
             const z = zone[s.zoneId];
-            const isSel = selected.has(s.id);
-            const off = !!allowed && s.status === 'free' && !allowed.has(s.zoneId) && !isSel; // 不屬於目前購票方式的座位
+            const isFocus = !!focus && focus.has(s.id);
+            const isSel = selected.has(s.id) || isFocus;
+            const off = focus ? !isFocus : !!allowed && s.status === 'free' && !allowed.has(s.zoneId) && !isSel; // 不屬於目前購票方式的座位
             const clickable = !locked && !off && (s.status === 'free' || isSel);
             const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
             return (
               <button
                 key={s.id}
                 type="button"
-                className={`seat${off ? ' off' : ''}${isSel && s.status !== 'mine' ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
+                className={`seat${off ? ' off' : ''}${isSel && (s.status !== 'mine' || isFocus) ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={s.status}
                 style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color, color: z && (s.status === 'free' || isSel) ? inkFor(z.color) : undefined }}
                 title={title}
