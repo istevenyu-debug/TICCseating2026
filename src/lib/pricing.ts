@@ -53,7 +53,7 @@ export function comboProblem(
   if (zoneIds.length === 0) return '請先勾選座位';
   if (c.isSingle) {
     const g = zoneIds.find((z) => giftZones.has(z));
-    return g !== undefined ? `「${zoneName(g)}」為贈票，只能以組合票（例如功德組）訂購` : null;
+    return g !== undefined ? `「${zoneName(g)}」為贈票，只能隨贊助方案一起劃位` : null;
   }
   if (comboQty(c) === 0) return '此組合尚未設定內容';
   if (!(c.price > 0)) return '此組合尚未設定套票價格';

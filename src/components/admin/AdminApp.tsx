@@ -1675,7 +1675,9 @@ function Preorders() {
   const [openId, setOpenId] = useState<number | null>(null);
   const [q, setQ] = useState('');
   const base = typeof window !== 'undefined' ? location.origin : '';
-  const buyUrl = `${base}/buy`;
+  // 網址後面加 ?v=…：活動名稱或開頭文字改了，數字就跟著變，LINE 會重新抓新的預覽（沒改就不變）
+  const ver = (() => { let h = 0; for (const c of `${st.event.name}|${st.preorderSettings.intro.split(/\n\s*\n/)[0]}`) h = (h * 31 + c.charCodeAt(0)) % 9973; return h; })();
+  const buyUrl = `${base}/buy?v=${ver}`;
   const mismatch = (p: Pre) => p.source !== 'form' && p.status !== 'cancelled' && p.items.length > 0 && p.paidAmount !== p.amount;
   const match = (p: Pre, k: string) => k === 'all' || (k === 'todo' ? needsCheck(p) : k === 'ready' ? isReady(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
   const list = st.preorders.filter((p) => match(p, filter)
