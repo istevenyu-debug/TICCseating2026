@@ -178,7 +178,7 @@ describe('收款後劃位連結送到訂購人手機（也寄 Email）', () => {
 
   it('「推到手機＋開始劃位按鈕」已停用：推播只提醒查看 Email，預購頁不給連結；Email 照寄', async () => {
     const { code, got, st, mails } = await flow(true);
-    expect(mails).toContain('lin@example.com|【祈福法會】付款確認・劃位通知');
+    expect(mails).toContain('lin@example.com|【祈福法會】劃位通知');
     expect(got[0]).toMatchObject({ url: 'https://ticket.aolforgood.com/buy' });
     expect(got[0].body).not.toContain(code);
     expect(JSON.stringify(st)).not.toContain(code);

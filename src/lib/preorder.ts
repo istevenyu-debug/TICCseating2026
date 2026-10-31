@@ -296,7 +296,7 @@ export async function releasePreorder(db: Db, actor: string, id: number, keys: s
   const url = linkUrl(code, base);
   if (po.email) await db.insert(t.notification).values({
     linkId, channel: 'email', template: 'preorder_link', recipient: po.email,
-    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項，現在輪到您劃位：${itemsText(rel)}。請點以下專屬連結選位並填寫持票人資料：${url}　${rest.length ? `（${itemsText(rest)} 輪到時會再通知您，用同一個連結劃位）` : ''}連結有效至演出當天，請勿轉傳他人。`,
+    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項，現在輪到您劃位：${itemsText(rel)}。請點以下專屬連結選位並填寫持票人資料：${url}　${rest.length ? `${itemsText(rest)} 輪到時會再通知您，用同一個連結劃位。` : ''}連結有效至演出當天，請勿轉傳他人。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_release', target: `preorder:${id}`, detail: JSON.stringify({ link: code, items: rel.map(itemKey) }) });
   return { code, linkId, email: po.email, items: itemsText(rel), rest: itemsText(rest) };

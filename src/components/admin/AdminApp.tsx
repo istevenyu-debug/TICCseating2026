@@ -1440,7 +1440,12 @@ const needsCheck = (p: Pre) => p.status !== 'cancelled' && (unreleased(p).length
   && (!p.items.length || !p.paidOkAt || !allGroups(p).every((g) => p.lineOk.includes(g)));
 const isReady = (p: Pre) => p.status !== 'cancelled' && p.items.length > 0 && unreleased(p).length > 0 && unreleased(p).every((i) => readyFor(p, ik(i)));
 const progressText = (p: Pre) => !p.progress ? '' : p.progress.pending > 0 ? '已送出，等你確認' : p.progress.held > 0 ? '選位中' : p.progress.left > 0 ? (p.progress.paid + p.progress.pending > 0 ? '還沒劃完' : '還沒開始劃') : '✅ 完成';
-const linkText = (st: State, p: Pre, base: string) => `【${st.event.name}】${p.name} 您好，輪到您劃位了，請點以下連結選位並填寫持票人資料：\n${base}/t/${p.linkCode}\n劃位時有任何問題，請直接回覆我。`;
+const linkText = (st: State, p: Pre, base: string) => {
+  const rel = p.items.filter((i) => p.released.includes(ik(i))).map((i) => `${i.name} × ${i.qty} ${i.kind === 'combo' ? '組' : '張'}`).join('、');
+  return [`【${st.event.name}】劃位通知`, '', `${p.name} 您好：`, '輪到您劃位了 🙏', rel ? `劃位內容：${rel}` : '', '',
+    '👉 請點以下連結選座位、確認持票人：', `${base}/t/${p.linkCode}`, '',
+    '・這是您專屬的連結，請勿轉傳', '・送出後我們確認，會再寄入場 QR code', '・操作上有任何問題，直接回覆我就好'].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+};
 
 /** 發出劃位連結（第三顆鈕）：按兩次才寄。前面還有人沒發時，第二次的按鈕會提醒 */
 function ReleaseButton({ p, keys, label }: { p: Pre; keys: string[]; label: string }) {

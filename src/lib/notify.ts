@@ -78,7 +78,7 @@ const SUBJECT: Record<string, string> = {
   order_cancelled: '劃位取消通知',
   order_expired: '劃位逾時取消通知',
   preorder_received: '已收到您的訂單',
-  preorder_link: '已收到款項：您的專屬劃位連結',
+  preorder_link: '劃位通知',
   preorder_cancelled: '訂單取消通知',
   test: '測試信',
 };
@@ -172,8 +172,9 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
   try {
     if (isSms) await senders.sms(c as SmsConfig, n.recipient, n.content);
     else await senders.email(c as EmailConfig, n.recipient, subjectOf(n.template, n.content), n.content,
-      n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content)
-        : n.template === 'preorder_link' ? linkMail(n.content, (c as EmailConfig).fromName) : undefined);
+      n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content, (c as EmailConfig).fromName)
+        : n.template === 'preorder_link' ? linkMail(n.content, (c as EmailConfig).fromName)
+        : niceMail(n.template, n.content, (c as EmailConfig).fromName));
     await set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1 });
   } catch (e) {
     const attempts = n.attempts + 1;
@@ -185,25 +186,66 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
 /** 主旨帶演出名稱，比較像正式通知（不易被當成垃圾信） */
 function subjectOf(template: string, content: string) {
   const ev = content.match(/^【([^】]+)】/)?.[1];
-  if (template === 'preorder_link' && ev) return `【${ev}】付款確認・劃位通知`;
+  if (template === 'preorder_link' && ev) return `【${ev}】劃位通知`;
   if (template === 'preorder_received' && ev) return `【${ev}】已收到您的訂單`;
   if (template === 'order_confirmed' && ev) return `【${ev}】劃位成功通知`;
   return SUBJECT[template] ?? '通知';
 }
 
-/** 劃位連結信：正式的 HTML（標題、按鈕、連結文字），純文字內容照樣附上 */
-export function linkMail(text: string, fromName = ''): MailExtra {
-  const url = text.match(/https?:\/\/\S+?(?=[　\s]|$)/)?.[0] ?? '';
+/* ---------- 信件版面：所有寄給買方的信共用（表格排版，各家信箱都正常顯示；同時附純文字） ---------- */
+
+const MAIL_TITLE: Record<string, string> = {
+  preorder_received: '已收到您的訂單', preorder_link: '輪到您劃位了', preorder_cancelled: '訂單取消通知',
+  order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
+};
+
+/** 把系統訊息拆成：演出名稱、稱呼、內文段落、連結 */
+function partsOf(text: string) {
   const ev = text.match(/^【([^】]+)】/)?.[1] ?? '';
-  const body = esc(text.replace(/^【[^】]+】/, '').replace(url, '').replace(/請點以下專屬連結選位並填寫持票人資料：\s*/, '').replace(/　+/g, ' ').trim());
-  const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
-    <h2 style="margin:0 0 4px">付款確認・劃位通知</h2>
-    <div style="color:#5b6579;margin-bottom:12px">${esc(ev)}</div>
-    <p style="margin:0 0 16px">${body}</p>
-    ${url ? `<p style="margin:0 0 16px"><a href="${esc(url)}" style="display:inline-block;background:#223a73;color:#fff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:700">開始劃位（選座位）</a></p>
-    <p style="margin:0 0 6px;color:#5b6579;font-size:13px">按鈕無法點選時，請複製以下網址到瀏覽器開啟：<br><span style="font-family:monospace;word-break:break-all">${esc(url)}</span></p>` : ''}
-    <p style="color:#5b6579;font-size:13px;margin-top:16px">這是您專屬的劃位連結，請勿轉傳他人。${fromName ? `<br>${esc(fromName)}` : ''}</p></div>`;
-  return { html };
+  const url = text.match(/https?:\/\/[^\s　]+/)?.[0] ?? '';
+  let rest = text.replace(/^【[^】]+】/, '').replace(url, '').replace(/請點以下(專屬)?連結[^：:]*[：:]\s*/, '').replace(/[：:]\s*$/, '');
+  const g = rest.match(/^(.{1,20}?)\s*您好[，,]\s*/);
+  const greet = g ? `${g[1].trim()} 您好：` : '';
+  if (g) rest = rest.slice(g[0].length);
+  const paras = rest.split(/(?<=。)|　+/).map((x) => x.trim()).filter(Boolean);
+  return { ev, url, greet, paras };
+}
+
+export function mailLayout(o: { ev: string; title: string; greet?: string; paras: string[]; url?: string; button?: string; extraHtml?: string; note?: string; fromName?: string }) {
+  const C = { ink: '#1f2a44', muted: '#6b7488', line: '#e3e7ef', brand: '#7a5a1e', bg: '#f6f3ec', btn: '#8a6a2a' };
+  const p = (x: string) => `<p style="margin:0 0 12px">${esc(x)}</p>`;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:${C.bg}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.bg};padding:24px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;border:1px solid ${C.line};font-family:'PingFang TC','Microsoft JhengHei','Noto Sans TC',sans-serif;color:${C.ink}">
+  <tr><td style="padding:22px 28px 14px;border-bottom:3px solid ${C.brand}">
+    <div style="font-size:13px;letter-spacing:1px;color:${C.brand}">${esc(o.ev)}</div>
+    <div style="font-size:22px;font-weight:700;margin-top:4px">${esc(o.title)}</div>
+  </td></tr>
+  <tr><td style="padding:20px 28px 8px;font-size:15px;line-height:1.8">
+    ${o.greet ? `<p style="margin:0 0 12px;font-weight:700">${esc(o.greet)}</p>` : ''}
+    ${o.paras.map(p).join('')}
+    ${o.url ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 14px"><tr><td style="background:${C.btn};border-radius:8px">
+      <a href="${esc(o.url)}" style="display:inline-block;padding:13px 30px;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700">${esc(o.button ?? '開啟連結')}</a></td></tr></table>
+      <p style="margin:0 0 14px;font-size:13px;color:${C.muted}">按鈕無法點選時，請複製以下網址，貼到瀏覽器開啟：<br><span style="word-break:break-all;color:${C.ink}">${esc(o.url)}</span></p>` : ''}
+    ${o.extraHtml ?? ''}
+  </td></tr>
+  <tr><td style="padding:14px 28px 22px;border-top:1px solid ${C.line};font-size:12px;line-height:1.7;color:${C.muted}">
+    ${o.note ? `${esc(o.note)}<br>` : ''}本信由劃位系統自動寄出。如有問題，請直接回覆本信或聯繫主辦單位。${o.fromName ? `<br>${esc(o.fromName)} 敬上` : ''}
+  </td></tr>
+</table></td></tr></table></body></html>`;
+}
+
+/** 一般通知（收到訂單、收到劃位資料、取消…）：套用共用版面 */
+export function niceMail(template: string, text: string, fromName = ''): MailExtra {
+  const { ev, url, greet, paras } = partsOf(text);
+  return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button: '開啟連結', fromName }) };
+}
+
+/** 劃位連結信 */
+export function linkMail(text: string, fromName = ''): MailExtra {
+  const { ev, url, greet, paras } = partsOf(text);
+  return { html: mailLayout({ ev, title: MAIL_TITLE.preorder_link, greet, paras: paras.filter((x) => !/請勿轉傳/.test(x)), url, button: '開始劃位（選座位）',
+    note: '這是您專屬的劃位連結，請勿轉傳他人。劃位送出後，主辦方確認即會寄出入場 QR code。', fromName }) };
 }
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -212,7 +254,7 @@ const maskBase = (n: string) => (n.length <= 1 ? n : n.length === 2 ? `${n[0]}�
 const maskName = (n: string) => { const m = n.match(/^(.*?)(\d+)$/); return m && m[1] ? maskBase(m[1]) + m[2] : maskBase(n); };
 
 /** 劃位成功 Email：每張票一個 QR code（內嵌圖片，與入場券、購票頁的序號相同） */
-export async function ticketMail(db: Db, orderId: number, text: string): Promise<MailExtra> {
+export async function ticketMail(db: Db, orderId: number, text: string, fromName = ''): Promise<MailExtra> {
   const { ticketData } = await import('./admin');
   const QR = (await import('qrcode')).default;
   const { event, tickets } = await ticketData(db, [orderId]);
@@ -223,12 +265,12 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
   for (const [i, tk] of tickets.entries()) {
     const cid = `qr${i}@ticket`;
     attachments.push({ filename: `${tk.serial}.png`, content: await QR.toBuffer(qrValue(secret, tk.serial), { type: 'png', margin: 1, width: 260 }), cid });
-    cards.push(`<table role="presentation" style="border:1px solid #d6dce8;border-radius:10px;margin:0 0 12px;width:100%;max-width:520px"><tr>
+    cards.push(`<table role="presentation" style="border:1px solid #e3e7ef;border-radius:10px;margin:0 0 12px;width:100%;background:#fbfaf6"><tr>
       <td style="padding:12px;width:140px"><img src="cid:${cid}" width="130" height="130" alt="入場 QR code ${esc(tk.serial)}" style="display:block"></td>
       <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">
         <div style="font-size:18px;font-weight:700">${esc(tk.label)}</div>
         <div>座位編號 ${esc(tk.code)}・${esc(tk.zoneName)}</div>
-        <div>持票人 ${esc(maskName(tk.holderName))}${tk.holderId4 ? `（${tk.holderId4.length > 4 ? '證號' : '證末4碼'} ${esc(tk.holderId4)}）` : ''}</div>
+        <div>持票人 ${esc(maskName(tk.holderName))}</div>
         ${tk.entrance ? `<div>${esc(tk.entrance)}</div>` : ''}
         <div style="color:#5b6579;font-family:monospace">序號 ${esc(tk.serial)}</div>
       </td></tr></table>`);
@@ -242,14 +284,12 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
         <b>電子發票</b> <span style="font-family:monospace;font-size:16px">${esc(inv.invoiceNo)}</span>${inv.env !== 'prod' ? '<span style="color:#b45309">（測試，非正式發票）</span>' : ''}<br>
         開立日期 ${esc(inv.invoiceDate.slice(0, 10))}・隨機碼 ${esc(inv.randomNumber)}<br>
         <span style="color:#5b6579">${esc(inv.buyer)}。可至財政部電子發票整合服務平台查詢。</span></div>`;
-  const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
-    <h2 style="margin:0 0 4px">🎉 劃位成功</h2>
-    <div style="color:#5b6579;margin-bottom:12px">${esc(event.name)}・${esc(when)}・台北國際會議中心 大會堂</div>
-    <p style="margin:0 0 14px">${esc(text)}</p>
-    ${invHtml}
-    <p style="margin:0 0 10px"><b>入場時請出示以下 QR code</b>（每張票一個，可截圖保存）：</p>
-    ${cards.join('')}
-    <p style="color:#5b6579;font-size:13px">每個 QR code 只能入場一次，請勿轉傳給他人。</p></div>`;
+  const { greet, paras } = partsOf(text);
+  const html = mailLayout({
+    ev: event.name, title: '劃位成功', greet, paras: [`演出時間：${when}・台北國際會議中心 大會堂`, ...paras.filter((x) => !/QR code 請至|入場時請出示/.test(x))],
+    extraHtml: `${invHtml}<p style="margin:6px 0 10px;font-weight:700">入場時請出示以下 QR code（每張票一個，可截圖保存）</p>${cards.join('')}`,
+    note: '每個 QR code 只能入場一次，請勿轉傳給他人。', fromName,
+  });
   return { html, attachments };
 }
 
