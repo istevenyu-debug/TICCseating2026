@@ -5,7 +5,6 @@ import type { BookingState } from '@/lib/booking';
 import { calcAmount, comboDesc, comboProblem, comboQty, comboSets } from '@/lib/pricing';
 import { autoHolders, phoneProblem } from '@/lib/validation';
 import { bundleIndex } from '@/lib/bundle';
-import PushCard from './PushCard';
 import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
 
@@ -305,7 +304,7 @@ export default function BookingApp({ code }: { code: string }) {
         <h1>{st.event.name}</h1>
         <div className="muted">{fmtDate(st.event.showAt)}・台北國際會議中心 大會堂</div>
         <div className="small" style={{ marginTop: 6 }}>
-          {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 張（已劃 {st.link.used} 張）</> : ''}，有效至 {fmtDate(st.link.expiresAt)}。請勿轉傳他人。
+          {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 張（已劃 {st.link.used} 張）</> : ''}。請勿轉傳他人。
         </div>
       </div>
       {msg?.kind === 'ok' && lastOrder && !held && (
@@ -354,7 +353,6 @@ export default function BookingApp({ code }: { code: string }) {
           </div>
         );
       })()}
-      {(st.orders.some((o) => o.status === 'pending') || !!held) && <PushCard endpoint={`/api/t/${encodeURIComponent(code)}/push`} api={api} compact={false} />}
       {open && st.startsAt && <div className="note small">提醒：預定 {fmtDate(st.startsAt)} 開始劃位。</div>}
       {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
@@ -375,7 +373,7 @@ export default function BookingApp({ code }: { code: string }) {
             {combosShown.map((c) => {
               const soldOut = (c.limitSets > 0 && c.usedSets >= c.limitSets) || (!!paid && !c.isSingle && (paidCombo(c.id)?.left ?? 0) <= 0) || (!!paid && c.isSingle && !paidZones.length);
               const desc = c.isSingle ? '依各票種票價計算'
-                : `每組 ${comboDesc(c, zoneName)}・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
+                : `每組 ${comboDesc(c, zoneName)}${paid ? '' : `・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`}`;
               return (
                 <label key={c.id} className={`combo${soldOut ? ' dis' : ''}`}>
                   <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={soldOut} onChange={() => pickCombo(c.id)} />
@@ -555,7 +553,7 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="small muted">{fmtDate(n.at)}</div>
                 <div className="small">{n.content}</div>
               </div>
-            )) : <p className="small muted" style={{ margin: 0 }}>尚無通知。主辦方確認到帳後，劃位成功訊息會出現在這裡，同時以簡訊及 Email 寄給您。</p>}
+            )) : <p className="small muted" style={{ margin: 0 }}>尚無通知。主辦方確認後，劃位成功訊息會出現在這裡，也會寄到您的 Email。</p>}
           </div>
         </div>
       </div>

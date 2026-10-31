@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { phoneProblem } from '@/lib/validation';
-import PushCard from './PushCard';
 import { invProblem, type InvType } from '@/lib/invoiceRules';
 
 type Menu = {
@@ -71,8 +70,8 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
             ? <><a className="btn pri" style={{ display: 'block', textAlign: 'center', marginTop: 8 }} href={m.url}>開始劃位（選座位）</a>
                 <div className="small muted" style={{ marginTop: 4 }}>劃位連結也已寄到您的 Email（{m.email}）。</div></>
             : m.status === 'confirmed'
-            ? <div className="note ok small" style={{ marginTop: 8 }}>已確認收到款項。<b>劃位連結已寄到您的 Email（{m.email}）</b>，請到信箱點連結選位；沒看到請看看垃圾郵件匣，或聯繫主辦方。</div>
-            : m.status === 'submitted' && <div className="small" style={{ marginTop: 4 }}>主辦方確認收到款項後，{'這裡會出現「開始劃位」按鈕，'}同時把劃位連結寄到您的 Email（{m.email}）。</div>}
+            ? <div className="note ok small" style={{ marginTop: 8 }}>已輪到您劃位。<b>劃位連結已寄到您的 Email（{m.email}）</b>，請到信箱點連結選位；沒看到請看看垃圾郵件匣，或聯繫主辦方。</div>
+            : m.status === 'submitted' && <div className="small" style={{ marginTop: 4 }}>主辦方確認款項、並依送單順序輪到您時，會把劃位連結寄到您的 Email（{m.email}）。</div>}
         </div>
       ))}
     </div>
@@ -202,16 +201,13 @@ export default function PreorderApp() {
       <main className="wrap" style={{ maxWidth: 640 }}>
         <div className="card" style={{ borderTop: '4px solid var(--ok)' }}>
           <h2>✅ 已送出訂單 {done.no}</h2>
-          <p>合計 <b>{money(done.amount)}</b>。主辦方確認收到款項後，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
+          <p>合計 <b>{money(done.amount)}</b>。主辦方確認款項、並依送單順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
           <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
           {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
-          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度{menu.pushLink ? '；確認收款後會出現「開始劃位」按鈕' : ''}。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
+          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>
         {head}
-        <PushCard endpoint={`/api/buy/push?t=${encodeURIComponent(done.token)}`} api={call} compact={false}
-          title={menu.pushLink ? '📱 收款確認後，劃位連結直接送到這支手機' : '📱 收款確認時通知這支手機'}
-          offText={menu.pushLink ? <>開啟後，主辦方確認收到款項時，這支手機會跳出通知，<b>點一下就能開始選位</b>。Email 也會照常寄出。</> : <>開啟後，主辦方確認收到款項時，這支手機會跳出通知，提醒您<b>到 Email 收劃位連結</b>。</>}
-          onText={menu.pushLink ? '✓ 已開啟通知：主辦方確認收款後，這支手機會收到劃位通知，點一下就能選位。也可以隨時回到這個網頁按「開始劃位」。' : '✓ 已開啟通知：主辦方確認收款後，這支手機會跳出通知，提醒您查看 Email。也可以隨時回到這個網頁查看進度。'} />
+
       </main>
     );
   }

@@ -144,6 +144,8 @@ export function dispatchQueued(db: Db, senders: Senders = realSenders, now = () 
   running = (async () => {
     try {
       for (let round = 0; round < 10; round++) {
+        // 沒設定簡訊帳號＝不用簡訊：排隊中的簡訊直接拿掉，不寄、不顯示
+        if (!(await getNotifyConfig(db)).sms) await db.delete(t.notification).where(and(eq(t.notification.status, 'queued'), eq(t.notification.channel, 'sms')));
         // 排程的（招待演出前寄出）時間到了才寄
         const rows = await db.select().from(t.notification)
           .where(and(eq(t.notification.status, 'queued'), or(isNull(t.notification.sendAfter), lte(t.notification.sendAfter, now()))))
