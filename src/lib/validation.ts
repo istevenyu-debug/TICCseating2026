@@ -39,7 +39,7 @@ export const submitInput = z.object({
   }),
   holders: z.array(z.object({
     seatId: z.string().min(1),
-    name: z.string().trim().min(1, '請填寫每張票的持票人姓名').max(40),
+    name: z.string().trim().min(1, '請填寫每個座位的出席貴賓姓名').max(40),
     id4: z.string().trim().toUpperCase().regex(/^([0-9A-Z]{4}(\d{2,3})?)?$/, '證號格式不正確').optional().default(''), // 不再要求身分證
   })).min(1),
   /** 持票人自動編號的購票方式：購票人身分證末 4 碼 */

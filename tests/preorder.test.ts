@@ -38,8 +38,8 @@ describe('公開預購', () => {
   it('送出：伺服器重算金額（6080×2＋3200＝15360）、寄出收件 Email；不佔座位', async () => {
     await A.updateEventSettings(db, 'admin', { preorderOpen: true });
     const r = await submitPreorder(db, body());
-    expect(r).toEqual({ no: 'P0001', token: expect.stringMatching(/^[\w-]{24}$/) }); // 買方看不到金額
-    const r2 = await submitPreorder(db, body({ paidAmount: 100 }));
+    expect(r).toEqual({ no: 'P0001', token: expect.stringMatching(/^[\w-]{24}$/), waitlist: null }); // 買方看不到金額
+    const r2 = await submitPreorder(db, body({ paidAmount: 100, confirmMismatch: true }));
     expect(r2.no).toBe('P0002');
     const rows = await db.select().from(t.preorder).orderBy(t.preorder.id);
     expect(rows.map((x) => [x.amount, x.paidAmount])).toEqual([[15360, 15360], [15360, 100]]); // 後台照舊有金額
@@ -59,7 +59,7 @@ describe('公開預購', () => {
     await expect(submitPreorder(db, body())).rejects.toThrow('功德群、金群');
     await expect(submitPreorder(db, body({ lineJoined: ['功德群'] }))).rejects.toThrow('金群');
     expect((await submitPreorder(db, body({ lineJoined: ['功德群', '金群'] }))).no).toBe('P0001');
-    expect((await submitPreorder(db, body({ items: [{ kind: 'combo', id: combo2, qty: 1 }], lineJoined: ['功德群'] }))).no).toBe('P0002');
+    expect((await submitPreorder(db, body({ items: [{ kind: 'combo', id: combo2, qty: 1 }], lineJoined: ['功德群'], confirmMismatch: true }))).no).toBe('P0002');
     await expect(setLineCfg(db, 'admin', { groups: [{ name: 'x', url: 'line.me/xx' }], map: {} })).rejects.toThrow('https');
   });
 
@@ -68,7 +68,7 @@ describe('公開預購', () => {
     await expect(submitPreorder(db, body({ last5: '123' }))).rejects.toThrow('末 5 碼');
     await expect(submitPreorder(db, body({ phone: '0912345678123' }))).rejects.toThrow('手機');
     await expect(submitPreorder(db, body({ email: 'x' }))).rejects.toThrow('Email');
-    await expect(submitPreorder(db, body({ items: [] }))).rejects.toThrow('至少選購');
+    await expect(submitPreorder(db, body({ items: [] }))).rejects.toThrow('至少選擇');
   });
 
   it('確認收訖：建立不限張數、有效到演出當天的專屬連結，寄劃位連結 Email（含網址）；連結可以劃位', async () => {
@@ -134,9 +134,9 @@ describe('劃位連結只能劃付款買的內容', () => {
     const a = st0.seats.filter((x) => x.zoneId === zoneA && x.status === 'free' && !x.bundle).map((x) => x.id);
     expect(st0.paid?.rows.map((r) => [r.name, r.qty, r.left])).toEqual([['雙人套票', 2, 2], ['A區 單張', 1, 1]]);
 
-    await expect(holdSeats(db, code, a.slice(0, 6), combo2, now)).rejects.toThrow('還可劃 2 組');
-    await expect(holdSeats(db, code, a.slice(0, 4), other, now)).rejects.toThrow('請用這個購票方式');
-    await expect(holdSeats(db, code, a.slice(0, 2), single, now)).rejects.toThrow('還可劃 1 張');
+    await expect(holdSeats(db, code, a.slice(0, 6), combo2, now)).rejects.toThrow('還可劃 2 份');
+    await expect(holdSeats(db, code, a.slice(0, 4), other, now)).rejects.toThrow('請用這個方案');
+    await expect(holdSeats(db, code, a.slice(0, 2), single, now)).rejects.toThrow('還可劃 1 席');
 
     const h = await holdSeats(db, code, a.slice(0, 4), combo2, now);
     const holders = a.slice(0, 4).map((id, i) => ({ seatId: id, name: `持票人${i}`, id4: '12a4' }));
@@ -146,7 +146,7 @@ describe('劃位連結只能劃付款買的內容', () => {
 
     const s = await A.getAdminState(db, now);
     const lk = s.links.find((l) => l.code === code)!;
-    expect(lk.paid).toMatchObject({ preorderNo: 'P0001', over: false, done: true, text: '雙人套票：已付 2 組，✅ 已劃完；A區 單張：已付 1 張，✅ 已劃完' });
+    expect(lk.paid).toMatchObject({ preorderNo: 'P0001', over: false, done: true, text: '雙人套票：已付 2 份，✅ 已劃完；A區 單張：已付 1 席，✅ 已劃完' });
     expect((await getBookingState(db, code, now)).paid?.done).toBe(true);
   });
   it('手動發的連結不受付款內容限制（沿用可購張數）', async () => {
@@ -236,6 +236,28 @@ describe('老大依序發劃位：打勾不寄，按「發出」才寄；可分�
     expect(last[0]).toMatchObject({ recipient: 'right@example.com', template: 'preorder_link' });
     expect(last[0].content).toContain('補寄');
     const { entText, entitle } = await import('@/lib/entitle');
-    expect(entText(entitle([{ kind: 'combo', id: 1, name: '功德組', qty: 1 }], []).rows)).toBe('功德組：已付 1 組，已劃 0 組（還沒劃）');
+    expect(entText(entitle([{ kind: 'combo', id: 1, name: '功德組', qty: 1 }], []).rows)).toBe('功德組：已付 1 份，已劃 0 份（還沒劃）');
+  });
+});
+
+describe('名額、候補與金額提醒', () => {
+  it('金額與數量不相當先提醒；名額滿進候補（第 N 位），候補也滿就不能登記；後台轉正取', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await db.update(t.combo).set({ limitSets: 2 }).where(eq(t.combo.id, combo2));
+    const { setPreorderSettings, promoteWaitlist } = await import('@/lib/preorder');
+    await setPreorderSettings(db, 'admin', { waitlistCap: 1, rateLimit: 1000 });
+    const one = (o: Record<string, unknown> = {}) => body({ items: [{ kind: 'combo', id: combo2, qty: 1 }], paidAmount: 6080, ...o });
+    await expect(submitPreorder(db, one({ paidAmount: 100 }), 'ip-cap')).rejects.toThrow('不相當');
+    expect((await submitPreorder(db, one(), 'ip-cap')).waitlist).toBeNull();
+    expect((await submitPreorder(db, one(), 'ip-cap')).waitlist).toBeNull();
+    expect((await preorderMenu(db)).items.find((i) => i.id === combo2)?.status).toBe('waitlist');
+    const w = await submitPreorder(db, one(), 'ip-cap');
+    expect(w.waitlist).toBe(1);
+    expect((await preorderMenu(db)).items.find((i) => i.id === combo2)?.status).toBe('full');
+    await expect(submitPreorder(db, one(), 'ip-cap')).rejects.toThrow('圓滿');
+    const p = (await listPreorders(db)).find((x) => x.no === w.no)!;
+    expect(p.waitlist).toBe(true);
+    await promoteWaitlist(db, 'admin', p.id);
+    expect((await listPreorders(db)).find((x) => x.no === w.no)!.waitlist).toBe(false);
   });
 });

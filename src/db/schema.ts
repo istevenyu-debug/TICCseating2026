@@ -38,7 +38,7 @@ export const event = pgTable('event', {
   saleStart: timestamp('sale_start', { withTimezone: true }),
   saleEnd: timestamp('sale_end', { withTimezone: true }),
   maxPerOrder: integer('max_per_order').notNull().default(21),
-  holdMinutes: integer('hold_minutes').notNull().default(20),
+  holdMinutes: integer('hold_minutes').notNull().default(1440), // 新流程：選位暫存 24 小時，買方看不到倒數
   payHours: integer('pay_hours').notNull().default(48),
   preorderOpen: boolean('preorder_open').notNull().default(false), // 公開預購頁是否開放
   payFirst: boolean('pay_first').notNull().default(true), // 先匯款再給連結：購票頁不填匯款資料、不逾期取消
@@ -100,6 +100,7 @@ export const combo = pgTable('combo', {
   active: boolean('active').notNull().default(true), // 後台勾選的開放狀態（發布後生效）
   sort: integer('sort').notNull().default(0),
   autoHolders: boolean('auto_holders').notNull().default(false), // 持票人自動編號：本名、本名02…；證末4碼+01、02…
+  description: text('description').notNull().default(''), // 預購單上的「方案內容」說明；空白則自動產生
 });
 
 /** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */
@@ -215,7 +216,8 @@ export const preorder = pgTable('preorder', {
   source: text('source').notNull().default('web'), // web 本站預購頁／form Google 表單
   formId: text('form_id'), // Google 表單回覆編號（避免重複匯入）
   answers: jsonb('answers').$type<{ q: string; a: string }[]>().notNull().default([]), // Google 表單原始回答
-  lineName: text('line_name').notNull().default(''), // 買方自填的 LINE 顯示名稱（選填）
+  lineName: text('line_name').notNull().default(''),
+  waitlist: boolean('waitlist').notNull().default(false), // 候補（名額已滿時登記）；老大按「轉正取」才排進依序劃位 // 買方自填的 LINE 顯示名稱（選填）
   // 老大核對：已匯款、已入 LINE 群（群名清單）；勾了不會寄任何東西
   paidOkAt: timestamp('paid_ok_at', { withTimezone: true }),
   paidOkBy: text('paid_ok_by'),

@@ -12,7 +12,7 @@ export function entitle(items: PaidItem[], orders: UsedOrder[]) {
     const used = i.kind === 'combo'
       ? orders.filter((o) => !o.isSingle && o.comboId === i.id).reduce((a, o) => a + o.sets, 0)
       : orders.filter((o) => o.isSingle).reduce((a, o) => a + o.zoneIds.filter((z) => z === i.id).length, 0);
-    return { kind: i.kind, id: i.id, name: i.name, unit: i.kind === 'combo' ? '組' : '張', qty: i.qty, used, left: i.qty - used };
+    return { kind: i.kind, id: i.id, name: i.name, unit: i.kind === 'combo' ? '份' : '席', qty: i.qty, used, left: i.qty - used };
   });
   // 劃了沒付錢的內容（理論上不會發生；舊資料或規則改過時，後台標紅）
   const extra = orders.some((o) => o.isSingle

@@ -14,7 +14,8 @@ type Menu = {
   line: { groups: { name: string; url: string }[]; map: Record<string, number> };
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
-  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[] }[];
+  intro: string;
+  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[]; status: 'open' | 'waitlist' | 'full' }[];
   map: { vipInstalled: boolean; seats: Seat[]; zones: { id: number; name: string; color: string; gift: boolean }[] } | null;
 };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
@@ -61,7 +62,7 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
   if (!mine.length) return null;
   return (
     <div className="card">
-      <h2>您在這支手機送出的訂單 <button className="btn small" onClick={reload}>重新整理</button></h2>
+      <h2>您在這支手機送出的贊助登記 <button className="btn small" onClick={reload}>重新整理</button></h2>
       {mine.map((m) => (
         <div key={m.token} className="note" style={{ marginBottom: 8 }}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -81,6 +82,24 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
   );
 }
 
+/** 開頭文字（後台可編輯）：「## 」開頭為小標題，「1. 」開頭為步驟，空行分段 */
+function Intro({ text }: { text: string }) {
+  const blocks = text.replace(/\r/g, '').split(/\n\s*\n/);
+  return <div style={{ marginTop: 10 }}>{blocks.map((b, n) => {
+    const lines = b.split('\n').filter((x) => x.trim());
+    const out: React.ReactNode[] = [];
+    let list: string[] = [];
+    const flush = () => { if (list.length) { out.push(<ol key={`o${out.length}`} style={{ margin: '0 0 8px', paddingLeft: 22, lineHeight: 1.8 }}>{list.map((x, k) => <li key={k}>{x}</li>)}</ol>); list = []; } };
+    for (const l of lines) {
+      if (/^##\s*/.test(l)) { flush(); out.push(<h3 key={`h${out.length}`} style={{ margin: '14px 0 6px', color: '#7a5a1e' }}>{l.replace(/^##\s*/, '')}</h3>); }
+      else if (/^\d+[.、]\s*/.test(l)) list.push(l.replace(/^\d+[.、]\s*/, ''));
+      else { flush(); out.push(<p key={`p${out.length}`} style={{ margin: '0 0 6px', lineHeight: 1.8 }}>{l}</p>); }
+    }
+    flush();
+    return <div key={n} style={{ marginBottom: 6 }}>{out}</div>;
+  })}</div>;
+}
+
 /** 預購單（公開）：選購（不劃位）→ 匯款 → 填資料回傳；主辦方確認收訖後寄出專屬劃位連結 */
 export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -96,7 +115,8 @@ export default function PreorderApp() {
   const [inv, setInv] = useState<{ type: InvType; code: string; title: string }>({ type: 'member', code: '', title: '' });
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ no: string; token: string } | null>(null);
+  const [done, setDone] = useState<{ no: string; token: string; waitlist: number | null } | null>(null);
+  const [mismatch, setMismatch] = useState('');
   const [mine, setMine] = useState<Mine[]>([]);
 
   const reload = useCallback(async () => {
@@ -140,13 +160,13 @@ export default function PreorderApp() {
   const lineGroups = menu.line.groups.filter((_, n) => lineIdx.has(n));
   const paid = f.paid; // 贊助金額：買方自己填，不幫他算、不顯示任何金額
   const remits = [{ last5: f.last5.trim(), amount: parseInt(paid.replace(/\D/g, '')) || 0 }, ...extra.map((r) => ({ last5: r.last5.trim(), amount: parseInt(r.amount.replace(/\D/g, '')) || 0 }))];
-  const setN = (i: Menu['items'][number], n: number) => { setQty({ ...qty, [key(i)]: Math.max(0, Math.min(200, n)) }); setErr(''); };
+  const setN = (i: Menu['items'][number], n: number) => { setQty({ ...qty, [key(i)]: i.status === 'full' ? 0 : Math.max(0, Math.min(200, n)) }); setErr(''); };
   const upd = (v: Partial<typeof f>) => { setF({ ...f, ...v }); setErr(''); };
 
   function next(e: React.FormEvent) {
     e.preventDefault();
     const bad = (m: string, id?: string) => { setErr(m); if (id) document.getElementById(id)?.focus(); };
-    if (!lines.length) return bad('請先選購至少一項');
+    if (!lines.length) return bad('請先選擇至少一項贊助方案');
     if (!f.name.trim()) return bad('請填寫身分證上的姓名', 'p-name');
     const pp = f.phone.trim() ? phoneProblem(f.phone) : '請填寫手機';
     if (pp) return bad(pp, 'p-phone');
@@ -163,15 +183,17 @@ export default function PreorderApp() {
     if (miss) return bad(`請先加入「${miss.name}」並勾選「我已加入」（已經在群裡的，直接打勾即可）`, `p-line-${lineGroups.indexOf(miss)}`);
     setErr(''); setReview(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  async function send() {
-    setBusy(true);
-    const r = await api<{ no: string; token: string }>({
+  async function send(confirmMismatch = false) {
+    setBusy(true); setMismatch('');
+    const r = await api<{ no: string; token: string; waitlist: number | null }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), agree: f.agree, lineName: f.lineName.trim(),
       remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
       invType: inv.type, invCode: inv.type === 'company' ? inv.code.trim() : '', invTitle: inv.type === 'company' ? inv.title.trim() : '',
+      confirmMismatch,
     });
     setBusy(false);
+    if (!r.ok && r.code === 'AMOUNT_MISMATCH') { setMismatch(r.message); return; } // 留在確認畫面，讓他選「返回修改」或「確認送出」
     if (!r.ok) { setReview(false); setErr(r.message); return; }
     addSaved({ token: r.data.token, no: r.data.no });
     clearDraft();
@@ -182,16 +204,7 @@ export default function PreorderApp() {
     <div className="card">
       <h1>{menu.event.name}</h1>
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
-      <h3 style={{ margin: '12px 0 4px' }}>怎麼訂</h3>
-      <ol className="small" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-        <li>選好要訂的項目和數量。</li>
-        {menu.line.groups.length > 0 && <li>加入 LINE 群（依您選的項目）。</li>}
-        <li>到銀行或網銀 App <b>匯款</b>。</li>
-        <li>回到這個頁面，填<b>匯款帳號後五碼</b>和聯絡資料，送出。</li>
-      </ol>
-      <p className="small" style={{ margin: '6px 0 0' }}>去匯款或加 LINE 群會離開這頁，沒關係：<b>用同一支手機、同一個方式再打開這個連結</b>，您選的、填的都還在。</p>
-      <h3 style={{ margin: '12px 0 4px' }}>劃位順序</h3>
-      <p className="small" style={{ margin: 0 }}>依<b>送出預購單的先後順序</b>劃位。主辦方核對<b>匯款已入帳</b>、並確認您<b>已加入 LINE 群</b>後，會依序通知您劃位；尚未匯款或還沒加入 LINE 群的，先輪給後面已完成的人。輪到您時，劃位連結會寄到您的 Email，主辦方也可能用電話或 LINE 與您聯繫。</p>
+      <Intro text={menu.intro} />
     </div>
   );
 
@@ -199,10 +212,11 @@ export default function PreorderApp() {
     return (
       <main className="wrap" style={{ maxWidth: 640 }}>
         <div className="card" style={{ borderTop: '4px solid var(--ok)' }}>
-          <h2>✅ 已送出訂單 {done.no}</h2>
-          <p>主辦方確認款項、並依送單順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
+          {done.waitlist
+            ? <><h2>🙏 已收到您的登記（{done.no}）</h2><p>目前為<b>候補第 {done.waitlist} 位</b>。有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。</p></>
+            : <><h2>🙏 已收到您的贊助登記（{done.no}）</h2><p>感恩您的護持。主辦方確認款項、並依登記順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p></>}
           <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
-          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
+          <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到登記進度。如需修改或取消，請聯繫主辦方並提供登記編號 {done.no}。</p>
         </div>
         {head}
 
@@ -233,14 +247,23 @@ export default function PreorderApp() {
             <span className="muted">匯款帳號後五碼</span><span className="mono">{remits.map((r) => r.last5).join('、')}</span>
             <span className="muted">發票</span><span>{inv.type === 'company' ? `三聯：${inv.title.trim()}（統編 ${inv.code.trim()}）` : '二聯（個人）'}</span>
           </div>
-          <h3>選購內容</h3>
+          <h3>贊助方案</h3>
           <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name}</span><span>× {qty[key(i)]} {i.unit}</span></div>)}</div>
-          <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，這支手機可以查進度、收到收款通知。</p>
+          <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，用這支手機回到本頁就能查看登記進度。</p>
           {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
+          {mismatch ? (
+            <div className="note warn" style={{ marginTop: 12 }}>
+              <b>{mismatch}</b>
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="btn" disabled={busy} onClick={() => { setMismatch(''); setReview(false); }}>返回修改</button>
+                <button className="btn pri" disabled={busy} onClick={() => send(true)}>{busy ? '送出中…' : '我已確認無誤，送出'}</button>
+              </div>
+            </div>
+          ) : (
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={send}>{busy ? '送出中…' : '資料正確，確認送出'}</button>
+            <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={() => send()}>{busy ? '送出中…' : '資料正確，確認送出'}</button>
             <button className="btn" disabled={busy} onClick={() => setReview(false)}>返回修改</button>
-          </div>
+          </div>)}
         </div>
       ) : (
         <form onSubmit={next} noValidate style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -256,22 +279,25 @@ export default function PreorderApp() {
             );
           })()}
           <div className="card">
-            <h2>一、選購</h2>
+            <h2>一、贊助方案</h2>
             {menu.items.map((i) => (
               <div key={key(i)} className="selitem" style={{ alignItems: 'center', padding: '8px 0' }}>
                 <span style={{ cursor: 'pointer' }} onClick={() => setHl(hl === key(i) ? null : key(i))}>
                   <b>{i.name}</b>{hl === key(i) && <span className="small" style={{ color: 'var(--accent)' }}>（座位圖已亮起）</span>}<br />
-                  <span className="small muted">{i.desc}</span><br />
-                  {i.zoneIds.map((z) => menu.map?.zones.find((x) => x.id === z)).filter(Boolean).map((z) => (
+                  <span className="small">方案內容：{i.desc}</span><br />
+                  <span className="small muted">座位參考：</span>
+                  {[...new Set(i.zoneIds)].map((z) => menu.map?.zones.find((x) => x.id === z)).filter(Boolean).map((z) => (
                     <span key={z!.id} className="small" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 8 }}>
                       <i style={{ width: 12, height: 12, borderRadius: 3, background: z!.color, display: 'inline-block' }} />{z!.name}</span>))}
-                  <span className="small" style={{ color: 'var(--accent)' }}>　看座位 ›</span>
+                  <span className="small" style={{ color: 'var(--accent)' }}>查看座位 ›</span>
+                  {i.status === 'waitlist' && <div className="small" style={{ color: '#9a6700', marginTop: 4 }}>目前名額已滿，仍可登記候補，有名額釋出時我們會依序與您聯繫。</div>}
+                  {i.status === 'full' && <div className="small" style={{ color: 'var(--muted)', marginTop: 4 }}>感謝您的護持，此方案名額已圓滿。歡迎留意其他方案，或直接與我們聯繫。</div>}
                 </span>
                 <span className="row" style={{ flexWrap: 'nowrap' }}>
                   <button type="button" className="btn" aria-label={`減少 ${i.name}`} onClick={() => setN(i, (qty[key(i)] ?? 0) - 1)}>−</button>
                   <input aria-label={`${i.name} 數量`} value={qty[key(i)] ?? 0} inputMode="numeric" style={{ width: 52, textAlign: 'center' }}
                     onChange={(e) => setN(i, parseInt(e.target.value.replace(/\D/g, '')) || 0)} />
-                  <button type="button" className="btn" aria-label={`增加 ${i.name}`} onClick={() => setN(i, (qty[key(i)] ?? 0) + 1)}>＋</button>
+                  <button type="button" className="btn" aria-label={`增加 ${i.name}`} disabled={i.status === 'full'} onClick={() => setN(i, (qty[key(i)] ?? 0) + 1)}>＋</button>
                 </span>
               </div>
             ))}
@@ -280,8 +306,8 @@ export default function PreorderApp() {
 
           {lineGroups.length > 0 && (
             <div className="card">
-              <h2>二、加入 LINE 群（必做）</h2>
-              <p className="small" style={{ margin: 0 }}>依您選購的項目，請先加入下面的 LINE 群，才能送出。加入後請<b>回到這個頁面</b>繼續（iPhone 按左上角返回；在 LINE 裡打開的，請再點一次預購單連結，資料都還在）。</p>
+              <h2>二、加入 LINE 專屬群組</h2>
+              <p className="small" style={{ margin: 0 }}>請依您選擇的贊助項目，加入對應的 LINE 群組（完成後才能送出）。加入後請<b>回到這個頁面</b>繼續（iPhone 按左上角返回；在 LINE 裡打開的，請再點一次預購單連結，資料都還在）。</p>
               {lineGroups.map((g, n) => {
                 const opened = lineOpened.includes(g.name);
                 return (
@@ -299,7 +325,7 @@ export default function PreorderApp() {
             </div>
           )}
           <div className="card">
-            <h2>{lineGroups.length ? '三' : '二'}、請先匯款</h2>
+            <h2>{lineGroups.length ? '三' : '二'}、完成匯款</h2>
             <div className="bank">
               <span className="muted">銀行</span><span>{menu.event.bankName || '（主辦方尚未設定）'}</span>
               <span className="muted">帳號</span><span className="mono">{menu.event.bankAccount}</span>
@@ -310,13 +336,14 @@ export default function PreorderApp() {
           </div>
 
           <div className="card">
-            <h2>{lineGroups.length ? '四' : '三'}、匯款後填寫資料</h2>
+            <h2>{lineGroups.length ? '四' : '三'}、填寫回報資料</h2>
             <label className="f">姓名（與身分證相同）<input id="p-name" value={f.name} autoComplete="name" onChange={(e) => upd({ name: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
               <label className="f">手機<input id="p-phone" value={f.phone} maxLength={13} inputMode="tel" autoComplete="tel" placeholder="09xxxxxxxx"
                 style={phoneProblem(f.phone) ? { borderColor: 'var(--red)' } : undefined} onChange={(e) => upd({ phone: e.target.value })} />
                 {phoneProblem(f.phone) && <span className="small" style={{ color: 'var(--red)' }}>{phoneProblem(f.phone)}</span>}</label>
-              <label className="f">Email（劃位連結寄到這裡）<input id="p-email" type="email" value={f.email} autoComplete="email" onChange={(e) => upd({ email: e.target.value })} /></label>
+              <label className="f">Email（劃位連結寄到這裡）<input id="p-email" type="email" value={f.email} autoComplete="email" onChange={(e) => upd({ email: e.target.value })} />
+                <span className="small muted">建議填 Gmail 等個人信箱，公司或學校信箱可能收不到通知。</span></label>
             </div>
             <label className="f" style={{ marginTop: 8 }}>LINE 顯示名稱（選填，方便主辦方在群裡找到您）<input value={f.lineName} maxLength={40} onChange={(e) => upd({ lineName: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
@@ -347,7 +374,7 @@ export default function PreorderApp() {
             </div>
             <label className="check" style={{ marginTop: 10 }}>
               <input id="p-agree" type="checkbox" checked={f.agree} onChange={(e) => upd({ agree: e.target.checked })} />
-              我同意主辦方為售票、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
+              我同意主辦方為票務、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
             </label>
             {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
             <button className="btn pri" type="submit" style={{ width: '100%', marginTop: 12 }}>下一步：確認資料</button>

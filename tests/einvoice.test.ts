@@ -63,7 +63,7 @@ beforeEach(async () => {
   await A.updateEventSettings(db, 'admin', { preorderOpen: true });
 });
 
-const order = (o: Record<string, unknown> = {}) => ({ items: [{ kind: 'combo', id: combo2, qty: 2 }], name: '林大同', phone: '0912345678', email: 'lin@example.com', paidAmount: 12160, last5: '12345', agree: true, ...o });
+const order = (o: Record<string, unknown> = {}) => ({ items: [{ kind: 'combo', id: combo2, qty: 2 }], name: '林大同', phone: '0912345678', email: 'lin@example.com', paidAmount: 12160, last5: '12345', agree: true, confirmMismatch: true, ...o });
 async function confirmed(o: Record<string, unknown> = {}, post?: EinvPost) {
   await submitPreorder(db, order(o), '', new Date(), post);
   const p = (await listPreorders(db))[0];

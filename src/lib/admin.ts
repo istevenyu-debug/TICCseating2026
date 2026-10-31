@@ -551,7 +551,7 @@ export async function createCombo(db: Db, actor: string) {
 }
 
 export async function updateCombo(db: Db, actor: string, id: number, v: Partial<{
-  name: string; price: number; limitSets: number; active: boolean; autoHolders: boolean; items: { zoneId: number; qty: number }[];
+  name: string; price: number; limitSets: number; active: boolean; autoHolders: boolean; description: string; items: { zoneId: number; qty: number }[];
 }>) {
   const [c] = await db.select().from(t.combo).where(eq(t.combo.id, id));
   if (!c) throw new BookingError('NOT_FOUND', '找不到此購票方式');
@@ -635,7 +635,7 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
       .where(eq(t.payment.orderId, id));
     const seats = await tx.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, holder: t.orderSeat.holderName })
       .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(eq(t.orderSeat.orderId, id));
-    const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}，持票人 ${s.holder ?? ''}）`).join('、');
+    const seatText = seats.map((s) => `${seatLabel(s)}（${s.code}，出席貴賓 ${s.holder ?? ''}）`).join('、');
     const [lk] = await tx.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
     const content = confirmMessage(ev.name, o, v.amount ?? o.amount, seatText, ev.showAt, lk && (base || process.env.PUBLIC_BASE_URL) ? linkUrl(lk.code, base) : undefined);
     await tx.insert(t.notification).values([

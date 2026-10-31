@@ -33,8 +33,8 @@ export type Exec = Db | Tx;
 
 async function loadLink(db: Exec, code: string, now: Date) {
   const [link] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, code));
-  if (!link) throw new BookingError('LINK_NOT_FOUND', '找不到此購票連結，請確認網址是否完整。');
-  if (link.status !== 'active' || link.kind === 'public') throw new BookingError('LINK_DISABLED', '此購票連結已停用，請聯繫主辦方。');
+  if (!link) throw new BookingError('LINK_NOT_FOUND', '找不到此劃位連結，請確認網址是否完整。');
+  if (link.status !== 'active' || link.kind === 'public') throw new BookingError('LINK_DISABLED', '此劃位連結已停用，請聯繫主辦方。');
   // 有效期限只當提醒，不擋人（要停止某人劃位，請在後台「停用」連結）
   const [ev] = await db.select().from(t.event).where(eq(t.event.id, link.eventId));
   return { link, ev };
@@ -94,13 +94,13 @@ export async function usedComboSets(db: Exec, eventId: number): Promise<Record<n
 }
 
 /** 場次的購票方式（含組合內容） */
-export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean })[]> {
+export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean; description: string })[]> {
   const combos = await db.select().from(t.combo).where(eq(t.combo.eventId, eventId)).orderBy(asc(t.combo.sort), asc(t.combo.id));
   const items = combos.length
     ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
     : [];
   return combos.map((c) => ({
-    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders,
+    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, description: c.description,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
 }
@@ -318,7 +318,7 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     }
 
     const cb = (await loadCombos(tx, ev.id)).find((c) => c.id === comboId);
-    if (!cb || !pub.comboIds.includes(cb.id)) throw new BookingError('COMBO', '此購票方式目前未開放。');
+    if (!cb || !pub.comboIds.includes(cb.id)) throw new BookingError('COMBO', '此方案目前未開放劃位。');
 
     const rows = await tx.select({
       seatId: t.eventSeat.seatId, seatType: t.venueSeat.seatType, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo,
@@ -337,7 +337,7 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
         .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.bundle, bundles)));
       const want = new Set(seatIds);
       const missing = members.map((m) => m.seatId).filter((id) => !want.has(id));
-      if (missing.length) throw new BookingError('BUNDLE', '連座的座位需整組一起訂購（按一下會同時選取整組）。', missing);
+      if (missing.length) throw new BookingError('BUNDLE', '相連的座位需整組一起劃位（按一下會同時選取整組）。', missing);
     }
 
     // 贈票區（票價 0）只要是這個組合票的內容就可以劃
@@ -345,7 +345,7 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const valid = rows.filter((r) => r.sellable && (pub.zoneIds.includes(r.zoneId) || giftOk(r.zoneId, r.price)) && (r.seatType !== 'vip' || ev.vipInstalled));
     if (valid.length !== seatIds.length) {
       const ok = new Set(valid.map((r) => r.seatId));
-      throw new BookingError('SEAT_UNAVAILABLE', '部分座位目前不開放訂購。', seatIds.filter((s) => !ok.has(s)));
+      throw new BookingError('SEAT_UNAVAILABLE', '部分座位目前不開放劃位。', seatIds.filter((s) => !ok.has(s)));
     }
 
     const zones = await tx.select({ id: t.priceZone.id, name: t.priceZone.name }).from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
@@ -363,15 +363,15 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       const paidText = ent.rows.map((r) => `${r.name} × ${r.qty}`).join('、');
       if (!cb.isSingle) {
         const e = ent.rows.find((r) => r.kind === 'combo' && r.id === cb.id);
-        if (!e) throw new BookingError('PAID', `您付款購買的是「${paidText}」，請用這個購票方式劃位。`);
-        if (sets > e.left) throw new BookingError('PAID', e.left > 0 ? `您付款購買的「${e.name}」還可劃 ${e.left} 組，這次選了 ${sets} 組，請減少座位。` : `您付款購買的「${e.name}」已經全部劃完了。`);
+        if (!e) throw new BookingError('PAID', `您贊助的是「${paidText}」，請用這個方案劃位。`);
+        if (sets > e.left) throw new BookingError('PAID', e.left > 0 ? `您贊助的「${e.name}」還可劃 ${e.left} 份，這次選了 ${sets} 份，請減少座位。` : `您贊助的「${e.name}」已經全部劃完了。`);
       } else {
         const count = new Map<number, number>();
         valid.forEach((r) => count.set(r.zoneId, (count.get(r.zoneId) ?? 0) + 1));
         for (const [z, n] of count) {
           const e = ent.rows.find((r) => r.kind === 'zone' && r.id === z);
-          if (!e) throw new BookingError('PAID', `「${zoneName(z)}」不在您付款購買的內容（${paidText}）裡。`);
-          if (n > e.left) throw new BookingError('PAID', e.left > 0 ? `您付款購買的「${e.name}」還可劃 ${e.left} 張，這次選了 ${n} 張，請減少座位。` : `您付款購買的「${e.name}」已經全部劃完了。`);
+          if (!e) throw new BookingError('PAID', `「${zoneName(z)}」不在您贊助的方案（${paidText}）裡。`);
+          if (n > e.left) throw new BookingError('PAID', e.left > 0 ? `您贊助的「${e.name}」還可劃 ${e.left} 席，這次選了 ${n} 席，請減少座位。` : `您贊助的「${e.name}」已經全部劃完了。`);
         }
       }
     }
@@ -441,7 +441,7 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     const want = new Set(seats.map((s) => s.seatId));
     const given = new Set(input.holders.map((h) => h.seatId));
     if (want.size !== given.size || [...want].some((s) => !given.has(s))) {
-      throw new BookingError('INVALID', '每個座位都需要填寫一位持票人。');
+      throw new BookingError('INVALID', '每個座位都需要填寫一位出席貴賓。');
     }
 
     // 持票人：畫面上先依購票人姓名與證末 4 碼自動帶入（姓名02、03…／證號末 4 碼＋序號），購票人可逐張修改。
@@ -468,8 +468,8 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
         const vs = await tx.select().from(t.venueSeat).where(inArray(t.venueSeat.id, holders.map((h) => h.seatId)));
         const byId = Object.fromEntries(vs.map((v) => [v.id, v]));
         const list = holders.map((h) => byId[h.seatId]).filter(Boolean).sort((a, b) => a.y - b.y || a.x - b.x)
-          .map((v) => `${seatLabel(v)}（持票人 ${holders.find((h) => h.seatId === v.id)?.name ?? ''}）`).join('、');
-        return `【${ev.name}】${input.buyer.name} 您好，已收到您的劃位資料。劃位編號 ${order.orderNo}。您選的座位：${list}。主辦方確認後，會寄出劃位成功通知與入場 QR code。如需更改座位或持票人，請直接回覆本信或聯繫主辦單位。`;
+          .map((v) => `${seatLabel(v)}（出席貴賓 ${holders.find((h) => h.seatId === v.id)?.name ?? ''}）`).join('、');
+        return `【${ev.name}】${input.buyer.name} 您好，已收到您的劃位資料。劃位編號 ${order.orderNo}。您選的座位：${list}。主辦方確認後，會寄出劃位成功通知與入場 QR code。如需更改座位或出席貴賓，請直接回覆本信或聯繫主辦單位。`;
       })(),
     });
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'submit', target: `order:${order.id}` });

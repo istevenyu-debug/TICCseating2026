@@ -120,6 +120,13 @@
       "when": 1793406809297,
       "tag": "0016_queue_checks",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793438661710,
+      "tag": "0017_sponsor_waitlist",
+      "breakpoints": true
     }
   ]
 }

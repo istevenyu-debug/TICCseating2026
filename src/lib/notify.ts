@@ -77,9 +77,9 @@ const SUBJECT: Record<string, string> = {
   order_confirmed: '劃位成功通知',
   order_cancelled: '劃位取消通知',
   order_expired: '劃位逾時取消通知',
-  preorder_received: '已收到您的訂單',
+  preorder_received: '已收到您的贊助登記',
   preorder_link: '劃位通知',
-  preorder_cancelled: '訂單取消通知',
+  preorder_cancelled: '贊助登記取消通知',
   test: '測試信',
 };
 
@@ -187,7 +187,7 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
 function subjectOf(template: string, content: string) {
   const ev = content.match(/^【([^】]+)】/)?.[1];
   if (template === 'preorder_link' && ev) return `【${ev}】劃位通知`;
-  if (template === 'preorder_received' && ev) return `【${ev}】已收到您的訂單`;
+  if (template === 'preorder_received' && ev) return `【${ev}】已收到您的贊助登記`;
   if (template === 'order_confirmed' && ev) return `【${ev}】劃位成功通知`;
   if (template === 'order_received' && ev) return `【${ev}】已收到您的劃位資料`;
   if (template === 'order_cancelled' && ev) return `【${ev}】劃位取消通知`;
@@ -197,7 +197,7 @@ function subjectOf(template: string, content: string) {
 /* ---------- 信件版面：所有寄給買方的信共用（表格排版，各家信箱都正常顯示；同時附純文字） ---------- */
 
 const MAIL_TITLE: Record<string, string> = {
-  preorder_received: '已收到您的訂單', preorder_link: '輪到您劃位了', preorder_cancelled: '訂單取消通知',
+  preorder_received: '已收到您的贊助登記', preorder_link: '輪到您劃位了', preorder_cancelled: '贊助登記取消通知',
   order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
 };
 
@@ -277,7 +277,7 @@ export async function ticketMail(db: Db, orderId: number, text: string, fromName
       <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">
         <div style="font-size:18px;font-weight:700">${esc(tk.label)}</div>
         <div>座位編號 ${esc(tk.code)}・${esc(tk.zoneName)}</div>
-        <div>持票人 ${esc(maskName(tk.holderName))}</div>
+        <div>出席貴賓 ${esc(maskName(tk.holderName))}</div>
         ${tk.entrance ? `<div>${esc(tk.entrance)}</div>` : ''}
         <div style="color:#5b6579;font-family:monospace">序號 ${esc(tk.serial)}</div>
       </td></tr></table>`);

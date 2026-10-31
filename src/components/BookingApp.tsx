@@ -42,24 +42,20 @@ async function api<T>(url: string, body?: unknown): Promise<ApiOk<T> | ApiErr> {
 /** 會在頁面最上方跳出的訊息 */
 const ALERT: Record<string, { title: string; kind: 'ok' | 'err' }> = {
   order_confirmed: { title: '🎉 劃位成功！', kind: 'ok' },
-  order_cancelled: { title: '訂單已取消', kind: 'err' },
-  order_expired: { title: '訂單已逾期取消', kind: 'err' },
+  order_cancelled: { title: '劃位已取消', kind: 'err' },
+  order_expired: { title: '劃位已逾期取消', kind: 'err' },
 };
 const STATUS_LABEL: Record<string, string> = { pending: '待確認到帳', paid: '劃位成功', cancelled: '已取消', expired: '逾時取消' };
-const SALE_LABEL: Record<string, string> = { closed: '目前未開放訂購。', not_started: '尚未開始訂購。', ended: '訂購已截止。' };
+const SALE_LABEL: Record<string, string> = { closed: '目前未開放劃位。', not_started: '尚未開始劃位。', ended: '劃位已截止。' };
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-}
-function mmss(ms: number) {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
 interface Form {
   name: string; phone: string; email: string;
   holders: Record<string, { name: string; id4: string }>;
-  /** 購票人自己改過的持票人欄位（沒改過的跟著自動編號變） */
+  /** 聯絡人自己改過的出席貴賓欄位（沒改過的跟著自動編號變） */
   edited: Record<string, { name?: boolean; id4?: boolean }>;
   idBase: string;
   agree: boolean;
@@ -94,7 +90,7 @@ export default function BookingApp({ code }: { code: string }) {
   }, [code]);
 
   useEffect(() => { load(); }, [load]);
-  // 第一次載入：預先選好他購買的購票方式
+  // 第一次載入：預先選好他購買的方案
   const preset = useRef(false);
   useEffect(() => {
     if (!st || preset.current) return;
@@ -157,13 +153,13 @@ export default function BookingApp({ code }: { code: string }) {
   const zoneBy = useMemo(() => Object.fromEntries((st?.zones ?? []).map((z) => [z.id, z])), [st]);
 
   if (fatal) {
-    return <main className="wrap"><div className="card"><h1>無法開啟購票頁</h1><p className="note err">{fatal}</p></div></main>;
+    return <main className="wrap"><div className="card"><h1>無法開啟劃位頁</h1><p className="note err">{fatal}</p></div></main>;
   }
   if (!st) return <main className="wrap"><div className="card muted">座位載入中…</div></main>;
 
   const ids = [...sel].filter((id) => seatById[id]);
   const zonesSel = ids.map((id) => seatById[id].zoneId);
-  const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放票種';
+  const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放區';
   // 由訂單收款產生的連結：只能用付款買的方式、劃付款買的數量
   const paid = st.paid;
   const paidCombo = (id: number) => paid?.rows.find((r) => r.kind === 'combo' && r.id === id);
@@ -176,10 +172,10 @@ export default function BookingApp({ code }: { code: string }) {
   const limit = Math.min(st.canBuy, paidLimit);
   const giftZones = new Set(st.zones.filter((z) => z.gift).map((z) => z.id));
   const curRule = cur && { ...cur, price: 1 }; // 買方端沒有價格：伺服器會再用真正的價格檢查
-  const curProblem = curRule ? comboProblem(curRule, zonesSel, curRule.usedSets, zoneName, giftZones) : '目前沒有開放的購票方式';
+  const curProblem = curRule ? comboProblem(curRule, zonesSel, curRule.usedSets, zoneName, giftZones) : '目前沒有開放的方案';
   const sets = curRule && !curRule.isSingle ? comboSets(curRule, zonesSel) : 1;
   const open = st.sale === 'open';
-  // 先選購票方式：只開放這個方式用得到的票種座位（單張購票不含贈票）
+  // 先選方案：只開放這個方式用得到的票種座位（單張購票不含贈票）
   const allowed = new Set(cur && !cur.isSingle ? cur.items.map((i) => i.zoneId) : paid ? paidZones : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
   const need = cur && !cur.isSingle ? (() => {
     const cnt = (z: number) => zonesSel.filter((x) => x === z).length;
@@ -192,8 +188,8 @@ export default function BookingApp({ code }: { code: string }) {
     const ok = new Set(c && !c.isSingle ? c.items.map((i) => i.zoneId) : paid ? paidZones : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
     setSel((p) => new Set([...p].filter((sid) => seatById[sid] && ok.has(seatById[sid].zoneId))));
   };
-  // 持票人：先自動帶入（第 1 張本人，之後「姓名02、03…」，證號＝末 4 碼＋序號），購票人改過的欄位以他填的為準
-  // 持票人：一進來就帶好（第 1 張本人，之後「姓名02、03…」），要給別人的那張直接改名字。不填身分證
+  // 出席貴賓：先自動帶入（第 1 張本人，之後「姓名02、03…」，證號＝末 4 碼＋序號），聯絡人改過的欄位以他填的為準
+  // 出席貴賓：一進來就帶好（第 1 張本人，之後「姓名02、03…」），要給別人的那張直接改名字。不填身分證
   const autoList = held && form ? autoHolders(form.name, '', held.seatIds.length) : [];
   const holderOf = (id: string, i: number) => ({
     name: form?.edited[id]?.name ? form.holders[id]?.name ?? '' : autoList[i]?.name ?? '',
@@ -208,13 +204,13 @@ export default function BookingApp({ code }: { code: string }) {
       const next = new Set(prev);
       if (members.some((m) => next.has(m))) { members.forEach((m) => next.delete(m)); return next; }
       if (members.some((m) => seatById[m]?.status !== 'free')) {
-        setMsg({ kind: 'err', text: '這組連座中有座位已被訂走，請改選其他座位。' });
+        setMsg({ kind: 'err', text: '這組相連座位中有座位已被劃走，請改選其他座位。' });
         return prev;
       }
       if (next.size + members.length > limit) {
         const why = limit < st!.canBuy
-          ? (limit > 0 ? `您付款購買的「${cur?.isSingle ? '單張' : cur?.name}」還可劃 ${limit} 位` : '您付款購買的座位已經全部劃完了')
-          : (limit > 0 ? `此連結最多可再訂 ${limit} 張` : '此連結的可訂張數已用完');
+          ? (limit > 0 ? `您贊助的「${cur?.isSingle ? '單席' : cur?.name}」還可劃 ${limit} 位` : '您贊助的座位已經全部劃完了')
+          : (limit > 0 ? `此連結最多可再劃 ${limit} 席` : '此連結的可劃席數已用完');
         setMsg({ kind: 'err', text: `${why}${limit > 0 && members.length > 1 ? `（這組連座為 ${members.length} 位）` : ''}。` });
         return prev;
       }
@@ -249,13 +245,13 @@ export default function BookingApp({ code }: { code: string }) {
     e.preventDefault();
     if (!form || !held) return;
     const bad = (text: string, id: string) => { setMsg({ kind: 'err', text }); document.getElementById(id)?.focus(); };
-    if (!form.name.trim()) return bad('請填寫購票人姓名', 'b-name');
+    if (!form.name.trim()) return bad('請填寫聯絡人姓名', 'b-name');
     const pp = form.phone.trim() ? phoneProblem(form.phone) : '請填寫手機';
     if (pp) return bad(pp, 'b-phone');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return bad('Email 格式不正確，劃位成功與入場 QR code 會寄到這個信箱', 'b-email');
     for (const [i, id] of held.seatIds.entries()) {
       const h = holderOf(id, i);
-      if (!h.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的持票人姓名`, `h-n-${id}`);
+      if (!h.name.trim()) return bad(`請填寫 ${seatById[id]?.label ?? id} 的出席貴賓姓名`, `h-n-${id}`);
     }
     if (!form.agree) return bad('請勾選同意個資蒐集', 't-agree');
     setMsg(null); setReview(true);
@@ -276,7 +272,7 @@ export default function BookingApp({ code }: { code: string }) {
     setLastOrder(r.data.orderNo); setReview(false);
     // 買了多種：還有其他沒劃的，提示並自動切換到下一種（cur 會自動選還可劃的那一種）
     const rest = (st?.paid?.rows ?? []).filter((x) => x.left > 0 && !(x.kind === 'combo' && x.id === held.comboId));
-    const seatsText = held.seatIds.map((id, i) => `・${seatById[id]?.label ?? id}　持票人 ${holderOf(id, i).name}`).join('\n');
+    const seatsText = held.seatIds.map((id, i) => `・${seatById[id]?.label ?? id}　出席貴賓 ${holderOf(id, i).name}`).join('\n');
     setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
       + (rest.length ? `　還有「${rest.map((x) => `${x.name} ${x.left} ${x.unit}`).join('、')}」要劃，已幫您切換，請繼續在座位圖上選位。` : '') });
     setSel(new Set()); setCombo(0); setForm(null);
@@ -303,7 +299,7 @@ export default function BookingApp({ code }: { code: string }) {
         <h1>{st.event.name}</h1>
         <div className="muted">{fmtDate(st.event.showAt)}・台北國際會議中心 大會堂</div>
         <div className="small" style={{ marginTop: 6 }}>
-          {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 張（已劃 {st.link.used} 張）</> : ''}。請勿轉傳他人。
+          {st.link.name} 您好，這是您的專屬劃位連結{st.link.quota ? <>，可劃位 <b>{st.link.quota}</b> 席（已劃 {st.link.used} 席）</> : ''}。請勿轉傳他人。
         </div>
       </div>
       {msg?.kind === 'ok' && lastOrder && !held && (
@@ -334,8 +330,8 @@ export default function BookingApp({ code }: { code: string }) {
         const moreToBook = !!st.paid && !st.paid.done; // 買了多種、還有沒劃的：回到第 1 步繼續劃
         const now = held ? (review ? 3 : 2) : moreToBook ? 1 : pending ? 4 : paidDone ? 5 : 1;
         const steps = [
-          ['選座位', '在座位圖上點選座位，再按「暫存座位」。'],
-          ['填持票人', '確認聯絡資料；持票人已幫您填好，要給別人的改名字，再按「下一步」。'],
+          ['選座位', '在座位圖上點選座位，再按「確定這些座位，下一步」。'],
+          ['填出席貴賓', '確認聯絡資料；出席貴賓已幫您填好，要給別人的改名字，再按「下一步」。'],
           ['確認送出', '核對後按「資料正確，確認送出」。'],
           ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知與 QR code。'],
           ['收到 QR code', '入場時出示 QR code 即可。'],
@@ -353,26 +349,26 @@ export default function BookingApp({ code }: { code: string }) {
         );
       })()}
       {open && st.startsAt && <div className="note small">提醒：預定 {fmtDate(st.startsAt)} 開始劃位。</div>}
-      {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始訂購，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
+      {!open && <div className="note err">{st.sale === 'not_started' && st.startsAt ? `尚未開始劃位，將於 ${fmtDate(st.startsAt)} 開放。現在可以先看座位。` : SALE_LABEL[st.sale]}</div>}
 
       {!held && !focus && (
         <div className="card">
-          <h2>第一步：選擇購票方式</h2>
+          <h2>第一步：選擇方案</h2>
           {paid ? (
             <div className={`note ${paid.done ? 'warn' : 'ok'} small`} style={{ margin: '0 0 8px' }}>
-              您已付款：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}>
+              您的贊助方案：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}>
                 {r.left <= 0 ? '✓ ' : '・'}<b>{r.name} × {r.qty}</b>（{r.left <= 0 ? '已劃完' : <>已劃 {r.used}，還可劃 <b>{r.left}</b> {r.unit}</>}）</span>)}
-              {paid.done ? '您付款購買的座位都已經劃完了。'
+              {paid.done ? '您贊助的座位都已經劃完了。'
                 : paid.rows.length > 1
-                  ? <b style={{ display: 'block', marginTop: 4 }}>您買了 {paid.rows.length} 種，請一種一種劃：下面先選一種購票方式 → 選位 → 送出，完成後再回來選下一種。</b>
-                  : '已幫您選好購票方式，直接在座位圖上選位即可。'}
+                  ? <b style={{ display: 'block', marginTop: 4 }}>您買了 {paid.rows.length} 種，請一種一種劃：下面先選一種方案 → 選位 → 送出，完成後再回來選下一種。</b>
+                  : '已幫您選好方案，直接在座位圖上選位即可。'}
             </div>
-          ) : st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您已購買：<b>{st.prefill.bought}</b>。已幫您選好購票方式，直接在座位圖上選位即可。</p>}
+          ) : st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您的贊助方案：<b>{st.prefill.bought}</b>。已幫您選好方案，直接在座位圖上選位即可。</p>}
           <div className="combos">
             {combosShown.map((c) => {
               const soldOut = (c.limitSets > 0 && c.usedSets >= c.limitSets) || (!!paid && !c.isSingle && (paidCombo(c.id)?.left ?? 0) <= 0) || (!!paid && c.isSingle && !paidZones.length);
-              const desc = c.isSingle ? '依各票種票價計算'
-                : `每組 ${comboDesc(c, zoneName)}${!paid && c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
+              const desc = c.isSingle ? '單席劃位'
+                : `每份 ${comboDesc(c, zoneName).replace(/×(\d+)/g, ' $1 席')}${!paid && c.limitSets ? `・限量 ${c.limitSets} 份（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
               return (
                 <label key={c.id} className={`combo${soldOut ? ' dis' : ''}`}>
                   <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={soldOut} onChange={() => pickCombo(c.id)} />
@@ -397,8 +393,8 @@ export default function BookingApp({ code }: { code: string }) {
           onBlocked={(id, why) => {
             const seat = seatById[id];
             setMsg({ kind: 'err', text: why === 'off'
-              ? `${seat?.label ?? ''}屬於「${zoneBy[seat?.zoneId]?.name ?? '其他票種'}」，不在「${cur?.name ?? ''}」的內容裡，請選${cur && !cur.isSingle ? cur.items.map((i) => zoneName(i.zoneId)).join('或') : '開放的'}座位。`
-              : why === 'blocked' ? `${seat?.label ?? ''}目前不開放訂購。` : `${seat?.label ?? ''}已被訂走，請改選其他座位。` });
+              ? `${seat?.label ?? ''}屬於「${zoneBy[seat?.zoneId]?.name ?? '其他區'}」，不在「${cur?.name ?? ''}」的內容裡，請選${cur && !cur.isSingle ? cur.items.map((i) => zoneName(i.zoneId)).join('或') : '開放的'}座位。`
+              : why === 'blocked' ? `${seat?.label ?? ''}目前不開放劃位。` : `${seat?.label ?? ''}已被劃走，請改選其他座位。` });
           }}
           allowed={held ? undefined : allowed} />
 
@@ -407,7 +403,7 @@ export default function BookingApp({ code }: { code: string }) {
 
           {!held && !focus && (
             <div className="card">
-              <h2>已選座位 <span className="small muted">{ids.length} / {limit} 張</span></h2>
+              <h2>已選座位 <span className="small muted">{ids.length} / {limit} 席</span></h2>
               {ids.length ? (
                 <div className="sellist">
                   {ids.map((id) => (
@@ -420,22 +416,22 @@ export default function BookingApp({ code }: { code: string }) {
                   ))}
                 </div>
               ) : (
-                <p className="small muted">先在上方選購票方式，再在座位圖上按一下勾選座位（出現紅框），再按一下取消。可選的座位會亮起，其他座位變淡。</p>
+                <p className="small muted">先在上方選方案，再在座位圖上按一下勾選座位（出現紅框），再按一下取消。可選的座位會亮起，其他座位變淡。</p>
               )}
               <h3>{cur?.name}</h3>
-              {cur && !cur.isSingle && ids.length > 0 && sets > 0 && <div className="small">已選 {cur.name} {sets} 組</div>}
+              {cur && !cur.isSingle && ids.length > 0 && sets > 0 && <div className="small">已選 {cur.name} {sets} 份</div>}
               {ids.length > 0 && curProblem && <div className="note err" style={{ marginTop: 8 }}>還不能暫存：{curProblem}</div>}
-              {!open && <div className="note err" style={{ marginTop: 8 }}>目前不能訂購，請見頁面上方說明。</div>}
+              {!open && <div className="note err" style={{ marginTop: 8 }}>目前不能劃位，請見頁面上方說明。</div>}
               <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={!open || busy || !ids.length || !!curProblem} onClick={doHold}>
-                {busy ? '處理中…' : `暫存座位（保留 ${st.event.holdMinutes} 分鐘）`}
+                {busy ? '處理中…' : '確定這些座位，下一步'}
               </button>
             </div>
           )}
 
           {held && form && (
             <div className="card">
-              <h2>座位暫存中 <span className="timer">{mmss(remain)}</span></h2>
-              <p className="small muted" style={{ margin: '0 0 8px' }}>請在時間內填好資料並送出，逾時座位會自動釋放。</p>
+              <h2>您選的座位</h2>
+              <p className="small muted" style={{ margin: '0 0 8px' }}>座位已為您保留，請確認出席貴賓後送出。</p>
               <div className="sellist">
                 {held.seatIds.map((id) => (
                   <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small muted">{zoneBy[seatById[id]?.zoneId]?.name}</span></div>
@@ -453,9 +449,9 @@ export default function BookingApp({ code }: { code: string }) {
                     <span className="muted">姓名</span><span><b>{form.name.trim()}</b></span>
                     <span className="muted">手機</span><span className="mono"><b>{form.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
                     <span className="muted">Email</span><span className="mono"><b>{form.email.trim()}</b></span>
-                    <span className="muted">購票方式</span><span>{st.combos.find((c) => c.id === held.comboId)?.name}</span>
+                    <span className="muted">方案</span><span>{st.combos.find((c) => c.id === held.comboId)?.name}</span>
                   </div>
-                  <h3>座位與持票人（{held.seatIds.length} 張）</h3>
+                  <h3>座位與出席貴賓（{held.seatIds.length} 席）</h3>
                   <div className="sellist">
                     {held.seatIds.map((id, i) => {
                       const h = holderOf(id, i);
@@ -471,7 +467,7 @@ export default function BookingApp({ code }: { code: string }) {
               )}
 
               <form onSubmit={doReview} noValidate style={review ? { display: 'none' } : undefined}>
-                <h3>購票人資料</h3>
+                <h3>聯絡人資料</h3>
                 <div className="fields">
                   <label className="f">姓名<input id="b-name" value={form.name} onChange={(e) => upd({ name: e.target.value })} autoComplete="name" /></label>
                   <label className="f">手機<input id="b-phone" value={form.phone} maxLength={13} aria-invalid={!!phoneProblem(form.phone)} style={phoneProblem(form.phone) ? { borderColor: 'var(--red)' } : undefined}
@@ -480,15 +476,15 @@ export default function BookingApp({ code }: { code: string }) {
                 </div>
                 <label className="f" style={{ marginTop: 8 }}>Email<input id="b-email" type="email" value={form.email} onChange={(e) => upd({ email: e.target.value })} autoComplete="email" /></label>
 
-                <h3 style={{ marginBottom: 2 }}>每張票的持票人</h3>
-                <p className="small muted" style={{ margin: '0 0 6px' }}>已幫您填好；要給別人的那張，直接改成他的名字。</p>
+                <h3 style={{ marginBottom: 2 }}>每個座位的出席貴賓</h3>
+                <p className="small muted" style={{ margin: '0 0 6px' }}>已幫您填好；要給親友的座位，直接改成他的名字。</p>
                 {held.seatIds.map((id, i) => {
                   const h = holderOf(id, i);
                   const mine = !!form.edited[id]?.name;
                   return (
                     <div className="holder-line" key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                       <span className="small" style={{ minWidth: 92 }}>{seatById[id]?.label ?? id}</span>
-                      <input id={`h-n-${id}`} value={h.name} aria-label={`${seatById[id]?.label ?? id} 持票人`} style={{ flex: 1 }} onChange={(e) => updHolder(id, { name: e.target.value })} />
+                      <input id={`h-n-${id}`} value={h.name} aria-label={`${seatById[id]?.label ?? id} 出席貴賓`} style={{ flex: 1 }} onChange={(e) => updHolder(id, { name: e.target.value })} />
                       {mine && <button type="button" className="btn small" title="改回自動帶入的名字" onClick={() => setForm((f) => (f ? { ...f, edited: { ...f.edited, [id]: {} } } : f))}>還原</button>}
                     </div>
                   );
@@ -496,7 +492,7 @@ export default function BookingApp({ code }: { code: string }) {
 
                 <label className="check" style={{ marginTop: 10 }}>
                   <input id="t-agree" type="checkbox" checked={form.agree} onChange={(e) => upd({ agree: e.target.checked })} />
-                  我同意主辦方為售票及入場核對之目的，蒐集與處理上述個人資料。
+                  我同意主辦方為票務、對帳及實名入場核對之目的，蒐集與處理上述個人資料。
                 </label>
                 {msg?.kind === 'err' && <div className="note err" style={{ marginTop: 10 }}>{msg.text}</div>}
                 <div className="row" style={{ marginTop: 10 }}>
@@ -515,12 +511,12 @@ export default function BookingApp({ code }: { code: string }) {
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
+                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 份` : ''}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">
                     <div className="small"><b>劃位成功</b>。入場時請出示下方 QR code。</div>
-                    <div className="small muted">購票人：{o.buyerName}・{o.buyerPhone}・{o.buyerEmail}</div>
+                    <div className="small muted">聯絡人：{o.buyerName}・{o.buyerPhone}・{o.buyerEmail}</div>
                     {o.seats.map((s) => (
                       <div key={s.code} className="etk">
                         {s.serial && s.qr && <TicketQR serial={s.serial} value={s.qr} size={104} />}
@@ -528,7 +524,7 @@ export default function BookingApp({ code }: { code: string }) {
                           <div className="etk-seat">{s.label}</div>
                           <div className="mono">座位編號 {s.code}</div>
                           <div>{s.zoneName}</div>
-                          <div>持票人 {s.holder}</div>
+                          <div>出席貴賓 {s.holder}</div>
                           <div className="mono muted">序號 {s.serial}</div>
                         </div>
                       </div>
@@ -536,7 +532,7 @@ export default function BookingApp({ code }: { code: string }) {
                   </div>
                 )}
               </div>
-            )) : <p className="small muted" style={{ margin: 0 }}>尚無訂單。送出訂購資料後會顯示在這裡。</p>}
+            )) : <p className="small muted" style={{ margin: 0 }}>尚無劃位紀錄。送出劃位後會顯示在這裡。</p>}
           </div>
 
           <div className="card">

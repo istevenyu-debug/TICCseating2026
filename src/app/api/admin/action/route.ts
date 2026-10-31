@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, setPreorderSettings, promoteWaitlist } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -27,7 +27,7 @@ const action = z.discriminatedUnion('action', [
     name: z.string().trim().min(1, '請填寫演出名稱').max(80),
     showAt: z.string().min(1, '請填寫演出時間').transform((s) => new Date(s)).refine((d) => !Number.isNaN(d.getTime()), '演出時間格式不正確'),
     saleOpen: z.boolean(), saleStart: date, saleEnd: date,
-    maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(120), payHours: z.number().int().min(1).max(720),
+    maxPerOrder: z.number().int().min(1).max(200), holdMinutes: z.number().int().min(5).max(10080), payHours: z.number().int().min(1).max(720),
     bankName: z.string().max(80), bankAccount: z.string().max(40), accountName: z.string().max(80), vipInstalled: z.boolean(), preorderOpen: z.boolean(),
   }).partial() }),
   z.object({ action: z.literal('publish') }),
@@ -41,7 +41,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('usage.assignSeats'), usageId: id, seatIds: z.array(z.string().max(16)).min(1).max(600) }),
   z.object({ action: z.literal('combo.create') }),
   z.object({ action: z.literal('combo.update'), id, values: z.object({
-    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(),
+    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(), description: z.string().trim().max(200),
     items: z.array(z.object({ zoneId: id, qty: z.number().int().min(1).max(20) })).max(10),
   }).partial() }),
   z.object({ action: z.literal('combo.delete'), id }),
@@ -81,6 +81,8 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
   z.object({ action: z.literal('preorder.email'), id, email: z.string().max(120), resend: z.boolean().optional() }),
+  z.object({ action: z.literal('preorder.settings'), rateLimit: z.number().int().min(1).max(10000).optional(), waitlistCap: z.number().int().min(0).max(1000).optional(), intro: z.string().max(5000).optional() }),
+  z.object({ action: z.literal('preorder.promote'), id }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
   z.object({ action: z.literal('preorder.items'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30) }),
   z.object({ action: z.literal('preorder.release'), id, keys: z.array(z.string().regex(/^(combo|zone):\d+$/)).min(1).max(30) }),
@@ -191,6 +193,8 @@ export async function POST(req: Request) {
         const r = await updatePreorderEmail(db, who, a.id, a.email, !!a.resend, originOf(req));
         return { ...r, delivery: r.resent && r.linkId ? (await deliver(db, { linkId: r.linkId, templates: ['preorder_link'] })).slice(0, 1) : [] };
       }
+      case 'preorder.settings': return setPreorderSettings(db, who, { rateLimit: a.rateLimit, waitlistCap: a.waitlistCap, intro: a.intro });
+      case 'preorder.promote': return promoteWaitlist(db, who, a.id);
       case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
       case 'preorder.items': return setPreorderItems(db, who, a.id, a.items);
       case 'preorder.release': {
