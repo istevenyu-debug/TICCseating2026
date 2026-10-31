@@ -190,7 +190,7 @@ export default function BookingApp({ code }: { code: string }) {
   };
   // 出席貴賓：先自動帶入（第 1 張本人，之後「姓名02、03…」，證號＝末 4 碼＋序號），聯絡人改過的欄位以他填的為準
   // 出席貴賓：一進來就帶好（第 1 張本人，之後「姓名02、03…」），要給別人的那張直接改名字。不填身分證
-  const autoList = held && form ? autoHolders(form.name, '', held.seatIds.length) : [];
+  const autoList = held && form ? autoHolders(form.name, '', held.seatIds.length, st.prefill.holderStart ?? 0) : [];
   const holderOf = (id: string, i: number) => ({
     name: form?.edited[id]?.name ? form.holders[id]?.name ?? '' : autoList[i]?.name ?? '',
     id4: '',

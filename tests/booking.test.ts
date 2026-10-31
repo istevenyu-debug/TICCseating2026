@@ -367,3 +367,12 @@ describe('場次資料', () => {
     expect(s.event.showAt).toBe('2027-02-10T06:00:00.000Z');
   });
 });
+
+describe('出席貴賓分次劃位接著編號', () => {
+  it('第二次劃位從上次的下一號開始，名字不重複', async () => {
+    const { autoHolders } = await import('@/lib/validation');
+    expect(autoHolders('王大明', '', 3).map((x) => x.name)).toEqual(['王大明', '王大明02', '王大明03']);
+    expect(autoHolders('王大明', '', 12, 3).map((x) => x.name).slice(0, 2)).toEqual(['王大明04', '王大明05']);
+    expect(autoHolders('王大明', '', 12, 3).at(-1)!.name).toBe('王大明15');
+  });
+});

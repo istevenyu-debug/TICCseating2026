@@ -3,11 +3,13 @@ import { z } from 'zod';
 export const normalizePhone = (s: string) => s.replace(/[\s-]/g, '');
 
 /** 持票人自動編號（例如功德組）：第 1 張為本名＋證末4碼01，之後為「姓名02」「證末4碼02」…依序 */
-export function autoHolders(buyerName: string, idBase: string, count: number) {
-  const w = Math.max(2, String(count).length);
+export function autoHolders(buyerName: string, idBase: string, count: number, start = 0) {
+  // start：這位贊助者之前已劃的席數。分好幾次劃（例如尊榮席、金區各一次）時接著編號，名字不會重複
+  const w = Math.max(2, String(count + start).length);
   const name = buyerName.trim();
   const base = idBase.trim().toUpperCase();
-  return Array.from({ length: count }, (_, i) => {
+  return Array.from({ length: count }, (_, k) => {
+    const i = k + start;
     const n = String(i + 1).padStart(w, '0');
     return { name: i === 0 ? name : `${name}${n}`, id4: base ? `${base}${n}` : '' };
   });

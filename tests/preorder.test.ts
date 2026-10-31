@@ -111,12 +111,12 @@ describe('收款後的劃位連結自動帶入', () => {
     const [p] = await listPreorders(db);
     const r = await confirmPreorder(db, 'admin', p.id);
     const s = await getBookingState(db, r.code, new Date('2026-11-15T10:00:00+08:00'));
-    expect(s.prefill).toEqual({ name: '林大同', phone: '0912345678', email: 'lin@example.com', comboId: combo2, bought: '雙人套票 × 2、A區 單張 × 1' });
+    expect(s.prefill).toEqual({ holderStart: 0, name: '林大同', phone: '0912345678', email: 'lin@example.com', comboId: combo2, bought: '雙人套票 × 2、A區 單張 × 1' });
   });
   it('一般手動發的連結：只帶姓名與手機', async () => {
     const l = await A.createInviteLink(db, 'admin', { name: '王小明', phone: '0922222222', quota: 0, expiresAt: new Date('2026-12-20T23:59:59+08:00') });
     const s = await getBookingState(db, l.code, new Date('2026-11-15T10:00:00+08:00'));
-    expect(s.prefill).toEqual({ name: '王小明', phone: '0922222222', email: '', comboId: 0, bought: '' });
+    expect(s.prefill).toEqual({ holderStart: 0, name: '王小明', phone: '0922222222', email: '', comboId: 0, bought: '' });
   });
 });
 

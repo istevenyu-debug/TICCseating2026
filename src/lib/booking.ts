@@ -242,7 +242,11 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const ent = await linkEntitle(db, link.id);
   const { invoiceForLink } = await import('./einvoice');
   const inv = await invoiceForLink(db, link.id); // 只有「即開」時顯示
+  // 同一條連結之前已劃（送出或已確認）的席數：出席貴賓接著編號
+  const holderStart = myOrders.filter((o) => o.status === 'pending' || o.status === 'paid')
+    .reduce((a, o) => a + orderSeats.filter((s) => s.orderId === o.id).length, 0);
   const prefill = {
+    holderStart,
     name: link.name, phone: link.phone, email: po?.email ?? '',
     comboId: comboItem?.id ?? 0, bought: poItems.map((i) => `${i.name} × ${i.qty}`).join('、'),
   };
