@@ -23,6 +23,9 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
   const { linkRight } = bundleIndex(seats);
   const painting = useRef<Set<string> | null>(null);
   const [preview, setPreview] = useState<Set<string>>(new Set());
+  // 編輯模式：平常只能看，按「開始設定」才能點選改動，避免手機捲動時誤點
+  const [editing, setEditing] = useState(false);
+  const canPaint = !!onPaint && editing;
 
   const rows: { y: number; label: string }[] = [];
   if (vipInstalled) rows.push({ y: 1, label: 'VIP' });
@@ -44,12 +47,16 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
     <div className="card">
       <div className="mapbar">
         <span className="small muted">{caption}</span>
+        {onPaint && (editing
+          ? <button className="btn pri small" onClick={() => setEditing(false)}>完成設定（鎖定）</button>
+          : <button className="btn small" onClick={() => setEditing(true)}>開始設定（點座位改動）</button>)}
         <span className="row zoom small muted">
           縮放
           <button className="btn" aria-label="縮小" onClick={() => setCell((c) => Math.max(14, c - 2))}>−</button>
           <button className="btn" aria-label="放大" onClick={() => setCell((c) => Math.min(34, c + 2))}>＋</button>
         </span>
       </div>
+      {onPaint && editing && <div className="note warn small" style={{ margin: '6px 0' }}>設定中：點座位會直接改動。改完請按「完成設定」。</div>}
       <div className="mapscroll" onPointerUp={finish} onPointerLeave={finish}>
         <div className="stage">舞台</div>
         <div className="hall" style={{ ['--cell' as string]: `${cell}px` }}>
@@ -65,10 +72,10 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
                 type="button"
                 className={`seat${s.type === 'wheelchair' ? ' wheel' : ''}${hot ? ' sel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={L.kind}
-                style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: L.bg, color: L.ink, opacity: L.dim ? 0.45 : undefined, cursor: onPaint ? 'pointer' : 'default' }}
+                style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: L.bg, color: L.ink, opacity: L.dim ? 0.45 : undefined, cursor: canPaint ? 'pointer' : 'default' }}
                 title={L.title}
                 aria-label={L.title}
-                onPointerDown={(e) => { if (!onPaint) return; e.preventDefault(); painting.current = new Set([s.id]); setPreview(new Set([s.id])); }}
+                onPointerDown={(e) => { if (!canPaint) return; e.preventDefault(); painting.current = new Set([s.id]); setPreview(new Set([s.id])); }}
                 onPointerEnter={() => add(s.id)}
               >
                 {s.no}
@@ -78,7 +85,7 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
         </div>
       </div>
       <p className="small muted" style={{ margin: '10px 0 0' }}>
-        游標停在座位上可看座位編號（排-席次-區）。{onPaint ? '點按或按住拖曳可一次設定多個座位，已有訂單的座位不會被改。' : ''}
+        游標停在座位上可看座位編號（排-席次-區）。{onPaint ? (editing ? '點按或按住拖曳可一次設定多個座位，已有訂單的座位不會被改。' : '目前鎖定中，只能看；要改請按上方「開始設定」。') : ''}
       </p>
     </div>
   );

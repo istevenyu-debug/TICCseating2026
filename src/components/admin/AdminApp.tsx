@@ -24,7 +24,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -336,8 +336,26 @@ function Home() {
       ))}
       {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放訂購」按「發布到購票頁」。</div>}
       <BackupCard />
+      <AuditCard />
       <ResetCard />
     </div>
+  );
+}
+
+/** 最近的操作紀錄：誰、幾點、做了什麼（改票種會列出座位） */
+function AuditCard() {
+  const { st } = useAdmin();
+  const [q, setQ] = useState('');
+  const list = st.audit.filter((a) => !q.trim() || `${a.action} ${a.what} ${a.actor}`.includes(q.trim()));
+  return (
+    <details className="card" style={{ gridColumn: '1 / -1' }}>
+      <summary style={{ cursor: 'pointer' }}><b>最近的操作紀錄</b> <span className="small muted">誰、幾點、做了什麼；改票種、改席位用途會列出是哪幾個座位</span></summary>
+      <input value={q} placeholder="搜尋，例：改票種、第 9 排" style={{ margin: '8px 0', width: 260 }} onChange={(e) => setQ(e.target.value)} />
+      <div className="tbl"><table><tbody>
+        {list.map((a) => <tr key={a.id}><td className="small mono" style={{ whiteSpace: 'nowrap' }}>{tw(a.at)}</td><td className="small">{a.actor}</td><td className="small"><b>{a.action}</b>{a.what && <>　{a.what}</>}</td></tr>)}
+        {!list.length && <tr><td className="muted small">沒有紀錄</td></tr>}
+      </tbody></table></div>
+    </details>
   );
 }
 
@@ -562,7 +580,7 @@ function Price() {
                 </div>
                 <label className="switch small">
                   <input type="checkbox" checked={c.autoHolders} disabled={busy} onChange={(e) => save({ autoHolders: e.target.checked })} />
-                  持票人自動編號：只填購票人一次，第 1 張為本名、之後為「姓名02、03…」；證末 4 碼依序加 01、02…（例 523401、523402）
+                  持票人自動帶入：第 1 張為購票人本名，之後為「姓名02、03…」，購票人可以逐張改成別人的名字（不填身分證）
                 </label>
                 <p className="small muted" style={{ margin: 0 }}>
                   {comboDesc(c, zoneName)}，共 {comboQty(c)} 張・原價合計 {money(list)}{c.price && list ? `・約 ${(c.price / list * 10).toFixed(1)} 折` : ''}{c.limitSets ? `・已售 ${c.usedSets} 組` : ''}

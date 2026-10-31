@@ -22,6 +22,34 @@ export const COLOR_PRESETS = [
 const audit = (db: Db, actor: string, action: string, target: string, detail?: unknown) =>
   db.insert(t.auditLog).values({ actor, action, target, detail: detail === undefined ? null : JSON.stringify(detail) });
 
+/** 操作紀錄用：座位編號轉成「第 9 排 8 號」 */
+async function seatNames(db: Db, ids: string[]) {
+  if (!ids.length) return [];
+  const rows = await db.select().from(t.venueSeat).where(inArray(t.venueSeat.id, ids.slice(0, 600)));
+  return rows.sort((a, b) => a.y - b.y || a.x - b.x).map((r) => seatLabel(r));
+}
+
+const AUDIT_NAME: Record<string, string> = {
+  assign_zone: '改票種', set_usage: '改席位用途', publish: '發布', link_create: '建立劃位連結', link_update: '修改劃位連結',
+  confirm_payment: '劃位確認', cancel_order: '取消劃位', delete_order: '刪除劃位', preorder_release: '發出劃位連結',
+  preorder_check: '核帳打勾', preorder_items: '設定訂單內容', preorder_email: '修改 Email', preorder_cancel: '取消訂單',
+  preorder_line_groups: 'LINE 群設定', event_update: '修改場次設定',
+};
+
+/** 最近的操作紀錄（後台首頁顯示） */
+export async function recentAudit(db: Db, limit = 80) {
+  const rows = await db.select().from(t.auditLog).orderBy(desc(t.auditLog.id)).limit(limit);
+  return rows.map((r) => {
+    let d: Record<string, unknown> = {};
+    try { d = r.detail ? JSON.parse(r.detail) : {}; } catch { /* 舊資料 */ }
+    const seats = Array.isArray(d.seats) ? (d.seats as string[]) : [];
+    const what = r.action === 'assign_zone' || r.action === 'set_usage'
+      ? `把 ${seats.length ? `${seats.slice(0, 12).join('、')}${seats.length > 12 ? ` 等 ${seats.length} 席` : ''}` : `${d.count ?? 0} 席`} 改成「${d.name ?? ''}」`
+      : '';
+    return { id: r.id, at: r.at.toISOString(), actor: r.actor, action: AUDIT_NAME[r.action] ?? r.action, what, target: r.target };
+  });
+}
+
 /** MVP 為主辦方自用、單一場次：取最新的場次 */
 export async function currentEvent(db: Db) {
   const [ev] = await db.select().from(t.event).orderBy(desc(t.event.id)).limit(1);
@@ -259,7 +287,7 @@ export async function assignZoneSeats(db: Db, actor: string, zoneId: number, sea
   const done = await db.update(t.eventSeat).set({ zoneId })
     .where(and(eq(t.eventSeat.eventId, evId), inArray(t.eventSeat.seatId, seatIds), eq(t.eventSeat.status, 'free')))
     .returning({ seatId: t.eventSeat.seatId });
-  await audit(db, actor, 'assign_zone', `zone:${zoneId}`, { count: done.length });
+  await audit(db, actor, 'assign_zone', `zone:${zoneId}`, { count: done.length, name: z.name, seats: await seatNames(db, done.map((d) => d.seatId)) });
   return { updated: done.length, skipped: seatIds.length - done.length };
 }
 
@@ -506,7 +534,7 @@ export async function setSeatUsage(db: Db, actor: string, usageId: number, seatI
   const done = await db.update(t.eventSeat).set({ usageId })
     .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seatIds), eq(t.eventSeat.status, 'free')))
     .returning({ seatId: t.eventSeat.seatId });
-  await audit(db, actor, 'set_usage', `usage:${usageId}`, { count: done.length });
+  await audit(db, actor, 'set_usage', `usage:${usageId}`, { count: done.length, name: u.name, seats: await seatNames(db, done.map((d) => d.seatId)) });
   return { updated: done.length, skipped: seatIds.length - done.length };
 }
 
