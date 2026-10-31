@@ -1383,6 +1383,16 @@ function FormCard() {
   );
 }
 
+/** 給買方的贊助登記邀請文字（貼 LINE 用）：開頭取自「預購單開頭文字」第一段 */
+function inviteText(st: State, url: string) {
+  const first = st.preorderSettings.intro.split(/\n\s*\n/)[0].split('\n').map((x) => x.trim()).filter((x) => x && !x.startsWith('##'));
+  return [`【${st.event.name}】贊助登記`, '', ...first, '',
+    '👉 請點以下連結，選擇贊助方案並完成登記：', url, '',
+    '・依登記的先後順序安排劃位',
+    '・完成匯款並加入 LINE 群組後，我們會依序通知您劃位',
+    '・有任何問題，歡迎直接與我們聯繫 🙏'].join('\n');
+}
+
 /** 預購單的系統設定：開頭文字、候補數量、送單上限 */
 function PreorderSettings() {
   const { st, act, busy } = useAdmin();
@@ -1741,7 +1751,8 @@ function Preorders() {
           onChange={(e) => act({ action: 'event.update', values: { preorderOpen: e.target.checked } }, e.target.checked ? '已開放預購單' : '已關閉預購單')} />開放本站預購單</label>
         <div className="row" style={{ marginTop: 8 }}>
           <span className="mono" style={{ fontSize: 15 }}>{buyUrl}</span>
-          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製預購單網址 ${buyUrl}` }), () => undefined)}>複製預購單網址</button>
+          <button className="btn pri" onClick={() => navigator.clipboard?.writeText(inviteText(st, buyUrl)).then(() => setMsg({ kind: 'ok', text: '已複製「連結＋邀請文字」，可直接貼到 LINE' }), () => undefined)}>複製連結＋邀請文字（貼 LINE 用）</button>
+          <button className="btn" onClick={() => navigator.clipboard?.writeText(buyUrl).then(() => setMsg({ kind: 'ok', text: `已複製網址 ${buyUrl}` }), () => undefined)}>只複製網址</button>
           <a className="btn" href="/buy" target="_blank" rel="noreferrer">開啟預購單</a>
         </div>
         {!st.event.bankAccount && <div className="note err" style={{ marginTop: 8 }}>尚未填寫匯款帳戶，預購單會顯示空白，請到「二、價格設定」填寫。</div>}
