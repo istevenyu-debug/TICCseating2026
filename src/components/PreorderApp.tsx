@@ -11,11 +11,10 @@ type Menu = {
   line: { groups: { name: string; url: string }[]; map: Record<string, number> };
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
-  items: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[];
+  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string }[];
 };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
 
-const money = (n: number) => `NT$${n.toLocaleString('en-US')}`;
 const fmtDate = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 
 async function api<T>(body?: unknown): Promise<Res<T>> {
@@ -50,7 +49,7 @@ function loadSaved(): Saved[] {
 function addSaved(x: Saved) {
   try { localStorage.setItem(STORE, JSON.stringify([x, ...loadSaved().filter((y) => y.token !== x.token)].slice(0, 20))); } catch { /* 無痕模式等 */ }
 }
-type Mine = { token: string; no: string; status: string; items: string; amount: number; createdAt: string; email: string; url: string | null };
+type Mine = { token: string; no: string; status: string; items: string; createdAt: string; email: string; url: string | null };
 const MINE_STATUS: Record<string, string> = { submitted: '等待主辦方確認收款', confirmed: '已確認收款', cancelled: '已取消' };
 
 /** 這台裝置的訂單進度：確認收款後提醒查看 Email（劃位連結只用 Email 寄送） */
@@ -65,7 +64,7 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
             <b className="mono">{m.no}</b>
             <span className={`pill ${m.status === 'confirmed' ? 'p-paid' : m.status === 'cancelled' ? 'p-cancelled' : 'p-pending'}`}>{MINE_STATUS[m.status] ?? m.status}</span>
           </div>
-          <div className="small muted">{m.items}・{money(m.amount)}</div>
+          <div className="small muted">{m.items}</div>
           {m.url
             ? <><a className="btn pri" style={{ display: 'block', textAlign: 'center', marginTop: 8 }} href={m.url}>開始劃位（選座位）</a>
                 <div className="small muted" style={{ marginTop: 4 }}>劃位連結也已寄到您的 Email（{m.email}）。</div></>
@@ -92,7 +91,7 @@ export default function PreorderApp() {
   const [inv, setInv] = useState<{ type: InvType; code: string; title: string }>({ type: 'member', code: '', title: '' });
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ no: string; amount: number; mismatch: boolean; token: string } | null>(null);
+  const [done, setDone] = useState<{ no: string; token: string } | null>(null);
   const [mine, setMine] = useState<Mine[]>([]);
 
   const reload = useCallback(async () => {
@@ -131,15 +130,11 @@ export default function PreorderApp() {
 
   const key = (i: Menu['items'][number]) => `${i.kind}-${i.id}`;
   const lines = menu.items.filter((i) => (qty[key(i)] ?? 0) > 0);
-  const total = lines.reduce((a, i) => a + i.price * qty[key(i)], 0);
   // 選了哪些項目，就要加入對應的 LINE 群（不重複、依後台設定順序）
   const lineIdx = new Set(lines.map((i) => menu.line.map[`${i.kind}:${i.id}`]).filter((x) => x !== undefined));
   const lineGroups = menu.line.groups.filter((_, n) => lineIdx.has(n));
-  const extraSum = extra.reduce((a, r) => a + (parseInt(r.amount.replace(/\D/g, '')) || 0), 0);
-  const paid = paidTouched ? f.paid : total ? String(Math.max(0, total - extraSum)) : '';
+  const paid = f.paid; // 贊助金額：買方自己填，不幫他算、不顯示任何金額
   const remits = [{ last5: f.last5.trim(), amount: parseInt(paid.replace(/\D/g, '')) || 0 }, ...extra.map((r) => ({ last5: r.last5.trim(), amount: parseInt(r.amount.replace(/\D/g, '')) || 0 }))];
-  const paidSum = remits.reduce((a, r) => a + r.amount, 0);
-  const ex = menu.items[0];
   const setN = (i: Menu['items'][number], n: number) => { setQty({ ...qty, [key(i)]: Math.max(0, Math.min(200, n)) }); setErr(''); };
   const upd = (v: Partial<typeof f>) => { setF({ ...f, ...v }); setErr(''); };
 
@@ -151,11 +146,11 @@ export default function PreorderApp() {
     const pp = f.phone.trim() ? phoneProblem(f.phone) : '請填寫手機';
     if (pp) return bad(pp, 'p-phone');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) return bad('Email 格式不正確，劃位連結會寄到這個信箱', 'p-email');
-    if (!(parseInt(paid.replace(/\D/g, '')) > 0)) return bad('請填寫匯款金額', 'p-paid');
+    if (!(parseInt(paid.replace(/\D/g, '')) > 0)) return bad('請填寫贊助金額', 'p-paid');
     if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
     for (const [n, r] of extra.entries()) {
       if (!/^\d{5}$/.test(r.last5.trim())) return bad(`第 ${n + 2} 筆匯款：帳號末 5 碼應為 5 位數字`, `p-x5-${n}`);
-      if (!(parseInt(r.amount.replace(/\D/g, '')) > 0)) return bad(`第 ${n + 2} 筆匯款：請填寫金額`, `p-xa-${n}`);
+      if (!(parseInt(r.amount.replace(/\D/g, '')) > 0)) return bad(`第 ${n + 2} 筆：請填寫贊助金額`, `p-xa-${n}`);
     }
     { const ip = invProblem(inv.type, inv.code.toUpperCase(), inv.title); if (ip) return bad(ip, inv.type === 'company' && !inv.title.trim() && inv.code.trim() ? 'p-inv-title' : 'p-inv'); }
     if (!f.agree) return bad('請勾選同意個資蒐集', 'p-agree');
@@ -165,7 +160,7 @@ export default function PreorderApp() {
   }
   async function send() {
     setBusy(true);
-    const r = await api<{ no: string; amount: number; mismatch: boolean; token: string }>({
+    const r = await api<{ no: string; token: string }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), agree: f.agree, lineName: f.lineName.trim(),
       remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
@@ -184,12 +179,11 @@ export default function PreorderApp() {
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
       <h3 style={{ margin: '12px 0 4px' }}>怎麼訂</h3>
       <ol className="small" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.8 }}>
-        <li>選好要訂的項目，畫面會算出<b>應匯金額</b>。</li>
+        <li>選好要訂的項目和數量。</li>
         {menu.line.groups.length > 0 && <li>加入 LINE 群（依您選的項目）。</li>}
         <li>到銀行或網銀 App <b>匯款</b>。</li>
         <li>回到這個頁面，填<b>匯款帳號後五碼</b>和聯絡資料，送出。</li>
       </ol>
-      {ex && <p className="small" style={{ margin: '6px 0 0' }}>例：{ex.name} 1 {ex.unit} {money(ex.price)} → 匯 {money(ex.price)} 到下方帳戶 → 回來填帳號後五碼送出。</p>}
       <p className="small" style={{ margin: '6px 0 0' }}>去匯款或加 LINE 群會離開這頁，沒關係：<b>用同一支手機、同一個方式再打開這個連結</b>，您選的、填的都還在。</p>
       <h3 style={{ margin: '12px 0 4px' }}>劃位順序</h3>
       <p className="small" style={{ margin: 0 }}>依<b>送出預購單的先後順序</b>劃位。主辦方核對<b>匯款已入帳</b>、並確認您<b>已加入 LINE 群</b>後，會依序通知您劃位；尚未匯款或還沒加入 LINE 群的，先輪給後面已完成的人。輪到您時，劃位連結會寄到您的 Email，主辦方也可能用電話或 LINE 與您聯繫。</p>
@@ -201,9 +195,8 @@ export default function PreorderApp() {
       <main className="wrap" style={{ maxWidth: 640 }}>
         <div className="card" style={{ borderTop: '4px solid var(--ok)' }}>
           <h2>✅ 已送出訂單 {done.no}</h2>
-          <p>合計 <b>{money(done.amount)}</b>。主辦方確認款項、並依送單順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
+          <p>主辦方確認款項、並依送單順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p>
           <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
-          {done.mismatch && <p className="note warn">提醒：您填寫的匯款金額與合計不同，主辦方會再與您確認。</p>}
           <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到訂單進度。如需修改或取消，請聯繫主辦方並提供訂單號 {done.no}。</p>
         </div>
         {head}
@@ -219,7 +212,7 @@ export default function PreorderApp() {
       {head}
       <MyPreorders mine={mine} reload={reload} />
       {restored && !review && lines.length > 0 && (
-        <div className="note ok">歡迎回來，您上次選的是 <b>{lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}</b>，應匯 <b>{money(total)}</b>。匯好了嗎？請在下面填帳號後五碼送出。
+        <div className="note ok">歡迎回來，您上次選的是 <b>{lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}</b>。匯好了嗎？請在下面填帳號後五碼送出。
           <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => { clearDraft(); location.reload(); }}>清除重填</button></div>
       )}
 
@@ -232,13 +225,11 @@ export default function PreorderApp() {
             <span className="muted">手機</span><span className="mono"><b>{f.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
             <span className="muted">Email</span><span className="mono"><b>{f.email.trim()}</b></span>
             {f.lineName.trim() && <><span className="muted">LINE 名稱</span><span>{f.lineName.trim()}</span></>}
-            <span className="muted">匯款</span><span className="mono">{remits.map((r, n) => <div key={n}>末五碼 {r.last5}・{money(r.amount)}</div>)}
-              {remits.length > 1 && <div>合計 {money(paidSum)}</div>}{paidSum !== total && <b style={{ color: 'var(--red)' }}>（與應付 {money(total)} 不同）</b>}</span>
+            <span className="muted">匯款帳號後五碼</span><span className="mono">{remits.map((r) => r.last5).join('、')}</span>
             <span className="muted">發票</span><span>{inv.type === 'company' ? `三聯：${inv.title.trim()}（統編 ${inv.code.trim()}）` : '二聯（個人）'}</span>
           </div>
           <h3>選購內容</h3>
-          <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name} × {qty[key(i)]}</span><span className="mono">{money(i.price * qty[key(i)])}</span></div>)}</div>
-          <div className="total"><span className="muted">合計</span><b>{money(total)}</b></div>
+          <div className="sellist">{lines.map((i) => <div className="selitem" key={key(i)}><span>{i.name}</span><span>× {qty[key(i)]} {i.unit}</span></div>)}</div>
           <p className="small muted" style={{ margin: '10px 0 0' }}>請用<b>自己的手機</b>送出：送出後，這支手機可以查進度、收到收款通知。</p>
           {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
           <div className="row" style={{ marginTop: 12 }}>
@@ -252,7 +243,7 @@ export default function PreorderApp() {
             <h2>一、選購</h2>
             {menu.items.map((i) => (
               <div key={key(i)} className="selitem" style={{ alignItems: 'center', padding: '8px 0' }}>
-                <span><b>{i.name}</b><br /><span className="small muted">{i.desc}・{money(i.price)} / {i.unit}</span></span>
+                <span><b>{i.name}</b><br /><span className="small muted">{i.desc}</span></span>
                 <span className="row" style={{ flexWrap: 'nowrap' }}>
                   <button type="button" className="btn" aria-label={`減少 ${i.name}`} onClick={() => setN(i, (qty[key(i)] ?? 0) - 1)}>−</button>
                   <input aria-label={`${i.name} 數量`} value={qty[key(i)] ?? 0} inputMode="numeric" style={{ width: 52, textAlign: 'center' }}
@@ -261,7 +252,7 @@ export default function PreorderApp() {
                 </span>
               </div>
             ))}
-            <div className="total"><span className="muted">合計{lines.length ? `（${lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}）` : ''}</span><b>{money(total)}</b></div>
+            {lines.length > 0 && <div className="small" style={{ marginTop: 8 }}>已選：{lines.map((i) => `${i.name} × ${qty[key(i)]} ${i.unit}`).join('、')}</div>}
           </div>
 
           {lineGroups.length > 0 && (
@@ -290,7 +281,6 @@ export default function PreorderApp() {
               <span className="muted">銀行</span><span>{menu.event.bankName || '（主辦方尚未設定）'}</span>
               <span className="muted">帳號</span><span className="mono">{menu.event.bankAccount}</span>
               <span className="muted">戶名</span><span>{menu.event.accountName}</span>
-              <span className="muted">金額</span><span className="mono"><b>{money(total)}</b></span>
             </div>
             <button type="button" className="btn small" style={{ marginTop: 6 }} disabled={!menu.event.bankAccount}
               onClick={() => navigator.clipboard?.writeText(menu.event.bankAccount.replace(/-/g, '')).catch(() => undefined)}>複製帳號</button>
@@ -308,17 +298,16 @@ export default function PreorderApp() {
             <label className="f" style={{ marginTop: 8 }}>LINE 顯示名稱（選填，方便主辦方在群裡找到您）<input value={f.lineName} maxLength={40} onChange={(e) => upd({ lineName: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
               <label className="f">匯款帳號後五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
-              <label className="f">匯款金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
+              <label className="f">贊助金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
             </div>
             {extra.map((r, n) => (
               <div key={n} className="fields" style={{ marginTop: 6 }}>
                 <label className="f">第 {n + 2} 個帳號後五碼<input id={`p-x5-${n}`} value={r.last5} maxLength={5} inputMode="numeric" onChange={(e) => { setExtra(extra.map((x, m) => m === n ? { ...x, last5: e.target.value.replace(/\D/g, '') } : x)); setErr(''); }} /></label>
-                <label className="f">金額<span className="row" style={{ flexWrap: 'nowrap' }}><input id={`p-xa-${n}`} value={r.amount} inputMode="numeric" onChange={(e) => { setExtra(extra.map((x, m) => m === n ? { ...x, amount: e.target.value } : x)); setErr(''); }} />
+                <label className="f">贊助金額<span className="row" style={{ flexWrap: 'nowrap' }}><input id={`p-xa-${n}`} value={r.amount} inputMode="numeric" onChange={(e) => { setExtra(extra.map((x, m) => m === n ? { ...x, amount: e.target.value } : x)); setErr(''); }} />
                   <button type="button" className="btn small" aria-label="刪除這筆" onClick={() => setExtra(extra.filter((_, m) => m !== n))}>✕</button></span></label>
               </div>
             ))}
-            {extra.length < 4 && <button type="button" className="btn small" style={{ marginTop: 6 }} onClick={() => setExtra([...extra, { last5: '', amount: '' }])}>＋用了兩個以上帳號匯款，再加一筆</button>}
-            {extra.length > 0 && <div className="small" style={{ marginTop: 4 }}>匯款合計 <b>{money(paidSum)}</b>{paidSum !== total && <span style={{ color: 'var(--red)' }}>（應付 {money(total)}）</span>}</div>}
+            {extra.length < 4 && <button type="button" className="btn small" style={{ marginTop: 6 }} onClick={() => setExtra([...extra, { last5: '', amount: '' }])}>＋再加一筆匯款</button>}
             <div style={{ marginTop: 12 }}>
               <h3 style={{ margin: '0 0 6px' }}>發票</h3>
               <div className="row">

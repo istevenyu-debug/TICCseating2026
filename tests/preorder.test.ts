@@ -38,10 +38,13 @@ describe('公開預購', () => {
   it('送出：伺服器重算金額（6080×2＋3200＝15360）、寄出收件 Email；不佔座位', async () => {
     await A.updateEventSettings(db, 'admin', { preorderOpen: true });
     const r = await submitPreorder(db, body());
-    expect(r).toMatchObject({ no: 'P0001', amount: 15360, mismatch: false });
-    expect(r.token).toMatch(/^[\w-]{24}$/);
+    expect(r).toEqual({ no: 'P0001', token: expect.stringMatching(/^[\w-]{24}$/) }); // 買方看不到金額
     const r2 = await submitPreorder(db, body({ paidAmount: 100 }));
-    expect(r2).toMatchObject({ no: 'P0002', mismatch: true });
+    expect(r2.no).toBe('P0002');
+    const rows = await db.select().from(t.preorder).orderBy(t.preorder.id);
+    expect(rows.map((x) => [x.amount, x.paidAmount])).toEqual([[15360, 15360], [15360, 100]]); // 後台照舊有金額
+    const menu = await preorderMenu(db);
+    expect(JSON.stringify(menu.items)).not.toContain('price');
     const n = await db.select().from(t.notification).where(eq(t.notification.template, 'preorder_received'));
     expect(n).toHaveLength(2);
     expect(n[0].recipient).toBe('lin@example.com');

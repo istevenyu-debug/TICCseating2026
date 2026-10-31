@@ -27,7 +27,6 @@ const ROW_LABEL_COLS = [8, 45];
 export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus }: Props) {
   const [cell, setCell] = useState(22);
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
-  const fmt = (n: number) => `NT$${n.toLocaleString('en-US')}`;
   const { linkRight, groups } = bundleIndex(seats);
 
   const rows: { y: number; label: string }[] = [];
@@ -39,7 +38,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
       <div className="mapbar">
         <div className="legend">
           {zones.filter((z) => seats.some((s) => s.zoneId === z.id)).map((z) => (
-            <span key={z.id}><i style={{ background: z.color }} />{z.name} {fmt(z.price)}</span>
+            <span key={z.id}><i style={{ background: z.color }} />{z.name}</span>
           ))}
           <span><i style={{ outline: '2px solid var(--red)', outlineOffset: -2 }} />已勾選</span>
           <span><i style={{ background: 'repeating-linear-gradient(-45deg,var(--sold) 0 2px,transparent 2px 5px)' }} />他人暫存中</span>
@@ -66,7 +65,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
             const isSel = selected.has(s.id) || isFocus;
             const off = focus ? !isFocus : !!allowed && s.status === 'free' && !allowed.has(s.zoneId) && !isSel; // 不屬於目前購票方式的座位
             const clickable = !locked && !off && (s.status === 'free' || isSel);
-            const title = `${s.label}・${s.code}${z ? `・${z.name} ${fmt(z.price)}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
+            const title = `${s.label}・${s.code}${z ? `・${z.name}` : '・未開放'}${s.bundle ? `・連座 ${groups.get(s.bundle)?.length ?? 0} 位一組` : ''}`;
             return (
               <button
                 key={s.id}

@@ -586,7 +586,7 @@ export async function updateInviteLink(db: Db, actor: string, id: number, v: Par
 
 export function confirmMessage(eventName: string, o: { buyerName: string | null; orderNo: string | null }, amount: number, seatText: string, showAt: Date, myOrderUrl?: string) {
   const when = showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  return `【${eventName}】${o.buyerName ?? ''} 您好，劃位成功：${seatText}。劃位編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至劃位頁「我的劃位」查看${myOrderUrl ? `：${myOrderUrl}` : ''}，入場時請出示 QR code 與身分證件。`;
+  return `【${eventName}】${o.buyerName ?? ''} 您好，劃位成功：${seatText}。劃位編號 ${o.orderNo}，演出時間 ${when}。入場 QR code 請至劃位頁「我的劃位」查看${myOrderUrl ? `：${myOrderUrl}` : ''}，入場時請出示 QR code。`;
 }
 
 export async function markOrderSeen(db: Db, id: number, now = new Date()) {

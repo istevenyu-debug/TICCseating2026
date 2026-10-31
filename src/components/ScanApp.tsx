@@ -148,7 +148,7 @@ export default function ScanApp({ token }: { token: string }) {
               <div className="scan-seat">{res.label}</div>
               <div>{res.zoneName}・{res.code}{res.side ? `・${res.side}` : ''}</div>
               <div className="scan-holder">持票人 <b>{res.holderName}</b>　證 <b>{res.holderId4}</b></div>
-              <div className="scan-sub">請核對身分證件{res.manual ? '・手動入場' : ''}</div>
+              <div className="scan-sub">請核對持票人姓名{res.manual ? '・手動入場' : ''}</div>
             </>}
             {res.result === 'used' && <>
               <div className="scan-big">✗ 已入場過</div>
@@ -189,7 +189,7 @@ export default function ScanApp({ token }: { token: string }) {
             )) : <div className="scan-sub">查無資料</div>}
           </div>
         )}
-        <p className="scan-sub">手動入場請先核對身分證件。結果畫面點一下即可繼續掃下一張。</p>
+        <p className="scan-sub">手動入場請先核對持票人姓名。結果畫面點一下即可繼續掃下一張。</p>
       </section>
     </main>
   );

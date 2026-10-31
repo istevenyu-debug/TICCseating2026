@@ -39,7 +39,6 @@ async function api<T>(url: string, body?: unknown): Promise<ApiOk<T> | ApiErr> {
   }
 }
 
-const money = (n: number) => `NT$${n.toLocaleString('en-US')}`;
 /** 會在頁面最上方跳出的訊息 */
 const ALERT: Record<string, { title: string; kind: 'ok' | 'err' }> = {
   order_confirmed: { title: '🎉 劃位成功！', kind: 'ok' },
@@ -164,7 +163,6 @@ export default function BookingApp({ code }: { code: string }) {
 
   const ids = [...sel].filter((id) => seatById[id]);
   const zonesSel = ids.map((id) => seatById[id].zoneId);
-  const prices = zonesSel.map((z) => zoneBy[z]?.price ?? 0);
   const zoneName = (id: number) => zoneBy[id]?.name ?? '未開放票種';
   // 由訂單收款產生的連結：只能用付款買的方式、劃付款買的數量
   const paid = st.paid;
@@ -176,10 +174,10 @@ export default function BookingApp({ code }: { code: string }) {
     : cur.isSingle ? paid.rows.filter((r) => r.kind === 'zone').reduce((a, r) => a + Math.max(0, r.left), 0)
     : Math.max(0, paidCombo(cur.id)?.left ?? 0) * comboQty(cur);
   const limit = Math.min(st.canBuy, paidLimit);
-  const giftZones = new Set(st.zones.filter((z) => z.price === 0).map((z) => z.id));
-  const curProblem = cur ? comboProblem(cur, zonesSel, cur.usedSets, zoneName, giftZones) : '目前沒有開放的購票方式';
-  const sets = cur && !cur.isSingle ? comboSets(cur, zonesSel) : 1;
-  const amount = held ? held.amount : cur ? calcAmount(prices, cur, sets) : 0;
+  const giftZones = new Set(st.zones.filter((z) => z.gift).map((z) => z.id));
+  const curRule = cur && { ...cur, price: 1 }; // 買方端沒有價格：伺服器會再用真正的價格檢查
+  const curProblem = curRule ? comboProblem(curRule, zonesSel, curRule.usedSets, zoneName, giftZones) : '目前沒有開放的購票方式';
+  const sets = curRule && !curRule.isSingle ? comboSets(curRule, zonesSel) : 1;
   const open = st.sale === 'open';
   // 先選購票方式：只開放這個方式用得到的票種座位（單張購票不含贈票）
   const allowed = new Set(cur && !cur.isSingle ? cur.items.map((i) => i.zoneId) : paid ? paidZones : st.zones.filter((z) => !giftZones.has(z.id)).map((z) => z.id));
@@ -373,7 +371,7 @@ export default function BookingApp({ code }: { code: string }) {
             {combosShown.map((c) => {
               const soldOut = (c.limitSets > 0 && c.usedSets >= c.limitSets) || (!!paid && !c.isSingle && (paidCombo(c.id)?.left ?? 0) <= 0) || (!!paid && c.isSingle && !paidZones.length);
               const desc = c.isSingle ? '依各票種票價計算'
-                : `每組 ${comboDesc(c, zoneName)}${paid ? '' : `・套票價 ${money(c.price)}${c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`}`;
+                : `每組 ${comboDesc(c, zoneName)}${!paid && c.limitSets ? `・限量 ${c.limitSets} 組（剩 ${Math.max(0, c.limitSets - c.usedSets)}）` : ''}`;
               return (
                 <label key={c.id} className={`combo${soldOut ? ' dis' : ''}`}>
                   <input type="radio" name="combo" value={c.id} checked={cur?.id === c.id} disabled={soldOut} onChange={() => pickCombo(c.id)} />
@@ -415,7 +413,6 @@ export default function BookingApp({ code }: { code: string }) {
                     <div className="selitem" key={id}>
                       <span>{seatById[id].label} <span className="mono small muted">{seatById[id].code}</span> <span className="muted small">{zoneBy[seatById[id].zoneId]?.name}</span></span>
                       <span className="row">
-                        <span className="mono small">{money(zoneBy[seatById[id].zoneId]?.price ?? 0)}</span>
                         <button aria-label={`取消 ${seatById[id].label}`} onClick={() => toggle(id)}>×</button>
                       </span>
                     </div>
@@ -425,12 +422,7 @@ export default function BookingApp({ code }: { code: string }) {
                 <p className="small muted">先在上方選購票方式，再在座位圖上按一下勾選座位（出現紅框），再按一下取消。可選的座位會亮起，其他座位變淡。</p>
               )}
               <h3>{cur?.name}</h3>
-              <div className="total">
-                <span className="muted">
-                  {cur && !cur.isSingle && ids.length ? <>原價 {money(prices.reduce((a, b) => a + b, 0))}{sets > 0 ? <>　{cur.name} {sets} 組 × {money(cur.price)}</> : ''}<br /></> : ''}應付金額
-                </span>
-                <b>{money(ids.length && (cur?.isSingle || sets > 0) ? amount : 0)}</b>
-              </div>
+              {cur && !cur.isSingle && ids.length > 0 && sets > 0 && <div className="small">已選 {cur.name} {sets} 組</div>}
               {ids.length > 0 && curProblem && <div className="note err" style={{ marginTop: 8 }}>還不能暫存：{curProblem}</div>}
               {!open && <div className="note err" style={{ marginTop: 8 }}>目前不能訂購，請見頁面上方說明。</div>}
               <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={!open || busy || !ids.length || !!curProblem} onClick={doHold}>
@@ -448,7 +440,7 @@ export default function BookingApp({ code }: { code: string }) {
                   <div className="selitem" key={id}><span>{seatById[id]?.label ?? id} <span className="mono small muted">{seatById[id]?.code}</span></span><span className="small muted">{zoneBy[seatById[id]?.zoneId]?.name}</span></div>
                 ))}
               </div>
-              <div className="total"><span className="muted">{st.combos.find((c) => c.id === held.comboId)?.name}</span><b>{money(held.amount)}</b></div>
+              <div className="small" style={{ marginTop: 6 }}>{st.combos.find((c) => c.id === held.comboId)?.name}</div>
 
 
               {review && (
@@ -460,7 +452,7 @@ export default function BookingApp({ code }: { code: string }) {
                     <span className="muted">姓名</span><span><b>{form.name.trim()}</b></span>
                     <span className="muted">手機</span><span className="mono"><b>{form.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
                     <span className="muted">Email</span><span className="mono"><b>{form.email.trim()}</b></span>
-                    <span className="muted">購票方式</span><span>{st.combos.find((c) => c.id === held.comboId)?.name}・{money(held.amount)}</span>
+                    <span className="muted">購票方式</span><span>{st.combos.find((c) => c.id === held.comboId)?.name}</span>
                   </div>
                   <h3>座位與持票人（{held.seatIds.length} 張）</h3>
                   <div className="sellist">
@@ -516,13 +508,13 @@ export default function BookingApp({ code }: { code: string }) {
 
           <div className="card" id="my-orders">
             <h2>我的劃位</h2>
-            {st.invoice && st.orders.some((o) => o.status === 'paid') && <div className="note small" style={{ marginBottom: 6 }}>電子發票 <b className="mono">{st.invoice.no}</b>・{st.invoice.date}・隨機碼 {st.invoice.random}・{money(st.invoice.amount)}{st.invoice.test ? '（測試，非正式發票）' : ''}</div>}
+            {st.invoice && st.orders.some((o) => o.status === 'paid') && <div className="note small" style={{ marginBottom: 6 }}>電子發票 <b className="mono">{st.invoice.no}</b>・{st.invoice.date}・隨機碼 {st.invoice.random}{st.invoice.test ? '（測試，非正式發票）' : ''}</div>}
             {st.orders.length ? st.orders.map((o) => (
               <div key={o.orderNo} className="note" style={{ marginBottom: 6, outline: o.orderNo === lastOrder ? '1px solid var(--ok)' : undefined }}>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <b className="mono">{o.orderNo}</b><span className={`pill p-${o.status}`}>{STATUS_LABEL[o.status] ?? o.status}</span>
                 </div>
-                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}・{money(o.amount)}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
+                <div className="small">{o.comboName}{o.sets > 1 ? ` ${o.sets} 組` : ''}{o.status === 'pending' ? '・主辦方確認後會寄出劃位成功通知與 QR code' : ''}</div>
                 {o.status !== 'paid' && <div className="small">{o.seats.map((s) => `${s.label}（${s.code}）`).join('、')}</div>}
                 {o.status === 'paid' && (
                   <div className="eticket">

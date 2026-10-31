@@ -195,7 +195,7 @@ describe('後台', () => {
     expect(all.updated).toBe(42); // 第 7 排全部區塊：12+10+12+4+4
     await A.publish(db, who, T0);
     const s = await getBookingState(db, 'BBB222', T0);
-    expect(s.zones.find((x) => x.name === '學生票')?.price).toBe(1500);
+    expect(s.zones.find((x) => x.name === '學生票')).toMatchObject({ gift: false }); expect(JSON.stringify(s)).not.toMatch(/"(price|amount)"/); // 買方看不到金額
     expect(s.seats.find((x) => x.id === '11-1')!.zoneId).toBe(z.id);
   });
 

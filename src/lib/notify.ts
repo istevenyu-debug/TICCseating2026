@@ -240,14 +240,14 @@ export async function ticketMail(db: Db, orderId: number, text: string): Promise
   const inv = ord ? await invoiceForLink(db, ord.linkId) : null;
   const invHtml = !inv ? '' : `<div style="border:1px solid #d6dce8;border-radius:10px;padding:10px 12px;margin:0 0 14px;max-width:520px">
         <b>電子發票</b> <span style="font-family:monospace;font-size:16px">${esc(inv.invoiceNo)}</span>${inv.env !== 'prod' ? '<span style="color:#b45309">（測試，非正式發票）</span>' : ''}<br>
-        開立日期 ${esc(inv.invoiceDate.slice(0, 10))}・隨機碼 ${esc(inv.randomNumber)}・金額 NT$${inv.amount.toLocaleString('en-US')}<br>
+        開立日期 ${esc(inv.invoiceDate.slice(0, 10))}・隨機碼 ${esc(inv.randomNumber)}<br>
         <span style="color:#5b6579">${esc(inv.buyer)}。可至財政部電子發票整合服務平台查詢。</span></div>`;
   const html = `<div style="font:15px/1.7 sans-serif;color:#18213a;max-width:560px">
     <h2 style="margin:0 0 4px">🎉 劃位成功</h2>
     <div style="color:#5b6579;margin-bottom:12px">${esc(event.name)}・${esc(when)}・台北國際會議中心 大會堂</div>
     <p style="margin:0 0 14px">${esc(text)}</p>
     ${invHtml}
-    <p style="margin:0 0 10px"><b>入場時請出示以下 QR code 與身分證件</b>（每張票一個，可截圖保存）：</p>
+    <p style="margin:0 0 10px"><b>入場時請出示以下 QR code</b>（每張票一個，可截圖保存）：</p>
     ${cards.join('')}
     <p style="color:#5b6579;font-size:13px">每個 QR code 只能入場一次，請勿轉傳給他人。</p></div>`;
   return { html, attachments };

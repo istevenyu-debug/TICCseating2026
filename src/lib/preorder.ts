@@ -22,7 +22,8 @@ async function currentEvent(db: Db) {
 }
 
 /** 訂購頁可選的項目：已發布的組合票（每組）＋已發布、票價大於 0 的票種（單張） */
-export async function preorderMenu(db: Db) {
+/** 含價格：後台與伺服器計算用 */
+export async function preorderMenuFull(db: Db) {
   const ev = await currentEvent(db);
   const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
@@ -43,6 +44,12 @@ export async function preorderMenu(db: Db) {
     event: { name: ev.name, showAt: ev.showAt.toISOString(), bankName: ev.bankName, bankAccount: ev.bankAccount, accountName: ev.accountName },
     items,
   };
+}
+
+/** 公開給預購頁：不含任何金額 */
+export async function preorderMenu(db: Db) {
+  const m = await preorderMenuFull(db);
+  return { ...m, items: m.items.map(({ price: _p, ...x }) => { void _p; return x; }) };
 }
 
 const submitBody = z.object({
@@ -76,7 +83,7 @@ function rateLimit(ip: string, now: number) {
 export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Date(), einvPost?: EinvPost) {
   const p = submitBody.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
-  const menu = await preorderMenu(db);
+  const menu = await preorderMenuFull(db);
   if (!menu.open) throw new BookingError('SALE_CLOSED', '目前未開放預購。');
   const items: t.PreorderItem[] = [];
   for (const it of p.data.items.filter((x) => x.qty > 0)) {
@@ -119,10 +126,10 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
-        content: `【${ev.name}】${row.name} 您好，已收到您的訂單 ${no}：${itemsText(items)}，合計 NT$${amount.toLocaleString('en-US')}（您填寫的匯款金額 NT$${row.paidAmount.toLocaleString('en-US')}、帳號末五碼 ${row.last5}）。主辦方確認收到款項後，會由寄這封信的同一個信箱寄出「付款確認・劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
+        content: `【${ev.name}】${row.name} 您好，已收到您的訂單 ${no}：${itemsText(items)}。主辦方確認款項、並依送單順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
       });
       // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
-      return { no, amount, mismatch: amount !== row.paidAmount, token: viewToken };
+      return { no, token: viewToken }; // 買方看不到金額
     } catch (e) {
       if (!/unique|duplicate/i.test(String((e as Error).message))) throw e;
     }
@@ -175,7 +182,7 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   let po = po0;
   // Google 表單來的沒有數量：由後台在確認收訖時選內容與數量
   if (!po.items.length) {
-    const menu = await preorderMenu(db);
+    const menu = await preorderMenuFull(db);
     const items: t.PreorderItem[] = [];
     for (const it of (pickItems ?? []).filter((x) => x.qty > 0)) {
       const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
@@ -209,7 +216,7 @@ export async function confirmPreorder(db: Db, actor: string, id: number, base?: 
   });
   if (!fromForm) await db.insert(t.notification).values({
     linkId: link.id, channel: 'email', template: 'preorder_link', recipient: po.email,
-    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項 NT$${po.paidAmount.toLocaleString('en-US')}（訂單 ${po.no}：${itemsText(po.items)}）。請點以下專屬連結選位並填寫持票人資料：${url}　連結有效至演出當天，請勿轉傳他人。`,
+    content: `【${ev.name}】${po.name} 您好，已確認收到您的款項（訂單 ${po.no}：${itemsText(po.items)}）。請點以下專屬連結選位並填寫持票人資料：${url}　連結有效至演出當天，請勿轉傳他人。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_confirm', target: `preorder:${id}`, detail: JSON.stringify({ link: link.code }) });
   return { code: link.code, linkId: link.id, fromForm, email: po.email };
@@ -234,7 +241,7 @@ export async function setPreorderItems(db: Db, actor: string, id: number, pick: 
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
   if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
   if (po.linkId) throw new BookingError('INVALID', '已發出劃位連結，不能再改內容');
-  const menu = await preorderMenu(db);
+  const menu = await preorderMenuFull(db);
   const items: t.PreorderItem[] = [];
   for (const it of pick.filter((x) => x.qty > 0)) {
     const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
@@ -381,7 +388,7 @@ export async function preorderStatus(db: Db, tokens: string[]) {
   return rows.map((r) => {
     const l = links.find((x) => x.id === r.linkId);
     return {
-      token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), amount: r.amount, createdAt: r.createdAt.toISOString(),
+      token: r.viewToken!, no: r.no, status: r.status, items: itemsText(r.items), createdAt: r.createdAt.toISOString(),
       email: maskEmail(r.email), url: r.status === 'confirmed' && l && l.status === 'active' ? `/t/${l.code}` : null,
     };
   });

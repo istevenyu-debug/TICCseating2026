@@ -232,16 +232,17 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
       quota: link.quota, used, expiresAt: link.expiresAt.toISOString(),
     },
     canBuy: canBuyOf(ev, link, used),
-    zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price })),
-    combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0, autoHolders: c.autoHolders })),
+    // 買方看不到任何金額：只給票種名稱、顏色，以及是否為贈票區
+    zones: zones.filter((z) => openZones.has(z.id)).map((z) => ({ id: z.id, name: z.name, color: z.color, gift: z.price === 0 })),
+    combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, limitSets: c.limitSets, items: c.items, usedSets: sets[c.id] ?? 0, autoHolders: c.autoHolders })),
     seats,
     held: myHeld && {
-      orderId: myHeld.id, orderNo: myHeld.orderNo, holdUntil: myHeld.holdUntil!.toISOString(), amount: myHeld.amount,
+      orderId: myHeld.id, orderNo: myHeld.orderNo, holdUntil: myHeld.holdUntil!.toISOString(),
       comboId: myHeld.comboId,
       seatIds: orderSeats.filter((s) => s.orderId === myHeld.id).map((s) => s.seatId),
     },
     orders: myOrders.filter((o) => o.status !== 'held' && o.submittedAt).reverse().map((o) => ({
-      orderNo: o.orderNo, status: o.status, amount: o.amount, payDueAt: o.payDueAt?.toISOString() ?? null,
+      orderNo: o.orderNo, status: o.status, payDueAt: o.payDueAt?.toISOString() ?? null,
       comboName: combosAll.find((c) => c.id === o.comboId)?.name ?? '', sets: o.sets,
       buyerName: o.buyerName, buyerPhone: o.buyerPhone, buyerEmail: o.buyerEmail,
       // 劃位成功後才提供入場憑證（序號與入場券列印頁一致）
@@ -258,7 +259,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
     inbox,
     prefill,
     paid: ent, // 付款買了什麼、已劃多少（手動連結為 null）
-    invoice: inv && { no: inv.invoiceNo, date: inv.invoiceDate.slice(0, 10), random: inv.randomNumber, amount: inv.amount, test: inv.env !== 'prod' },
+    invoice: inv && { no: inv.invoiceNo, date: inv.invoiceDate.slice(0, 10), random: inv.randomNumber, test: inv.env !== 'prod' },
   };
 }
 

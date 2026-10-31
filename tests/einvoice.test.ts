@@ -125,7 +125,7 @@ describe('一筆訂單（收款）開一張發票', () => {
     const mail = await ticketMail(db, h.orderId, '劃位成功');
     expect(mail.html).toContain('AB12345678');
     expect(mail.html).toContain('測試，非正式發票');
-    expect((await getBookingState(db, code, now)).invoice).toMatchObject({ no: 'AB12345678', amount: 12160, test: true });
+    expect((await getBookingState(db, code, now)).invoice).toMatchObject({ no: 'AB12345678', test: true });
     expect(linkId).toBeTruthy();
   });
 
