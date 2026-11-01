@@ -1545,17 +1545,22 @@ function ReleaseButton({ p, keys, label }: { p: Pre; keys: string[]; label: stri
 const CHK = { display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' as const, cursor: 'pointer' };
 const CHKI = { width: 18, height: 18, margin: 0, flex: 'none' };
 /** 已匯款、已入 LINE 群：勾了只記錄，不寄東西 */
-function Checks({ p }: { p: Pre }) {
+type CheckDone = { id: number; text: string; undo: Record<string, unknown> };
+function Checks({ p, onDone }: { p: Pre; onDone?: (d: CheckDone) => void }) {
   const { act, busy } = useAdmin();
   if (p.status === 'cancelled') return null;
   const groups = allGroups(p);
+  const tick = async (body: Record<string, unknown>, text: string, undo: Record<string, unknown>) => {
+    const r = await act({ action: 'preorder.check', id: p.id, ...body }, text);
+    if (r) onDone?.({ id: p.id, text, undo: { action: 'preorder.check', id: p.id, ...undo } });
+  };
   return (
     <div className="small" onClick={(e) => e.stopPropagation()} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <label style={CHK}><input type="checkbox" style={CHKI} checked={!!p.paidOkAt} disabled={busy}
-        onChange={(e) => act({ action: 'preorder.check', id: p.id, paid: e.target.checked }, e.target.checked ? `${p.name}：已匯款` : `${p.name}：取消已匯款`)} /> 已匯款</label>
+        onChange={(e) => tick({ paid: e.target.checked }, e.target.checked ? `${p.name}：已匯款` : `${p.name}：取消已匯款`, { paid: !e.target.checked })} /> 已匯款</label>
       {groups.map((g) => (
         <label key={g} style={CHK}><input type="checkbox" style={CHKI} checked={p.lineOk.includes(g)} disabled={busy}
-          onChange={(e) => act({ action: 'preorder.check', id: p.id, line: e.target.checked ? [...p.lineOk, g] : p.lineOk.filter((x) => x !== g) }, `${p.name}：${e.target.checked ? '已入' : '取消已入'} ${g}`)} /> 已入{g}</label>
+          onChange={(e) => tick({ line: e.target.checked ? [...p.lineOk, g] : p.lineOk.filter((x) => x !== g) }, `${p.name}：${e.target.checked ? '已入' : '取消已入'} ${g}`, { line: p.lineOk })} /> 已入{g}</label>
       ))}
     </div>
   );
@@ -1711,7 +1716,12 @@ const PRE_STATUS: Record<string, string> = { submitted: '待發連結', confirme
 
 function Preorders() {
   const { st, act, busy, setMsg, sure, confirm2, go } = useAdmin();
-  const [filter, setFilter] = useState('todo');
+  const [filter, setFilter0] = useState('todo');
+  // 剛勾好的先留在原位（不馬上消失、下一筆不會補上來），換分頁或按「收起」才收
+  const [stick, setStick] = useState<number[]>([]);
+  const [last, setLast] = useState<CheckDone | null>(null);
+  const setFilter = (k: string) => { setFilter0(k); setStick([]); setLast(null); };
+  const onDone = (d: CheckDone) => { setLast(d); setStick((x) => (x.includes(d.id) ? x : [...x, d.id])); };
   const [openId, setOpenId] = useState<number | null>(null);
   const [q, setQ] = useState('');
   const base = typeof window !== 'undefined' ? location.origin : '';
@@ -1720,9 +1730,10 @@ function Preorders() {
   const buyUrl = `${base}/buy?v=${ver}`;
   const mismatch = (p: Pre) => p.source !== 'form' && p.status !== 'cancelled' && p.items.length > 0 && p.paidAmount !== p.amount;
   const match = (p: Pre, k: string) => k === 'all' || (k === 'todo' ? needsCheck(p) : k === 'ready' ? isReady(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
-  const list = st.preorders.filter((p) => match(p, filter)
+  const list = st.preorders.filter((p) => (match(p, filter) || (filter === 'todo' && stick.includes(p.id) && p.status !== 'cancelled'))
     && (!q.trim() || [p.no, p.name, p.phone, p.email, p.last5, p.lineName].some((x) => x.includes(q.trim())))).sort(bySeq);
   const cnt = (k: string) => st.preorders.filter((p) => match(p, k)).length;
+  const stuckReady = stick.some((id) => { const x = st.preorders.find((y) => y.id === id); return !!x && !needsCheck(x); });
   const open = (p: Pre) => { setOpenId(openId === p.id ? null : p.id); if (p.isNew) act({ action: 'preorder.seen', id: p.id }); };
   return (
     <div className="pstack">
@@ -1741,12 +1752,20 @@ function Preorders() {
           <input value={q} placeholder="搜尋姓名、手機、LINE、末五碼" style={{ width: 240 }} onChange={(e) => setQ(e.target.value)} />
         </div>
 
+        {(last || (filter === 'todo' && stuckReady)) && (
+          <div className="note ok" style={{ position: 'sticky', top: 0, zIndex: 5, marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {last && <><span>剛才：<b>{last.text}</b> ✓</span>
+              <button className="btn small" disabled={busy} onClick={async () => { const u = last; const r = await act(u.undo, `已復原：${u.text}`); if (r) setLast(null); }}>復原</button></>}
+            {filter === 'todo' && stuckReady &&
+              <button className="btn small" style={{ marginLeft: 'auto' }} onClick={() => { setStick([]); setLast(null); }}>收起已核好的（綠底）</button>}
+          </div>
+        )}
         <div className="tbl" style={{ marginTop: 8 }}><table>
           <thead><tr><th>順位</th><th>姓名／電話</th><th>內容</th><th>匯款／末五碼</th><th>核對</th><th>狀態</th></tr></thead>
           <tbody>
             {list.map((p) => (
               <Fragment key={p.id}>
-                <tr onClick={() => open(p)} style={{ cursor: 'pointer', fontWeight: p.isNew ? 700 : undefined }}>
+                <tr onClick={() => open(p)} style={{ cursor: 'pointer', fontWeight: p.isNew ? 700 : undefined, ...(filter === 'todo' && !needsCheck(p) ? { background: '#e8f6ec' } : {}) }}>
                   <td className="mono"><b>{p.seq ?? '—'}</b>{p.isNew && <span className="badge">新</span>}<div className="small muted">{p.no}・{tw(p.createdAt)}</div></td>
                   <td>{p.waitlist && <span className="pill" style={{ background: '#fff3cd', color: '#7a5200', marginRight: 4 }}>候補</span>}{p.name}{p.lineName && <span className="small muted">（LINE：{p.lineName}）</span>}<br /><span className="mono small muted">{p.phone}</span></td>
                   <td className="small">{p.source === 'form' && <span className="pill" style={{ marginRight: 4 }}>表單</span>}
@@ -1754,7 +1773,7 @@ function Preorders() {
                   {p.source === 'form'
                     ? <td className="small" style={{ maxWidth: 220 }}>{p.last5 || '—'}</td>
                     : <td className="mono">{money(p.paidAmount)}{p.paidAmount !== p.amount && <div className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ 金額與數量不相當<br />應付 {money(p.amount)}，{p.paidAmount < p.amount ? `少 ${money(p.amount - p.paidAmount)}` : `多 ${money(p.paidAmount - p.amount)}`}</div>}<div className="small muted">{p.last5}</div></td>}
-                  <td><Checks p={p} /></td>
+                  <td><Checks p={p} onDone={onDone} />{filter === 'todo' && !needsCheck(p) && <div className="small" style={{ color: 'var(--ok)', fontWeight: 700, marginTop: 2 }}>✓ 已核好</div>}</td>
                   <td><span className={`pill ${p.status === 'confirmed' ? 'p-paid' : p.status === 'submitted' ? 'p-pending' : 'p-cancelled'}`}>{unreleased(p).length && p.status === 'confirmed' ? '部分已發' : PRE_STATUS[p.status]}</span>
                     {p.status === 'confirmed' && inProgress(p) && <div className="small err-text">劃位中</div>}</td>
                 </tr>
