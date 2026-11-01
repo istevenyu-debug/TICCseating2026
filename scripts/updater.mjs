@@ -34,7 +34,7 @@ const versionOf = (dir) => {
 
 function run(cmd, args, cwd, logFile) {
   const r = spawnSync(cmd, args, { cwd, shell: isWin, encoding: 'utf8', env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' }, maxBuffer: 64 * 1024 * 1024 });
-  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
+  const out = `${r.stdout ?? ''}${r.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
   try { writeFileSync(logFile, `\n$ ${cmd} ${args.join(' ')}\n${out}`, { flag: 'a' }); } catch { /* 忽略 */ }
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} 失敗：${out.split(/\r?\n/).filter(Boolean).slice(-6).join(' ｜ ').slice(0, 600)}`);
   return out;
@@ -80,6 +80,7 @@ export async function runUpdate({ root, stopWeb, startWeb, setStatus, zipUrl = `
   const P = updatePaths(root);
   const x = path.join(P.dir, 'x'); const stage = path.join(P.dir, 'stage'); const prev = path.join(P.dir, 'prev'); const zip = path.join(P.dir, 'new.zip');
   const from = versionOf(root);
+  mkdirSync(P.dir, { recursive: true });
   writeFileSync(P.log, `== 更新開始 ${new Date().toISOString()}（目前 ${from}）\n`);
   for (const d of [x, stage]) rmSync(d, { recursive: true, force: true });
 
@@ -112,21 +113,32 @@ export async function runUpdate({ root, stopWeb, startWeb, setStatus, zipUrl = `
   // 4. 切換：停網站 → 舊版存起來 → 換上新版 → 更新資料庫欄位 → 啟動
   setStatus('switch', { from, to });
   await stopWeb();
+  await new Promise((r) => setTimeout(r, 3000)); // 讓資料庫完全關好
   rmSync(prev, { recursive: true, force: true }); mkdirSync(prev, { recursive: true });
   for (const n of readdirSync(root)) if (!KEEP.has(n) || n === '.next') cpSync(path.join(root, n), path.join(prev, n), { recursive: true });
+  // 資料庫整個資料夾先複製一份（網站已停，資料不會再變）：更新欄位失敗就原樣放回
+  const dataDir = path.join(root, '.data'); const dataCopy = path.join(P.dir, 'data-before');
+  rmSync(dataCopy, { recursive: true, force: true });
+  if (existsSync(dataDir)) cpSync(dataDir, dataCopy, { recursive: true });
+  const restoreData = () => { if (existsSync(dataCopy)) { rmSync(dataDir, { recursive: true, force: true }); cpSync(dataCopy, dataDir, { recursive: true }); } };
   try {
     placeProgram(src, root);
     rmSync(path.join(root, '.next'), { recursive: true, force: true });
     renameSync(path.join(stage, '.next'), path.join(root, '.next'));
-    run(npm, ['run', 'db:seed'], root, P.log);
+    try { run(npm, ['run', 'db:seed'], root, P.log); } catch {
+      restoreData(); await new Promise((r) => setTimeout(r, 5000));
+      run(npm, ['run', 'db:seed'], root, P.log);
+    }
     await startWeb();
   } catch (e) {
-    // 退回舊版
+    // 退回舊版（程式與資料庫都放回更新前的樣子）
     setStatus('rollback', { from, to, error: String(e.message ?? e) });
     try { await stopWeb(); } catch { /* 忽略 */ }
+    await new Promise((r) => setTimeout(r, 2000));
     for (const d of DIRS) rmSync(path.join(root, d), { recursive: true, force: true });
     rmSync(path.join(root, '.next'), { recursive: true, force: true });
     for (const n of readdirSync(prev)) cpSync(path.join(prev, n), path.join(root, n), { recursive: true, force: true });
+    restoreData();
     await startWeb();
     throw e;
   }

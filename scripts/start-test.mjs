@@ -157,7 +157,12 @@ const stopWeb = async () => {
   if (!web) return;
   const w = web; web = null;
   await new Promise((res) => { w.once('exit', res); killTree(w); setTimeout(res, 15000); });
-  for (let i = 0; i < 15; i++) { try { await fetch(`http://localhost:${PORT}/`); } catch { break; } await new Promise((r) => setTimeout(r, 1000)); }
+  for (let i = 0; i < 20; i++) {
+    try { await fetch(`http://localhost:${PORT}/`); } catch { return; } // 連不上＝已停
+    if (isWin && i === 10) spawnSync('taskkill', ['/F', '/IM', 'node.exe', '/FI', `PID ne ${process.pid}`], { stdio: 'ignore' }); // 還在：強制停掉其他 node（不含自己）
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error('舊版網站停不下來，這次先不更新');
 };
 setInterval(async () => {
   writeJson(UP.beat, { pid: process.pid, at: new Date().toISOString(), version: (readFileSync('src/lib/version.ts', 'utf8').match(/APP_VERSION = '([^']+)'/) ?? [])[1] ?? '' });
@@ -166,7 +171,7 @@ setInterval(async () => {
   updating = true;
   say('收到後台的更新要求，開始更新（舊版照常營業，建置完成才切換）');
   try {
-    const r = await runUpdate({ root, stopWeb, startWeb, setStatus });
+    const r = await runUpdate({ root, stopWeb, startWeb, setStatus, ...(process.env.UPDATE_ZIP_URL ? { zipUrl: process.env.UPDATE_ZIP_URL } : {}) });
     setStatus(r.same ? 'same' : 'done', { from: r.from, to: r.to });
     say(r.same ? '已經是最新版，不用更新' : `更新完成：${r.to}`);
   } catch (e) {
