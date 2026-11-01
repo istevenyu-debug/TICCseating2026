@@ -13,7 +13,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -74,18 +74,31 @@ try {
 
 say(`啟動網站（本機 http://localhost:${PORT}）`);
 const fixedUrl = (env.SITE_URL ?? '').replace(/\/$/, '');
-const web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env, ...(fixedUrl ? { PUBLIC_BASE_URL: fixedUrl } : {}) } });
-for (let i = 0; i < 60; i++) {
-  try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) break; } catch { /* 等待啟動 */ }
-  await new Promise((r) => setTimeout(r, 1000));
-}
+let web = null;
+let updating = false;
+const waitUp = async (sec) => {
+  for (let i = 0; i < sec; i++) {
+    try { const r = await fetch(`http://localhost:${PORT}/`); if (r.ok) return true; } catch { /* 等待啟動 */ }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+};
+const startWeb = async () => {
+  web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env, ...(fixedUrl ? { PUBLIC_BASE_URL: fixedUrl } : {}) } });
+  web.on('exit', (c) => {
+    if (updating) return; // 更新中由更新程式自己停、自己開
+    console.log(`網站已停止（${c}）`); tunnel?.kill(); process.exit(c ?? 0);
+  });
+  if (!(await waitUp(90))) throw new Error('新版網站 90 秒內沒有回應');
+};
+try { await startWeb(); } catch { console.log('⚠ 網站 90 秒內沒有回應，仍繼續嘗試連線…'); }
 
 /* 4. Cloudflare 通道：有固定網址用自己的網域，否則用臨時通道 */
 const fixed = !!(env.TUNNEL_TOKEN && fixedUrl);
 say(fixed ? `連上固定網址 ${fixedUrl}（Cloudflare 通道）` : '建立對外的 https 網址（Cloudflare 臨時通道）');
 const { bin, install } = await import('cloudflared');
 if (!existsSync(bin)) { console.log('  第一次使用，下載 cloudflared…'); await install(bin); }
-const tunnel = fixed
+var tunnel = fixed
   ? spawn(bin, ['tunnel', '--no-autoupdate', 'run', '--token', env.TUNNEL_TOKEN])
   : spawn(bin, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
 let shown = false;
@@ -129,8 +142,37 @@ const killTree = (p) => {
   if (isWin) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
   else p.kill();
 };
-const stop = () => { killTree(tunnel); killTree(web); process.exit(0); };
-process.on('exit', () => { killTree(tunnel); killTree(web); });
+const stop = () => { killTree(tunnel); if (web) killTree(web); process.exit(0); };
+process.on('exit', () => { killTree(tunnel); if (web) killTree(web); });
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
-web.on('exit', (c) => { console.log(`網站已停止（${c}）`); tunnel.kill(); process.exit(c ?? 0); });
+
+/* 5. 一鍵更新：後台按「立即更新」會寫入 .update/request.json，這裡每 3 秒看一次 */
+const { runUpdate, updatePaths } = await import('./updater.mjs');
+const UP = updatePaths(root);
+mkdirSync(UP.dir, { recursive: true });
+const writeJson = (f, v) => { try { writeFileSync(f, JSON.stringify(v)); } catch { /* 忽略 */ } };
+const setStatus = (step, extra = {}) => { writeJson(UP.status, { step, at: new Date().toISOString(), ...extra }); console.log(`  [更新] ${step} ${extra.to ?? ''}`); };
+const stopWeb = async () => {
+  if (!web) return;
+  const w = web; web = null;
+  await new Promise((res) => { w.once('exit', res); killTree(w); setTimeout(res, 15000); });
+  for (let i = 0; i < 15; i++) { try { await fetch(`http://localhost:${PORT}/`); } catch { break; } await new Promise((r) => setTimeout(r, 1000)); }
+};
+setInterval(async () => {
+  writeJson(UP.beat, { pid: process.pid, at: new Date().toISOString(), version: (readFileSync('src/lib/version.ts', 'utf8').match(/APP_VERSION = '([^']+)'/) ?? [])[1] ?? '' });
+  if (updating || !existsSync(UP.request)) return;
+  rmSync(UP.request, { force: true });
+  updating = true;
+  say('收到後台的更新要求，開始更新（舊版照常營業，建置完成才切換）');
+  try {
+    const r = await runUpdate({ root, stopWeb, startWeb, setStatus });
+    setStatus(r.same ? 'same' : 'done', { from: r.from, to: r.to });
+    say(r.same ? '已經是最新版，不用更新' : `更新完成：${r.to}`);
+  } catch (e) {
+    const prevStatus = (() => { try { return JSON.parse(readFileSync(UP.status, 'utf8')); } catch { return {}; } })();
+    setStatus('failed', { from: prevStatus.from, to: prevStatus.to, error: String(e?.message ?? e).slice(0, 800), rolledBack: prevStatus.step === 'rollback' });
+    console.error(`\n✖ 更新失敗，網站維持舊版：${e?.message ?? e}`);
+    if (!web) { try { await startWeb(); } catch (e2) { console.error('✖ 舊版也無法啟動：', e2); } }
+  } finally { updating = false; }
+}, 3000);

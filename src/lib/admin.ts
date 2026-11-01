@@ -32,7 +32,7 @@ async function seatNames(db: Db, ids: string[]) {
 const AUDIT_NAME: Record<string, string> = {
   assign_zone: '改票種', set_usage: '改席位用途', publish: '發布', link_create: '建立劃位連結', link_update: '修改劃位連結',
   confirm_payment: '劃位確認', cancel_order: '取消劃位', delete_order: '刪除劃位', preorder_release: '發出劃位連結',
-  preorder_check: '核帳打勾', preorder_items: '設定訂單內容', preorder_email: '修改 Email', preorder_resend_received: '補寄登記確認信', preorder_cancel: '取消訂單',
+  preorder_check: '核帳打勾', preorder_items: '設定訂單內容', preorder_email: '修改 Email', preorder_resend_received: '補寄登記確認信', app_update: '一鍵更新系統', preorder_cancel: '取消訂單',
   preorder_line_groups: 'LINE 群設定', event_update: '修改場次設定',
 };
 

@@ -9,6 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
+import { requestUpdate } from '@/lib/updater';
 import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
@@ -85,6 +86,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.promote'), id }),
   z.object({ action: z.literal('preorder.flowImage'), dataUrl: z.string().max(4_000_000).nullable() }),
   z.object({ action: z.literal('preorder.resendReceived'), id }),
+  z.object({ action: z.literal('app.update') }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
   z.object({ action: z.literal('preorder.items'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30) }),
   z.object({ action: z.literal('preorder.release'), id, keys: z.array(z.string().regex(/^(combo|zone):\d+$/)).min(1).max(30) }),
@@ -199,6 +201,7 @@ export async function POST(req: Request) {
       case 'preorder.settings': return setPreorderSettings(db, who, { rateLimit: a.rateLimit, waitlistCap: a.waitlistCap, intro: a.intro });
       case 'preorder.promote': return promoteWaitlist(db, who, a.id);
       case 'preorder.flowImage': return setFlowImage(db, who, a.dataUrl);
+      case 'app.update': mustBeAdmin(); return requestUpdate(db, who);
       case 'preorder.resendReceived': {
         const r = await resendReceived(db, who, a.id);
         await dispatchQueued(db);

@@ -246,6 +246,44 @@ export default function AdminApp() {
 }
 
 /* ---------- 首頁 ---------- */
+/** 一鍵更新：有新版時按一下，家裡電腦自己下載、建置、切換（失敗留舊版） */
+type UpInfo = { current: string; latest: string; canUpdate: boolean; pending: boolean; status: { step: string; at: string; from?: string; to?: string; error?: string; rolledBack?: boolean } | null };
+const UP_STEP: Record<string, string> = {
+  queued: '已送出要求，準備開始…', download: '1/4 下載新版中…', install: '2/4 安裝新套件中…', build: '3/4 建置新版中（舊版照常營業，約 1～3 分鐘）…',
+  switch: '4/4 切換中（網站約中斷 20 秒）…', rollback: '新版啟動失敗，正在退回舊版…', done: '✅ 更新完成', same: '已經是最新版', failed: '✖ 更新失敗，網站維持舊版',
+};
+function UpdateCard() {
+  const { act, busy } = useAdmin();
+  const [u, setU] = useState<UpInfo | null>(null);
+  const [sure, setSure] = useState(false);
+  const load = useCallback(async () => {
+    const r = await fetch('/api/admin/update', { cache: 'no-store' }).then((x) => x.json()).catch(() => null);
+    if (r?.ok) setU(r.data);
+  }, []);
+  const running = !!u && (u.pending || (!!u.status && ['queued', 'download', 'install', 'build', 'switch', 'rollback'].includes(u.status.step) && Date.now() - Date.parse(u.status.at) < 15 * 60_000));
+  useEffect(() => { load(); const id = setInterval(load, running ? 3000 : 60_000); return () => clearInterval(id); }, [load, running]);
+  if (!u) return null;
+  const hasNew = !!u.latest && u.latest !== u.current;
+  const recent = u.status && Date.now() - Date.parse(u.status.at) < 24 * 3600_000 ? u.status : null;
+  return (
+    <div className="card" style={{ marginTop: 14, ...(hasNew ? { borderColor: 'var(--pri, #1f4e78)', borderWidth: 2 } : {}) }}>
+      <h2 style={{ marginBottom: 6 }}>系統版本 {hasNew && <span className="badge">有新版</span>}</h2>
+      <p style={{ margin: 0 }}>目前：<b>{u.current}</b>{u.latest ? <>　最新：<b>{u.latest}</b></> : <span className="small muted">　（暫時查不到最新版本）</span>}</p>
+      {recent && <p style={{ margin: '6px 0 0', color: recent.step === 'failed' ? 'var(--red)' : recent.step === 'done' ? 'var(--ok)' : undefined }}>
+        <b>{UP_STEP[recent.step] ?? recent.step}</b>{recent.step === 'done' && recent.to ? `：${recent.to}（${tw(recent.at)}）` : ''}
+        {recent.error && <span className="small" style={{ display: 'block', whiteSpace: 'pre-wrap' }}>原因：{recent.error}</span>}</p>}
+      {running ? <p className="small muted" style={{ margin: '6px 0 0' }}>更新中可以關掉這頁，網站會自己完成。完成後請重新整理後台。</p>
+        : !u.canUpdate ? <p className="small muted" style={{ margin: '6px 0 0' }}>這次是用舊的啟動程式開的，還不能一鍵更新；照說明手動更新一次後就可以了。</p>
+        : hasNew && (sure
+          ? <div className="note warn" style={{ marginTop: 8 }}>更新時會先自動備份；建置期間網站照常營業，切換時約中斷 <b>20 秒</b>。請挑沒人填單的時間。
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="btn pri" disabled={busy} onClick={async () => { setSure(false); if (await act({ action: 'app.update' }, '已送出更新要求')) load(); }}>確定，立即更新</button>
+                <button className="btn" onClick={() => setSure(false)}>取消</button></div></div>
+          : <button className="btn pri" style={{ marginTop: 8 }} onClick={() => setSure(true)}>立即更新到 {u.latest}</button>)}
+    </div>
+  );
+}
+
 /** 備份：每小時自動一份；可立即備份並下載 */
 function BackupCard() {
   const { st } = useAdmin();
@@ -335,6 +373,7 @@ function Home() {
         <button key={k} className={`hcard${i === 0 ? ' main' : ''}`} onClick={() => go(k)}><b>{t}</b><span>{d}</span><em>{m}</em></button>
       ))}
       {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放劃位」按「發布到購票頁」。</div>}
+      {st.user.role === 'admin' && <UpdateCard />}
       <BackupCard />
       <AuditCard />
       <ResetCard />
