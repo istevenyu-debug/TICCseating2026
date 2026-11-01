@@ -80,6 +80,7 @@ const SUBJECT: Record<string, string> = {
   preorder_received: '已收到您的認購登記',
   preorder_link: '劃位通知',
   preorder_cancelled: '認購登記取消通知',
+  preorder_restored: '您的認購登記仍然有效（更正通知）',
   test: '測試信',
 };
 
@@ -197,7 +198,7 @@ function subjectOf(template: string, content: string) {
 /* ---------- 信件版面：所有寄給買方的信共用（表格排版，各家信箱都正常顯示；同時附純文字） ---------- */
 
 const MAIL_TITLE: Record<string, string> = {
-  preorder_received: '已收到您的認購登記', preorder_link: '輪到您劃位了', preorder_cancelled: '認購登記取消通知',
+  preorder_received: '已收到您的認購登記', preorder_link: '輪到您劃位了', preorder_cancelled: '認購登記取消通知', preorder_restored: '您的認購登記仍然有效',
   order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
 };
 

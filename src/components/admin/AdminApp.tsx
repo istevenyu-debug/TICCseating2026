@@ -2005,6 +2005,12 @@ function Preorders() {
                       {isReady(p) && <button className="btn" onClick={() => go('links')}>已核好，到五依序發連結 →</button>}
                       {p.linkCode && <button className="btn" onClick={() => navigator.clipboard?.writeText(linkText(st, p, base)).then(() => setMsg({ kind: 'ok', text: '已複製連結＋說明，可貼到 LINE' }), () => undefined)}>複製連結＋說明</button>}
                       {p.linkCode && <a className="btn" href={`/t/${p.linkCode}`} target="_blank" rel="noreferrer">開他的劃位頁</a>}
+                      {p.status === 'cancelled' && <>
+                        <button className="btn pri" disabled={busy} onClick={() => confirm2(`rs${p.id}`, async () => { const r = await act({ action: 'preorder.restore', id: p.id, notify: true }) as { warn: string } | null; if (r) setMsg({ kind: r.warn ? 'warn' : 'ok', text: `已恢復 ${p.no}，並寄信告知「取消是誤發」${r.warn ? `。注意：${r.warn}` : ''}` }); })}>
+                          {sure === `rs${p.id}` ? '再按一次：恢復並寄信道歉' : '恢復登記（寄信告知取消是誤發）'}</button>
+                        <button className="btn" disabled={busy} onClick={() => confirm2(`rn${p.id}`, async () => { const r = await act({ action: 'preorder.restore', id: p.id, notify: false }) as { warn: string } | null; if (r) setMsg({ kind: r.warn ? 'warn' : 'ok', text: `已恢復 ${p.no}（沒寄信）${r.warn ? `。注意：${r.warn}` : ''}` }); })}>
+                          {sure === `rn${p.id}` ? '再按一次：恢復，不寄信' : '恢復登記（不寄信）'}</button>
+                      </>}
                       {p.status === 'submitted' && <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消 ${p.no}${p.source === 'form' ? '' : '，並寄信通知'}`)) setOpenId(null); })}>
                         {sure === `pc${p.id}` ? '再按一次確認取消' : '取消'}</button>}
                     </div>

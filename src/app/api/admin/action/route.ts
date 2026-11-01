@@ -11,7 +11,7 @@ import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '
 import { rememberOrigin } from '@/lib/push';
 import { requestUpdate } from '@/lib/updater';
 import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
-import { setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
+import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -89,6 +89,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.resendReceived'), id }),
   z.object({ action: z.literal('app.update') }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
+  z.object({ action: z.literal('preorder.restore'), id, notify: z.boolean() }),
   z.object({ action: z.literal('preorder.remits'), id, remits: z.array(z.unknown()).max(5) }),
   z.object({ action: z.literal('preorder.checkMany'), ids: z.array(z.number().int().positive()).max(2000), paid: z.boolean() }),
   z.object({ action: z.literal('bank.import'), grid: z.array(z.array(z.union([z.string().max(200), z.number(), z.null()])).max(40)).max(5000) }),
@@ -215,6 +216,7 @@ export async function POST(req: Request) {
         return { email: r.email, status: n?.status, error: n?.error };
       }
       case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
+      case 'preorder.restore': { const r = await restorePreorder(db, who, a.id, a.notify); if (a.notify) dispatchQueued(db).catch(() => undefined); return r; }
       case 'preorder.remits': return setPreorderRemits(db, who, a.id, a.remits);
       case 'preorder.checkMany': return checkPaidMany(db, who, a.ids, a.paid);
       case 'bank.import': return importBank(db, who, a.grid);

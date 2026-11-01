@@ -127,3 +127,26 @@ describe('匯入、勾已匯款、補填後五碼', () => {
     expect((await listPreorders(db))[0].paidOkAt).toBeNull();
   });
 });
+
+describe('誤按取消：恢復', () => {
+  it('恢復回待核帳、備註留紀錄；可選擇寄更正信', async () => {
+    const db = await createPgliteDb();
+    await seedVenue(db);
+    await createEvent(db, { name: '祈福法會', showAt: new Date('2026-12-20T19:30:00+08:00'), bankName: '台灣銀行', bankAccount: '123-456', accountName: '主辦' });
+    const combo2 = (await db.select().from(t.combo)).find((c) => c.name === '雙人套票')!.id;
+    await A.publish(db, 'admin');
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await submitPreorder(db, { items: [{ kind: 'combo', id: combo2, qty: 1 }], name: '林大同', phone: '0912345678', email: 'lin@example.com', paidAmount: 6080, last5: '22222', agree: true });
+    const [p] = await listPreorders(db);
+    const { cancelPreorder, restorePreorder } = await import('@/lib/preorder');
+    await expect(restorePreorder(db, 'boss', p.id, true)).rejects.toThrow('沒有取消');
+    await cancelPreorder(db, 'boss', p.id);
+    await restorePreorder(db, 'boss', p.id, true);
+    const [q] = await listPreorders(db);
+    expect(q.status).toBe('submitted');
+    expect(q.note).toMatch(/boss 取消[\s\S]*boss 恢復/);
+    const n = (await db.select().from(t.notification)).at(-1)!;
+    expect(n).toMatchObject({ template: 'preorder_restored', recipient: 'lin@example.com' });
+    expect(n.content).toContain('仍然有效');
+  });
+});

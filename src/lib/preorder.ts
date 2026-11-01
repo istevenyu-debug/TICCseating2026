@@ -568,12 +568,33 @@ export async function cancelPreorder(db: Db, actor: string, id: number, reason =
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
   if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
   if (po.status !== 'submitted') throw new BookingError('INVALID', '只有待確認的訂單可以取消');
-  await db.update(t.preorder).set({ status: 'cancelled', note: reason, seenAt: po.seenAt ?? new Date() }).where(eq(t.preorder.id, id));
+  const stamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const note = `${po.note ? `${po.note}\n` : ''}${stamp} ${actor} 取消${reason ? `：${reason}` : ''}`.slice(-1000);
+  await db.update(t.preorder).set({ status: 'cancelled', note, seenAt: po.seenAt ?? new Date() }).where(eq(t.preorder.id, id));
   if (po.source !== 'form') await db.insert(t.notification).values({
     channel: 'email', template: 'preorder_cancelled', recipient: po.email,
     content: `【${ev.name}】${po.name} 您好，您的認購登記 ${po.no} 已取消${reason ? `（${reason}）` : ''}。如有疑問或已匯款，請聯繫主辦方。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_cancel', target: `preorder:${id}`, detail: JSON.stringify({ reason }) });
+}
+
+/** 恢復誤按取消的登記（回到待核帳，順位不變）；可選擇寄「登記已恢復」信 */
+export async function restorePreorder(db: Db, actor: string, id: number, notify: boolean) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.status !== 'cancelled') throw new BookingError('INVALID', '這張訂單沒有取消');
+  const stamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const note = `${po.note ? `${po.note}\n` : ''}${stamp} ${actor} 恢復（取消前的狀態）`.slice(-1000);
+  await db.update(t.preorder).set({ status: 'submitted', note }).where(eq(t.preorder.id, id));
+  if (notify && po.source !== 'form' && po.email) await db.insert(t.notification).values({
+    channel: 'email', template: 'preorder_restored', recipient: po.email,
+    content: `【${ev.name}】${po.name} 您好，先前寄給您的「認購登記 ${po.no} 已取消」通知是我們作業疏失，非常抱歉。您的登記（${itemsText(po.items)}）仍然有效，順序不變，請不用重新登記。主辦方確認款項、並依登記順序輪到您時，會寄出劃位通知。`,
+  });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_restore', target: `preorder:${id}`, detail: JSON.stringify({ notify }) });
+  const cap = await capacityOf(db);
+  const over = po.waitlist ? [] : po.items.filter((i) => i.kind === 'combo' && cap[i.id] && cap[i.id].used > cap[i.id].limit).map((i) => `${i.name} 已超過名額（${cap[i.id].used}／${cap[i.id].limit}）`);
+  return { warn: over.join('；') };
 }
 
 export async function markPreorderSeen(db: Db, id: number) {
