@@ -10,7 +10,7 @@
  * .data（資料庫）、.env.local（帳密、通道代碼）、備份、node_modules 完全不動。
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const isWin = process.platform === 'win32';
@@ -70,6 +70,13 @@ function placeProgram(from, to) {
   }
 }
 
+/** 刪暫存區前先拆掉 node_modules 連結（只拆連結，不碰真正的 node_modules） */
+function dropDir(d) {
+  const nm = path.join(d, 'node_modules');
+  try { unlinkSync(nm); } catch { try { rmdirSync(nm); } catch { /* 沒有連結 */ } }
+  rmSync(d, { recursive: true, force: true });
+}
+
 const deps = (dir) => { try { const p = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')); return JSON.stringify([p.dependencies, p.devDependencies]); } catch { return ''; } };
 
 /**
@@ -82,7 +89,7 @@ export async function runUpdate({ root, stopWeb, startWeb, setStatus, zipUrl = `
   const from = versionOf(root);
   mkdirSync(P.dir, { recursive: true });
   writeFileSync(P.log, `== 更新開始 ${new Date().toISOString()}（目前 ${from}）\n`);
-  for (const d of [x, stage]) rmSync(d, { recursive: true, force: true });
+  for (const d of [x, stage]) dropDir(d);
 
   // 1. 下載
   setStatus('download', { from });
@@ -142,7 +149,7 @@ export async function runUpdate({ root, stopWeb, startWeb, setStatus, zipUrl = `
     await startWeb();
     throw e;
   }
-  for (const d of [x, stage]) rmSync(d, { recursive: true, force: true });
+  for (const d of [x, stage]) dropDir(d);
   rmSync(zip, { force: true });
   return { from, to, same: false };
 }

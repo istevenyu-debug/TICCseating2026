@@ -84,7 +84,7 @@ const waitUp = async (sec) => {
   return false;
 };
 const startWeb = async () => {
-  web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, env: { ...process.env, ...env, ...(fixedUrl ? { PUBLIC_BASE_URL: fixedUrl } : {}) } });
+  web = spawn(npx, ['next', 'start', '-p', String(PORT)], { stdio: 'inherit', shell: isWin, detached: !isWin, env: { ...process.env, ...env, ...(fixedUrl ? { PUBLIC_BASE_URL: fixedUrl } : {}) } });
   web.on('exit', (c) => {
     if (updating) return; // 更新中由更新程式自己停、自己開
     console.log(`網站已停止（${c}）`); tunnel?.kill(); process.exit(c ?? 0);
@@ -140,7 +140,7 @@ setTimeout(() => { if (!shown) console.log('\n⚠ 30 秒內沒有取得網址。
 const killTree = (p) => {
   if (!p.pid) return;
   if (isWin) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
-  else p.kill();
+  else { try { process.kill(-p.pid, 'SIGKILL'); } catch { p.kill(); } } // 網站以獨立程序群組啟動：整組停掉
 };
 const stop = () => { killTree(tunnel); if (web) killTree(web); process.exit(0); };
 process.on('exit', () => { killTree(tunnel); if (web) killTree(web); });
