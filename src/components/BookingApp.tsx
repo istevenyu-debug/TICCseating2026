@@ -210,7 +210,7 @@ export default function BookingApp({ code }: { code: string }) {
       }
       if (next.size + members.length > limit) {
         const why = limit < st!.canBuy
-          ? (limit > 0 ? `您贊助的「${cur?.isSingle ? '單席' : cur?.name}」還可劃 ${limit} 位` : '您贊助的座位已經全部劃完了')
+          ? (limit > 0 ? `您認購的「${cur?.isSingle ? '單席' : cur?.name}」還可劃 ${limit} 位` : '您認購的座位已經全部劃完了')
           : (limit > 0 ? `此連結最多可再劃 ${limit} 席` : '此連結的可劃席數已用完');
         setMsg({ kind: 'err', text: `${why}${limit > 0 && members.length > 1 ? `（這組連座為 ${members.length} 位）` : ''}。` });
         return prev;
@@ -358,14 +358,14 @@ export default function BookingApp({ code }: { code: string }) {
           <h2>第一步：選擇方案</h2>
           {paid ? (
             <div className={`note ${paid.done ? 'warn' : 'ok'} small`} style={{ margin: '0 0 8px' }}>
-              您的贊助方案：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}>
+              您的認購方案：{paid.rows.map((r) => <span key={`${r.kind}${r.id}`} style={{ display: 'block' }}>
                 {r.left <= 0 ? '✓ ' : '・'}<b>{r.name} × {r.qty}</b>（{r.left <= 0 ? '已劃完' : <>已劃 {r.used}，還可劃 <b>{r.left}</b> {r.unit}</>}）</span>)}
-              {paid.done ? '您贊助的座位都已經劃完了。'
+              {paid.done ? '您認購的座位都已經劃完了。'
                 : paid.rows.length > 1
                   ? <b style={{ display: 'block', marginTop: 4 }}>您買了 {paid.rows.length} 種，請一種一種劃：下面先選一種方案 → 選位 → 送出，完成後再回來選下一種。</b>
                   : '已幫您選好方案，直接在座位圖上選位即可。'}
             </div>
-          ) : st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您的贊助方案：<b>{st.prefill.bought}</b>。已幫您選好方案，直接在座位圖上選位即可。</p>}
+          ) : st.prefill.bought && <p className="note ok small" style={{ margin: '0 0 8px' }}>您的認購方案：<b>{st.prefill.bought}</b>。已幫您選好方案，直接在座位圖上選位即可。</p>}
           <div className="combos">
             {combosShown.map((c) => {
               const soldOut = (c.limitSets > 0 && c.usedSets >= c.limitSets) || (!!paid && !c.isSingle && (paidCombo(c.id)?.left ?? 0) <= 0) || (!!paid && c.isSingle && !paidZones.length);

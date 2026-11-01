@@ -34,13 +34,13 @@ export async function preorderMenuFull(db: Db) {
     ...combos.map((c) => {
       // 白話：一組＝付哪幾張＋送哪幾張（送的票種＝票價 0）
       const isGift = (zid: number) => zones.find((z) => z.id === zid)?.price === 0;
-      const buy = c.items.filter((i) => !isGift(i.zoneId)).map((i) => `贊助${zoneName(i.zoneId)} ${i.qty} 席`);
+      const buy = c.items.filter((i) => !isGift(i.zoneId)).map((i) => `認購${zoneName(i.zoneId)} ${i.qty} 席`);
       const gift = c.items.filter((i) => isGift(i.zoneId)).map((i) => `致贈${zoneName(i.zoneId)} ${i.qty} 席${i.qty > 1 ? '（座位相連）' : ''}`);
       const auto = [...buy, ...gift].join('，');
       return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: c.description.trim() || auto, unit: '份', zoneIds: c.items.map((i) => i.zoneId) };
     }),
     ...(singleOpen ? zones.filter((z) => pub.zoneIds.includes(z.id) && z.price > 0).sort((a, b) => a.sort - b.sort)
-      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `贊助${z.name} 1 席`, unit: '席', zoneIds: [z.id] })) : []),
+      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `認購${z.name} 1 席`, unit: '席', zoneIds: [z.id] })) : []),
   ];
   return {
     invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
@@ -85,23 +85,23 @@ const submitBody = z.object({
 });
 
 /* ---------- 預購單的系統設定（後台可改） ---------- */
-export const DEFAULT_INTRO = `感謝您慷慨贊助古儒吉蒞臨台灣的活動行程。
+export const DEFAULT_INTRO = `古儒吉蒞臨台灣的活動行程。
 我們誠摯邀請您以尊榮貴賓的身份蒞臨出席 2026/12/9（週三）晚上，古儒吉於台北國際會議中心的大師課程（Master Class）。
 主題：「萬變中 喚醒不變的力量」
 我們為您保留「尊榮席」專屬席位，一同參與這場盛會。
 
-## 贊助流程
+## 認購流程
 1. 認席位：選擇尊榮席或感恩席。
-2. 填個資：填寫您的匯款帳號後五碼與贊助金額。
+2. 填個資：填寫您的匯款帳號後五碼與認購金額。
 3. 勾發票：勾選發票開立需求。
-4. 送出贊助單：確認內容無誤後送出。
+4. 送出認購單：確認內容無誤後送出。
 5. 收確認：畫面與 Email 會回覆已收到，並附上匯款帳戶。
 6. 匯款：依指示完成款項匯出。
 
 ## 劃位順序說明
-1. 系統將依您送出本贊助登記的先後順序進行劃位。
+1. 系統將依您送出本認購登記的先後順序進行劃位。
 2. 主辦方於確認匯款入帳後，將依序通知您劃位。
-3. 若尚未完成匯款，劃位順序將順延給下一位已完成流程的贊助者。
+3. 若尚未完成匯款，劃位順序將順延給下一位已完成流程的認購者。
 4. 輪到您劃位時，專屬劃位連結將寄送至您的 Email，主辦方亦可能透過電話或 LINE 主動與您聯繫。`;
 
 export async function getPreorderSettings(db: Db) {
@@ -167,10 +167,10 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   const items: t.PreorderItem[] = [];
   for (const it of p.data.items.filter((x) => x.qty > 0)) {
     const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
-    if (!m) throw new BookingError('INVALID', '贊助方案已變更，請重新整理頁面。');
+    if (!m) throw new BookingError('INVALID', '認購方案已變更，請重新整理頁面。');
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
-  if (!items.length) throw new BookingError('INVALID', '請至少選擇一項贊助方案');
+  if (!items.length) throw new BookingError('INVALID', '請至少選擇一項認購方案');
   const remits = p.data.remits?.length ? p.data.remits : [{ last5: p.data.last5, amount: p.data.paidAmount }];
   for (const r of remits) {
     if (!/^\d{5}$/.test(r.last5)) throw new BookingError('INVALID', '匯款帳號末 5 碼應為 5 位數字');
@@ -195,7 +195,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   const waitlist = states.some((x) => x.st === 'waitlist');
   // 金額與數量不相當：先提醒，買方確認後才送出（不告訴他應付多少）
   const amount0 = items.reduce((a, x) => a + x.price * x.qty, 0);
-  if (paidAmount !== amount0 && !p.data.confirmMismatch) throw new BookingError('AMOUNT_MISMATCH', '贊助金額與贊助數量不相當，請檢查確認後，再按送出。');
+  if (paidAmount !== amount0 && !p.data.confirmMismatch) throw new BookingError('AMOUNT_MISMATCH', '認購金額與認購數量不相當，請檢查確認後，再按送出。');
   rateLimit(ip, now.getTime(), ps.rateLimit);
   // 手機條碼、愛心碼、統編：送出前先向綠界確認，確定錯的請訂購人改正
   if (menu.invoice) {
@@ -399,15 +399,15 @@ export async function releasePreorder(db: Db, actor: string, id: number, keys: s
 }
 
 /** 改 Email（買方打錯時）；已發過劃位連結的，可以順便補寄一封到新信箱 */
-/** 「已收到您的贊助登記」確認信內容（送出時與後台補寄共用；不含金額） */
+/** 「已收到您的認購登記」確認信內容（送出時與後台補寄共用；不含金額） */
 function receivedText(ev: { name: string; bankName: string; bankAccount: string; accountName: string }, name: string, no: string, items: t.PreorderItem[], wait: number | null, again = false) {
   const tag = again ? '（補寄）' : '';
   return wait
-    ? `【${ev.name}】${name} 您好，已收到您的贊助登記 ${no}${tag}：${itemsText(items)}。目前為候補第 ${wait} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
-    : `【${ev.name}】${name} 您好，已收到您的贊助登記 ${no}${tag}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`;
+    ? `【${ev.name}】${name} 您好，已收到您的認購登記 ${no}${tag}：${itemsText(items)}。目前為候補第 ${wait} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
+    : `【${ev.name}】${name} 您好，已收到您的認購登記 ${no}${tag}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`;
 }
 
-/** 後台補寄「已收到您的贊助登記」確認信，寄到這筆訂單目前的 Email */
+/** 後台補寄「已收到您的認購登記」確認信，寄到這筆訂單目前的 Email */
 export async function resendReceived(db: Db, actor: string, id: number) {
   const ev = await currentEvent(db);
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
@@ -448,7 +448,7 @@ export async function cancelPreorder(db: Db, actor: string, id: number, reason =
   await db.update(t.preorder).set({ status: 'cancelled', note: reason, seenAt: po.seenAt ?? new Date() }).where(eq(t.preorder.id, id));
   if (po.source !== 'form') await db.insert(t.notification).values({
     channel: 'email', template: 'preorder_cancelled', recipient: po.email,
-    content: `【${ev.name}】${po.name} 您好，您的贊助登記 ${po.no} 已取消${reason ? `（${reason}）` : ''}。如有疑問或已匯款，請聯繫主辦方。`,
+    content: `【${ev.name}】${po.name} 您好，您的認購登記 ${po.no} 已取消${reason ? `（${reason}）` : ''}。如有疑問或已匯款，請聯繫主辦方。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_cancel', target: `preorder:${id}`, detail: JSON.stringify({ reason }) });
 }

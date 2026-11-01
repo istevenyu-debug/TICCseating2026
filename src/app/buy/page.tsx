@@ -10,12 +10,12 @@ export async function generateMetadata() {
   const { getPreorderSettings } = await import('@/lib/preorder');
   const intro = (await getPreorderSettings(db)).intro;
   const first = intro.split(/\n\s*\n/)[0].split('\n').filter((x) => x.trim() && !x.startsWith('##')).join(' ');
-  const title = ev ? `【${ev.name}】贊助登記` : '贊助登記';
-  const description = (first || '感謝您的護持，請點此選擇贊助方案並完成登記。').slice(0, 150);
-  return { title, description, openGraph: { title, description, type: 'website', locale: 'zh_TW', siteName: ev?.name ?? '贊助登記' } };
+  const title = ev ? `【${ev.name}】認購登記` : '認購登記';
+  const description = (first || '感謝您的護持，請點此選擇認購方案並完成登記。').slice(0, 150);
+  return { title, description, openGraph: { title, description, type: 'website', locale: 'zh_TW', siteName: ev?.name ?? '認購登記' } };
 }
 
-/** 預購單關閉時不轉到別處：留在本頁，顯示活動說明與「目前尚未開放贊助登記」 */
+/** 預購單關閉時不轉到別處：留在本頁，顯示活動說明與「目前尚未開放認購登記」 */
 export default function BuyPage() {
   return <PreorderApp />;
 }

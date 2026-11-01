@@ -4,7 +4,7 @@ export const normalizePhone = (s: string) => s.replace(/[\s-]/g, '');
 
 /** 持票人自動編號（例如功德組）：第 1 張為本名＋證末4碼01，之後為「姓名02」「證末4碼02」…依序 */
 export function autoHolders(buyerName: string, idBase: string, count: number, start = 0) {
-  // start：這位贊助者之前已劃的席數。分好幾次劃（例如尊榮席、金區各一次）時接著編號，名字不會重複
+  // start：這位認購者之前已劃的席數。分好幾次劃（例如尊榮席、金區各一次）時接著編號，名字不會重複
   const w = Math.max(2, String(count + start).length);
   const name = buyerName.trim();
   const base = idBase.trim().toUpperCase();

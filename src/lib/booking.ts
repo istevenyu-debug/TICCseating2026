@@ -367,15 +367,15 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
       const paidText = ent.rows.map((r) => `${r.name} × ${r.qty}`).join('、');
       if (!cb.isSingle) {
         const e = ent.rows.find((r) => r.kind === 'combo' && r.id === cb.id);
-        if (!e) throw new BookingError('PAID', `您贊助的是「${paidText}」，請用這個方案劃位。`);
-        if (sets > e.left) throw new BookingError('PAID', e.left > 0 ? `您贊助的「${e.name}」還可劃 ${e.left} 份，這次選了 ${sets} 份，請減少座位。` : `您贊助的「${e.name}」已經全部劃完了。`);
+        if (!e) throw new BookingError('PAID', `您認購的是「${paidText}」，請用這個方案劃位。`);
+        if (sets > e.left) throw new BookingError('PAID', e.left > 0 ? `您認購的「${e.name}」還可劃 ${e.left} 份，這次選了 ${sets} 份，請減少座位。` : `您認購的「${e.name}」已經全部劃完了。`);
       } else {
         const count = new Map<number, number>();
         valid.forEach((r) => count.set(r.zoneId, (count.get(r.zoneId) ?? 0) + 1));
         for (const [z, n] of count) {
           const e = ent.rows.find((r) => r.kind === 'zone' && r.id === z);
-          if (!e) throw new BookingError('PAID', `「${zoneName(z)}」不在您贊助的方案（${paidText}）裡。`);
-          if (n > e.left) throw new BookingError('PAID', e.left > 0 ? `您贊助的「${e.name}」還可劃 ${e.left} 席，這次選了 ${n} 席，請減少座位。` : `您贊助的「${e.name}」已經全部劃完了。`);
+          if (!e) throw new BookingError('PAID', `「${zoneName(z)}」不在您認購的方案（${paidText}）裡。`);
+          if (n > e.left) throw new BookingError('PAID', e.left > 0 ? `您認購的「${e.name}」還可劃 ${e.left} 席，這次選了 ${n} 席，請減少座位。` : `您認購的「${e.name}」已經全部劃完了。`);
         }
       }
     }
