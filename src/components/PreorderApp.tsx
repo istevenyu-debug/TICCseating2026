@@ -15,6 +15,7 @@ type Menu = {
   invoice: boolean;
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
   intro: string;
+  flowImage: string | null;
   items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[]; status: 'open' | 'waitlist' | 'full' }[];
   map: { vipInstalled: boolean; seats: Seat[]; zones: { id: number; name: string; color: string; gift: boolean }[] } | null;
 };
@@ -205,6 +206,12 @@ export default function PreorderApp() {
       <h1>{menu.event.name}</h1>
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
       <Intro text={menu.intro} />
+      {menu.flowImage && (
+        <a href={menu.flowImage} target="_blank" rel="noreferrer" style={{ display: 'block', margin: '8px 0 4px' }}>
+          <img src={menu.flowImage} alt="贊助流程圖" style={{ width: '100%', borderRadius: 8, border: '1px solid var(--line)', display: 'block' }} />
+          <span className="small muted">點圖可開啟大圖、放大查看</span>
+        </a>
+      )}
     </div>
   );
 
@@ -214,7 +221,18 @@ export default function PreorderApp() {
         <div className="card" style={{ borderTop: '4px solid var(--ok)' }}>
           {done.waitlist
             ? <><h2>🙏 已收到您的登記（{done.no}）</h2><p>目前為<b>候補第 {done.waitlist} 位</b>。有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。</p></>
-            : <><h2>🙏 已收到您的贊助登記（{done.no}）</h2><p>感恩您的護持。主辦方確認款項、並依登記順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p></>}
+            : <><h2>🙏 已收到您的贊助登記（{done.no}）</h2><p>感恩您的護持。<b>請依下方帳戶完成匯款</b>。主辦方確認款項、並依登記順序輪到您時，會把專屬劃位連結寄到 <b>{f.email.trim()}</b>，請留意信箱。</p></>}
+          {!done.waitlist && <div className="note" style={{ margin: '8px 0' }}>
+            <b>匯款帳戶</b>
+            <div className="bank" style={{ marginTop: 6 }}>
+              <span className="muted">銀行</span><span>{menu.event.bankName || '（主辦方尚未設定）'}</span>
+              <span className="muted">帳號</span><span className="mono">{menu.event.bankAccount}</span>
+              <span className="muted">戶名</span><span>{menu.event.accountName}</span>
+            </div>
+            <button type="button" className="btn small" style={{ marginTop: 6 }} disabled={!menu.event.bankAccount}
+              onClick={() => navigator.clipboard?.writeText(menu.event.bankAccount.replace(/-/g, '')).catch(() => undefined)}>複製帳號</button>
+            <div className="small muted" style={{ marginTop: 4 }}>匯款帳戶也已寫在確認信裡。</div>
+          </div>}
           <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
           <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到登記進度。如需修改或取消，請聯繫主辦方並提供登記編號 {done.no}。</p>
         </div>
@@ -231,7 +249,7 @@ export default function PreorderApp() {
       {head}
       <MyPreorders mine={mine} reload={reload} />
       {restored && !review && lines.length > 0 && (
-        <div className="note ok">歡迎回來，您上次選的是 <b>{lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}</b>。匯好了嗎？請在下面填帳號後五碼送出。
+        <div className="note ok">歡迎回來，您上次選的是 <b>{lines.map((i) => `${i.name} × ${qty[key(i)]}`).join('、')}</b>。請在下面繼續填寫資料並送出。
           <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => { clearDraft(); location.reload(); }}>清除重填</button></div>
       )}
 
@@ -325,18 +343,7 @@ export default function PreorderApp() {
             </div>
           )}
           <div className="card">
-            <h2>{lineGroups.length ? '三' : '二'}、完成匯款</h2>
-            <div className="bank">
-              <span className="muted">銀行</span><span>{menu.event.bankName || '（主辦方尚未設定）'}</span>
-              <span className="muted">帳號</span><span className="mono">{menu.event.bankAccount}</span>
-              <span className="muted">戶名</span><span>{menu.event.accountName}</span>
-            </div>
-            <button type="button" className="btn small" style={{ marginTop: 6 }} disabled={!menu.event.bankAccount}
-              onClick={() => navigator.clipboard?.writeText(menu.event.bankAccount.replace(/-/g, '')).catch(() => undefined)}>複製帳號</button>
-          </div>
-
-          <div className="card">
-            <h2>{lineGroups.length ? '四' : '三'}、填寫回報資料</h2>
+            <h2>{lineGroups.length ? '三' : '二'}、填寫贊助資料</h2>
             <label className="f">姓名（與身分證相同）<input id="p-name" value={f.name} autoComplete="name" onChange={(e) => upd({ name: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
               <label className="f">手機<input id="p-phone" value={f.phone} maxLength={13} inputMode="tel" autoComplete="tel" placeholder="09xxxxxxxx"
@@ -347,7 +354,7 @@ export default function PreorderApp() {
             </div>
             <label className="f" style={{ marginTop: 8 }}>LINE 顯示名稱（選填，方便主辦方在群裡找到您）<input value={f.lineName} maxLength={40} onChange={(e) => upd({ lineName: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
-              <label className="f">匯款帳號後五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
+              <label className="f">您的匯款帳號後五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
               <label className="f">贊助金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
             </div>
             {extra.map((r, n) => (

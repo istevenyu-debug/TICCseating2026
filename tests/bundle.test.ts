@@ -82,7 +82,7 @@ describe('贈票（票價 0）', () => {
     const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
     const s = await getBookingState(db, 'AAA111', T0);
     const g = s.seats.find((x) => x.zoneId === gift && x.status === 'free')!.id;
-    await expect(holdSeats(db, 'AAA111', [g], single, T0)).rejects.toThrow('只能以組合票');
+    await expect(holdSeats(db, 'AAA111', [g], single, T0)).rejects.toThrow('只能隨贊助方案');
   });
   it('票價 0 的票種若沒有開放的組合票包含它，不能發布', async () => {
     await A.updateCombo(db, 'admin', merit, { active: false });

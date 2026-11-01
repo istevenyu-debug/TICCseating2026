@@ -9,7 +9,7 @@ import * as t from '@/db/schema';
 import type { Db } from '@/db/client';
 import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '@/lib/notify';
 import { rememberOrigin } from '@/lib/push';
-import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, setPreorderSettings, promoteWaitlist } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
@@ -83,6 +83,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('preorder.email'), id, email: z.string().max(120), resend: z.boolean().optional() }),
   z.object({ action: z.literal('preorder.settings'), rateLimit: z.number().int().min(1).max(10000).optional(), waitlistCap: z.number().int().min(0).max(1000).optional(), intro: z.string().max(5000).optional() }),
   z.object({ action: z.literal('preorder.promote'), id }),
+  z.object({ action: z.literal('preorder.flowImage'), dataUrl: z.string().max(4_000_000).nullable() }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
   z.object({ action: z.literal('preorder.items'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30) }),
   z.object({ action: z.literal('preorder.release'), id, keys: z.array(z.string().regex(/^(combo|zone):\d+$/)).min(1).max(30) }),
@@ -195,6 +196,7 @@ export async function POST(req: Request) {
       }
       case 'preorder.settings': return setPreorderSettings(db, who, { rateLimit: a.rateLimit, waitlistCap: a.waitlistCap, intro: a.intro });
       case 'preorder.promote': return promoteWaitlist(db, who, a.id);
+      case 'preorder.flowImage': return setFlowImage(db, who, a.dataUrl);
       case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
       case 'preorder.items': return setPreorderItems(db, who, a.id, a.items);
       case 'preorder.release': {

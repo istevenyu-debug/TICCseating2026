@@ -219,6 +219,11 @@ export function mailLayout(o: { ev: string; title: string; greet?: string; paras
   const p = (x: string) => {
     const m = x.match(/^(您選的座位|劃位成功)[：:](.+?)。?$/);
     if (m && m[2].includes('、')) return `<p style="margin:0 0 6px;font-weight:700">${esc(m[1])}</p><table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;width:100%;border:1px solid ${C.line};border-radius:8px;background:#fbfaf6">${m[2].split('、').map((it) => `<tr><td style="padding:8px 14px;border-bottom:1px solid ${C.line}">${esc(it)}</td></tr>`).join('')}</table>`;
+    const b = x.match(/^請依以下帳戶完成匯款[：:](.+?)\s*帳號\s*(\S+?)，戶名\s*(.+?)。?$/);
+    if (b) return `<p style="margin:0 0 6px;font-weight:700">請依以下帳戶完成匯款</p><table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;width:100%;border:1px solid ${C.line};border-radius:8px;background:#fbfaf6">
+      <tr><td style="padding:8px 14px;color:${C.muted};width:60px">銀行</td><td style="padding:8px 14px">${esc(b[1])}</td></tr>
+      <tr><td style="padding:8px 14px;color:${C.muted}">帳號</td><td style="padding:8px 14px;font-size:17px;font-weight:700;letter-spacing:1px">${esc(b[2])}</td></tr>
+      <tr><td style="padding:8px 14px;color:${C.muted}">戶名</td><td style="padding:8px 14px">${esc(b[3])}</td></tr></table>`;
     return `<p style="margin:0 0 12px">${esc(x)}</p>`;
   };
   return `<!doctype html><html><body style="margin:0;padding:0;background:${C.bg}">

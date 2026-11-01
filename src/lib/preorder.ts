@@ -59,7 +59,8 @@ export async function preorderMenu(db: Db) {
   const { publicSeatMap } = await import('./booking');
   const cap = await capacityOf(db);
   const ps = await getPreorderSettings(db);
-  return { ...m, intro: ps.intro, items: m.items.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
+  const fi = await getFlowImage(db);
+  return { ...m, intro: ps.intro, flowImage: fi ? `/api/buy/flow-image?v=${fi.ver}` : null, items: m.items.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
 }
 
 const submitBody = z.object({
@@ -90,11 +91,12 @@ export const DEFAULT_INTRO = `感謝您慷慨贊助古儒吉蒞臨台灣的活�
 我們為您保留「尊榮席」專屬席位，一同參與這場盛會。
 
 ## 贊助流程
-1. 確認贊助方案：請確認您欲贊助的席次項目與數量。
-2. 完成匯款：請至銀行臨櫃或使用網銀 App 完成匯款轉帳。
-3. 填寫回報資料：回到本頁面，填寫您的轉帳帳號後五碼與聯絡資訊後送出。
-
-小提醒：前往匯款時會暫時離開本頁面，請不必擔心。只要使用同一支手機與相同的開啟方式重新打開連結，您先前選擇與填寫的資料都會完整保留。
+1. 認席位：選擇尊榮席或感恩席。
+2. 填個資：填寫您的匯款帳號後五碼與贊助金額。
+3. 勾發票：勾選發票開立需求。
+4. 送出贊助單：確認內容無誤後送出。
+5. 收確認：畫面與 Email 會回覆已收到，並附上匯款帳戶。
+6. 匯款：依指示完成款項匯出。
 
 ## 劃位順序說明
 1. 系統將依您送出本贊助登記的先後順序進行劃位。
@@ -108,6 +110,26 @@ export async function getPreorderSettings(db: Db) {
   const num = (x: string | undefined, d: number) => (x !== undefined && /^\d+$/.test(x) ? parseInt(x) : d);
   return { rateLimit: num(v('preorder.rateLimit'), 100), waitlistCap: num(v('preorder.waitlistCap'), 5), intro: v('preorder.intro') ?? DEFAULT_INTRO, defaultIntro: DEFAULT_INTRO };
 }
+/** 預購單的流程說明圖（後台上傳，選用）：存成 data URL */
+const FLOW_KEY = 'preorder.flowImage';
+export async function getFlowImage(db: Db) {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, FLOW_KEY));
+  const m = r?.value.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);
+  if (!m) return null;
+  let h = 0; for (let i = 0; i < m[2].length; i += 97) h = (h * 31 + m[2].charCodeAt(i)) % 99991;
+  return { type: m[1], data: Buffer.from(m[2], 'base64'), ver: `${h}-${m[2].length}` };
+}
+export async function setFlowImage(db: Db, actor: string, dataUrl: string | null) {
+  if (dataUrl === null) {
+    await db.delete(t.appSetting).where(eq(t.appSetting.key, FLOW_KEY));
+  } else {
+    if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(dataUrl)) throw new BookingError('INVALID', '圖片格式不支援，請用 JPG 或 PNG');
+    if (dataUrl.length > 4_000_000) throw new BookingError('INVALID', '圖片太大，請縮小到 3 MB 以下');
+    await db.insert(t.appSetting).values({ key: FLOW_KEY, value: dataUrl }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: dataUrl } });
+  }
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_flow_image', target: 'app_setting', detail: dataUrl ? '上傳' : '移除' });
+}
+
 export async function setPreorderSettings(db: Db, actor: string, x: { rateLimit?: number; waitlistCap?: number; intro?: string }) {
   const put = async (key: string, value: string) => db.insert(t.appSetting).values({ key, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
   if (x.rateLimit !== undefined) await put('preorder.rateLimit', String(Math.max(1, Math.min(10000, Math.round(x.rateLimit)))));
@@ -195,7 +217,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
         channel: 'email', template: 'preorder_received', recipient: row.email,
         content: waitlist
           ? `【${ev.name}】${row.name} 您好，已收到您的贊助登記 ${no}：${itemsText(items)}。目前為候補第 ${await waitPos(db, row.id)} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
-          : `【${ev.name}】${row.name} 您好，已收到您的贊助登記 ${no}：${itemsText(items)}，感恩您的護持。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
+          : `【${ev.name}】${row.name} 您好，已收到您的贊助登記 ${no}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
       });
       // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
       return { no, token: viewToken, waitlist: waitlist ? await waitPos(db, row.id) : null }; // 買方看不到金額

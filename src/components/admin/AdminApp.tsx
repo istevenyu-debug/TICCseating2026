@@ -24,7 +24,7 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1393,6 +1393,40 @@ function inviteText(st: State, url: string) {
     '・有任何問題，歡迎直接與我們聯繫 🙏'].join('\n');
 }
 
+/** 預購單的流程說明圖（選用）：上傳後顯示在預購單說明下方，買方點圖可放大 */
+function FlowImageSetting() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const upload = (file: File) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      // 縮到寬 1800 以內、轉成 JPG，檔案小、手機開得快
+      const k = Math.min(1, 1800 / img.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      act({ action: 'preorder.flowImage', dataUrl: c.toDataURL('image/jpeg', 0.86) }, '已上傳流程說明圖，預購單重新整理就會看到');
+    };
+    img.onerror = () => setMsg({ kind: 'err', text: '讀不到這張圖，請用 JPG 或 PNG' });
+    img.src = url;
+  };
+  return (
+    <div>
+      <h3 style={{ margin: '0 0 4px' }}>流程說明圖（選用）</h3>
+      <p className="small muted" style={{ margin: '0 0 6px' }}>上傳後顯示在預購單說明下方，買方點圖可放大。不上傳就不顯示。</p>
+      {st.flowImage && <img src={`/api/buy/flow-image?v=${st.flowImage}`} alt="流程說明圖" style={{ width: '100%', maxWidth: 480, borderRadius: 8, border: '1px solid var(--line)', display: 'block', marginBottom: 6 }} />}
+      <div className="row">
+        <label className="btn small" style={{ cursor: 'pointer' }}>{st.flowImage ? '換一張圖' : '上傳圖片'}
+          <input type="file" accept="image/png,image/jpeg,image/webp" style={{ display: 'none' }} disabled={busy}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} /></label>
+        {st.flowImage && <button className="btn small danger" disabled={busy} onClick={() => confirm2('flowdel', () => act({ action: 'preorder.flowImage', dataUrl: null }, '已移除流程說明圖'))}>{sure === 'flowdel' ? '再按一次確認移除' : '移除'}</button>}
+      </div>
+    </div>
+  );
+}
+
 /** 預購單的系統設定：開頭文字、候補數量、送單上限 */
 function PreorderSettings() {
   const { st, act, busy } = useAdmin();
@@ -1402,7 +1436,8 @@ function PreorderSettings() {
   const [rate, setRate] = useState(String(ps.rateLimit));
   return (
     <div style={{ marginTop: 14 }}>
-      <h3 style={{ margin: '0 0 4px' }}>預購單開頭文字</h3>
+      <FlowImageSetting />
+      <h3 style={{ margin: '14px 0 4px' }}>預購單開頭文字</h3>
       <p className="small muted" style={{ margin: '0 0 6px' }}>顯示在預購單最上面。「## 」開頭的一行是小標題，「1. 」開頭是步驟，空一行就分段。</p>
       <textarea value={intro} rows={12} style={{ width: '100%' }} onChange={(e) => setIntro(e.target.value)} />
       <button className="btn small" style={{ marginTop: 4 }} onClick={() => setIntro(ps.defaultIntro)}>恢復系統預設文字（按了還要按下方「儲存」）</button>
