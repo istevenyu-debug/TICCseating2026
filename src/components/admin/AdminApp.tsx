@@ -1779,7 +1779,7 @@ function Preorders() {
               <Fragment key={p.id}>
                 <tr onClick={() => open(p)} style={{ cursor: 'pointer', fontWeight: p.isNew ? 700 : undefined, ...(filter === 'todo' && !needsCheck(p) ? { background: '#e8f6ec' } : {}) }}>
                   <td className="mono"><b>{p.seq ?? '—'}</b>{p.isNew && <span className="badge">新</span>}<div className="small muted">{p.no}・{tw(p.createdAt)}</div></td>
-                  <td>{p.waitlist && <span className="pill" style={{ background: '#fff3cd', color: '#7a5200', marginRight: 4 }}>候補</span>}{p.name}{p.lineName && <span className="small muted">（LINE：{p.lineName}）</span>}<br /><span className="mono small muted">{p.phone}</span></td>
+                  <td>{p.waitlist && <span className="pill" style={{ background: '#fff3cd', color: '#7a5200', marginRight: 4 }}>候補</span>}{p.name}{p.lineName && <span className="small muted">（LINE：{p.lineName}）</span>}{/買方劃位時改 Email/.test(p.note) && <span className="pill" style={{ background: '#e7f0ff', color: '#1f4e78', marginLeft: 4 }} title={p.note}>買方已改信箱</span>}<br /><span className="mono small muted">{p.phone}</span></td>
                   <td className="small">{p.source === 'form' && <span className="pill" style={{ marginRight: 4 }}>表單</span>}
                     {p.items.length ? p.items.map((i) => <div key={ik(i)}>{p.released.includes(ik(i)) ? '✅ ' : '・'}{i.name} × {i.qty}</div>) : <span className="err-text">請點開設定內容</span>}</td>
                   {p.source === 'form'

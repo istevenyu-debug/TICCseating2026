@@ -142,7 +142,13 @@ describe('劃位連結只能劃付款買的內容', () => {
     const holders = a.slice(0, 4).map((id, i) => ({ seatId: id, name: `持票人${i}`, id4: '12a4' }));
     await submitOrder(db, code, { orderId: h.orderId, buyer: { name: '林大同', phone: '0912345678', email: 'lin@example.com' }, holders, agree: true }, now);
     await expect(holdSeats(db, code, a.slice(4, 6), combo2, now)).rejects.toThrow('已經全部劃完');
-    await expect(holdSeats(db, code, a.slice(4, 5), single, now)).resolves.toBeTruthy();
+    const h2 = await holdSeats(db, code, a.slice(4, 5), single, now);
+    expect(h2).toBeTruthy();
+    // 買方在劃位頁改了 Email：同步到認購登記，備註留紀錄
+    await submitOrder(db, code, { orderId: h2.orderId, buyer: { name: '林大同', phone: '0912345678', email: 'New@Example.com' }, holders: [{ seatId: a[4], name: '持票人4', id4: '' }], agree: true }, now);
+    const [po] = await listPreorders(db);
+    expect(po.email).toBe('New@Example.com');
+    expect(po.note).toContain('買方劃位時改 Email：lin@example.com → New@Example.com');
 
     const s = await A.getAdminState(db, now);
     const lk = s.links.find((l) => l.code === code)!;

@@ -477,6 +477,14 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
       })(),
     });
     await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'submit', target: `order:${order.id}` });
+    // 買方在劃位頁改了 Email：同步到認購登記，之後分批發的劃位連結也寄到新信箱；備註留紀錄給後台看
+    const newEmail = input.buyer.email.trim();
+    const [po] = await tx.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
+    if (po && newEmail && po.email.trim().toLowerCase() !== newEmail.toLowerCase()) {
+      const stamp = now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+      await tx.update(t.preorder).set({ email: newEmail, note: `${po.note ? `${po.note}\n` : ''}${stamp} 買方劃位時改 Email：${po.email} → ${newEmail}` }).where(eq(t.preorder.id, po.id));
+      await tx.insert(t.auditLog).values({ actor: `link:${link.code}`, action: 'preorder_email', target: `preorder:${po.id}`, detail: JSON.stringify({ from: po.email, to: newEmail, by: 'buyer' }) });
+    }
     return { orderNo: order.orderNo!, amount: order.amount };
   });
 }
