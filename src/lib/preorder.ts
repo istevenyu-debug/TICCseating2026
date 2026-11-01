@@ -215,9 +215,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
-        content: waitlist
-          ? `【${ev.name}】${row.name} 您好，已收到您的贊助登記 ${no}：${itemsText(items)}。目前為候補第 ${await waitPos(db, row.id)} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
-          : `【${ev.name}】${row.name} 您好，已收到您的贊助登記 ${no}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`,
+        content: receivedText(ev, row.name, no, items, waitlist ? await waitPos(db, row.id) : null),
       });
       // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
       return { no, token: viewToken, waitlist: waitlist ? await waitPos(db, row.id) : null }; // 買方看不到金額
@@ -401,6 +399,29 @@ export async function releasePreorder(db: Db, actor: string, id: number, keys: s
 }
 
 /** 改 Email（買方打錯時）；已發過劃位連結的，可以順便補寄一封到新信箱 */
+/** 「已收到您的贊助登記」確認信內容（送出時與後台補寄共用；不含金額） */
+function receivedText(ev: { name: string; bankName: string; bankAccount: string; accountName: string }, name: string, no: string, items: t.PreorderItem[], wait: number | null, again = false) {
+  const tag = again ? '（補寄）' : '';
+  return wait
+    ? `【${ev.name}】${name} 您好，已收到您的贊助登記 ${no}${tag}：${itemsText(items)}。目前為候補第 ${wait} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
+    : `【${ev.name}】${name} 您好，已收到您的贊助登記 ${no}${tag}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`;
+}
+
+/** 後台補寄「已收到您的贊助登記」確認信，寄到這筆訂單目前的 Email */
+export async function resendReceived(db: Db, actor: string, id: number) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這張訂單已取消');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(po.email ?? '')) throw new BookingError('INVALID', '這筆訂單沒有正確的 Email，請先按「改 Email」');
+  const wait = po.waitlist ? await waitPos(db, po.id) : null;
+  const [n] = await db.insert(t.notification).values({
+    channel: 'email', template: 'preorder_received', recipient: po.email, content: receivedText(ev, po.name, po.no, po.items, wait, true),
+  }).returning({ id: t.notification.id });
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_resend_received', target: `preorder:${id}`, detail: JSON.stringify({ to: po.email }) });
+  return { notificationId: n.id, email: po.email };
+}
+
 export async function updatePreorderEmail(db: Db, actor: string, id: number, email: string, resend: boolean, base?: string) {
   const ev = await currentEvent(db);
   const e = email.trim();

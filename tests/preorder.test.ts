@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, linkEntitle, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder, updatePreorderEmail } from '@/lib/preorder';
+import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder, updatePreorderEmail, resendReceived } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -235,6 +235,13 @@ describe('老大依序發劃位：打勾不寄，按「發出」才寄；可分�
     expect(last).toHaveLength(1);
     expect(last[0]).toMatchObject({ recipient: 'right@example.com', template: 'preorder_link' });
     expect(last[0].content).toContain('補寄');
+    // 補寄登記確認信：寄到改過的新信箱，含匯款帳戶、不含金額
+    await resendReceived(db, 'admin', p.id);
+    const rr = (await db.select().from(t.notification)).at(-1)!;
+    expect(rr).toMatchObject({ recipient: 'right@example.com', template: 'preorder_received' });
+    expect(rr.content).toContain('（補寄）');
+    expect(rr.content).toContain('請依以下帳戶完成匯款');
+    expect(rr.content).not.toMatch(/\$|元/);
     const { entText, entitle } = await import('@/lib/entitle');
     expect(entText(entitle([{ kind: 'combo', id: 1, name: '功德組', qty: 1 }], []).rows)).toBe('功德組：已付 1 份，已劃 0 份（還沒劃）');
   });

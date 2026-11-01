@@ -1619,7 +1619,12 @@ function EmailEdit({ p }: { p: Pre }) {
   const [edit, setEdit] = useState(false);
   const [v, setV] = useState(p.email);
   if (!edit) return <span onClick={(e) => e.stopPropagation()}><span className="mono">{p.email || <b className="err-text">沒有 Email</b>}</span>
-    <button className="btn small" style={{ marginLeft: 8 }} onClick={() => { setV(p.email); setEdit(true); }}>改 Email{p.linkCode ? '／補寄連結' : ''}</button></span>;
+    <button className="btn small" style={{ marginLeft: 8 }} onClick={() => { setV(p.email); setEdit(true); }}>改 Email{p.linkCode ? '／補寄連結' : ''}</button>
+    {p.email && p.status !== 'cancelled' && <button className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={async () => {
+      if (!confirm(`補寄「已收到您的贊助登記」確認信（含匯款帳戶）到 ${p.email}？`)) return;
+      const r = await act({ action: 'preorder.resendReceived', id: p.id }) as { email: string; status?: string; error?: string | null } | null;
+      if (r) setMsg({ kind: r.status === 'sent' ? 'ok' : 'err', text: r.status === 'sent' ? `已補寄登記確認信到 ${r.email}` : `補寄結果：${N_STATUS[r.status ?? ''] ?? r.status}${r.error ? `（${r.error}）` : ''}` });
+    }}>補寄登記確認信</button>}</span>;
   const save = async (resend: boolean) => {
     const r = await act({ action: 'preorder.email', id: p.id, email: v.trim(), resend }) as { resent: boolean; delivery?: Delivery } | null;
     if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已改為 ${v.trim()}${r.resent ? `，並補寄劃位連結。${d.text}` : ''}` }); setEdit(false); }
