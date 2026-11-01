@@ -8,7 +8,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
-import { BookingError, loadCombos } from './booking';
+import { BookingError, loadCombos, linkEntitle } from './booking';
 import { comboDesc } from './pricing';
 import { createInviteLink, linkUrl } from './admin';
 import { normalizePhone } from './validation';
@@ -372,22 +372,46 @@ export async function checkPreorder(db: Db, actor: string, id: number, v: { paid
   await db.insert(t.auditLog).values({ actor, action: 'preorder_check', target: `preorder:${id}`, detail: JSON.stringify(v) });
 }
 
-/** 表單來的（沒有數量）：由後台設定他可以劃的內容 */
-export async function setPreorderItems(db: Db, actor: string, id: number, pick: { kind: 'combo' | 'zone'; id: number; qty: number }[]) {
+/**
+ * 後台設定／修改訂單的內容與份數（表單來的沒有數量；或買方誤填）。
+ * 已發劃位連結的也能改：劃位頁的上限立刻跟著變。
+ * 不能改到比已劃（含劃位中）的還少，也不能拿掉已劃過的項目。
+ */
+export async function setPreorderItems(db: Db, actor: string, id: number, pick: { kind: 'combo' | 'zone'; id: number; qty: number }[], now = new Date()) {
   const ev = await currentEvent(db);
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
   if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
-  if (po.linkId) throw new BookingError('INVALID', '已發出劃位連結，不能再改內容');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這張訂單已取消');
   const menu = await preorderMenuFull(db);
   const items: t.PreorderItem[] = [];
   for (const it of pick.filter((x) => x.qty > 0)) {
-    const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
+    const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id) ?? po.items.find((x) => x.kind === it.kind && x.id === it.id);
     if (!m) throw new BookingError('INVALID', '選擇的項目已變更，請重新整理頁面。');
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
-  if (!items.length) throw new BookingError('INVALID', '請至少填一項的數量');
-  await db.update(t.preorder).set({ items, amount: items.reduce((a, x) => a + x.price * x.qty, 0) }).where(eq(t.preorder.id, id));
-  await db.insert(t.auditLog).values({ actor, action: 'preorder_items', target: `preorder:${id}`, detail: itemsText(items) });
+  if (!items.length) throw new BookingError('INVALID', '請至少填一項的數量（整筆不要了請用「取消」）');
+  const before = itemsText(po.items);
+  const after = itemsText(items);
+  if (before === after) throw new BookingError('INVALID', '內容沒有變更');
+  if (po.linkId) {
+    const e = await linkEntitle(db, po.linkId, items);
+    if (e?.over) {
+      const used = (await linkEntitle(db, po.linkId, po.items))?.rows.filter((r) => r.used > 0).map((r) => `${r.name} ${r.used} ${r.unit}`).join('、');
+      throw new BookingError('INVALID', `他已經劃了（含劃位中）${used || '其他項目'}，不能改得比這更少。請先在劃位頁或後台取消多的座位再改。`);
+    }
+  }
+  // 已發出的項目維持已發（數量改了上限立刻生效）；新加的項目要再到「五」發出
+  const done = po.released ?? (po.linkId ? po.items.map(itemKey) : []);
+  const released = po.linkId ? done.filter((k) => items.some((i) => itemKey(i) === k)) : po.released;
+  const stamp = now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const note = po.items.length ? `${po.note ? `${po.note}\n` : ''}${stamp} ${actor} 改份數：${before} → ${after}`.slice(-1000) : po.note;
+  await db.update(t.preorder).set({ items, amount: items.reduce((a, x) => a + x.price * x.qty, 0), released, note }).where(eq(t.preorder.id, id));
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_items', target: `preorder:${id}`, detail: `${before} → ${after}` });
+  const cap = await capacityOf(db);
+  const full = items.filter((i) => i.kind === 'combo' && !po.waitlist && cap[i.id] && cap[i.id].used > cap[i.id].limit)
+    .map((i) => `${i.name} 已超過名額（${cap[i.id].used}／${cap[i.id].limit}）`);
+  const added = po.linkId ? items.filter((i) => !(released ?? []).includes(itemKey(i))).map((i) => i.name) : [];
+  return { warn: [...full, ...(added.length ? [`新加的 ${added.join('、')} 還沒發，請到「五」發出`] : [])].join('；') };
 }
 
 /**

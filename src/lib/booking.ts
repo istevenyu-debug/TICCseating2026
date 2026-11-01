@@ -106,9 +106,10 @@ export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule 
 }
 
 /** 這條連結付款買了什麼、已劃多少（由訂單收款產生的連結才有；手動連結回傳 null） */
-export async function linkEntitle(db: Exec, linkId: number) {
+export async function linkEntitle(db: Exec, linkId: number, override?: t.PreorderItem[]) {
   const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, linkId)).limit(1);
   if (!po) return null;
+  if (override) po.items = override;
   const os = await db.select({ id: t.orders.id, comboId: t.orders.comboId, sets: t.orders.sets, isSingle: t.combo.isSingle })
     .from(t.orders).innerJoin(t.combo, eq(t.combo.id, t.orders.comboId))
     .where(and(eq(t.orders.linkId, linkId), inArray(t.orders.status, ACTIVE_ORDER)));
@@ -118,7 +119,7 @@ export async function linkEntitle(db: Exec, linkId: number) {
       .where(inArray(t.orderSeat.orderId, os.map((o) => o.id)))
     : [];
   // 分批發出（例：週二功德、週三金區）：只算已發出的項目
-  const items = po.released ? po.items.filter((i) => po.released!.includes(`${i.kind}:${i.id}`)) : po.items;
+  const items = !override && po.released ? po.items.filter((i) => po.released!.includes(`${i.kind}:${i.id}`)) : po.items;
   return entitle(items, os.map((o) => ({ comboId: o.comboId, sets: o.sets, isSingle: o.isSingle, zoneIds: zs.filter((z) => z.orderId === o.id).map((z) => z.zoneId) })));
 }
 

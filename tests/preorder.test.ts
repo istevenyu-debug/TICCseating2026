@@ -5,7 +5,7 @@ import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, linkEntitle, submitOrder } from '@/lib/booking';
-import { cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder, updatePreorderEmail, resendReceived } from '@/lib/preorder';
+import { setPreorderItems, cancelPreorder, confirmPreorder, listPreorders, preorderMenu, preorderStatus, savePreorderPush, setLineCfg, setPushLink, submitPreorder, checkPreorder, releasePreorder, updatePreorderEmail, resendReceived } from '@/lib/preorder';
 import { dispatchQueued } from '@/lib/notify';
 
 let db: Db;
@@ -287,5 +287,39 @@ describe('名額、候補與金額提醒', () => {
     expect(p.waitlist).toBe(true);
     await promoteWaitlist(db, 'admin', p.id);
     expect((await listPreorders(db)).find((x) => x.no === w.no)!.waitlist).toBe(false);
+  });
+});
+
+describe('買方誤填份數：後台修改', () => {
+  const now = new Date('2026-11-15T10:00:00+08:00');
+  it('發連結前後都能改；劃位上限立刻跟著變；不能改得比已劃少；備註留紀錄、金額重算', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await submitPreorder(db, body({ items: [{ kind: 'combo', id: combo2, qty: 3 }], paidAmount: 12160, confirmMismatch: true }));
+    let [p] = await listPreorders(db);
+    expect(p.amount).toBe(18240);
+    // 發連結前：3 份改 2 份，金額與匯款相符
+    await setPreorderItems(db, 'admin', p.id, [{ kind: 'combo', id: combo2, qty: 2 }]);
+    [p] = await listPreorders(db);
+    expect(p.items.map((i) => i.qty)).toEqual([2]);
+    expect(p.amount).toBe(12160);
+    expect(p.note).toContain('改份數：雙人套票 × 3 → 雙人套票 × 2');
+    await expect(setPreorderItems(db, 'admin', p.id, [{ kind: 'combo', id: combo2, qty: 2 }])).rejects.toThrow('沒有變更');
+    await expect(setPreorderItems(db, 'admin', p.id, [])).rejects.toThrow('至少');
+    // 發出後劃 1 份
+    await checkPreorder(db, 'admin', p.id, { paid: true });
+    const { code } = await releasePreorder(db, 'admin', p.id, [`combo:${combo2}`], 'https://x');
+    const st0 = await getBookingState(db, code, now);
+    const a = st0.seats.filter((x) => x.zoneId === zoneA && x.status === 'free' && !x.bundle).map((x) => x.id);
+    await holdSeats(db, code, a.slice(0, 2), combo2, now);
+    // 改成 1 份可以（已劃 1）；改成 0 不行
+    await expect(setPreorderItems(db, 'admin', p.id, [{ kind: 'zone', id: zoneA, qty: 1 }])).rejects.toThrow('不能改得比這更少');
+    await setPreorderItems(db, 'admin', p.id, [{ kind: 'combo', id: combo2, qty: 1 }]);
+    expect((await getBookingState(db, code, now)).paid?.rows.map((r) => [r.qty, r.left])).toEqual([[1, 0]]);
+    // 改回 3 份：劃位頁上限立刻變 3；加新項目要再發
+    const r = await setPreorderItems(db, 'admin', p.id, [{ kind: 'combo', id: combo2, qty: 3 }, { kind: 'zone', id: zoneA, qty: 1 }]);
+    expect(r.warn).toContain('還沒發');
+    expect((await getBookingState(db, code, now)).paid?.rows.map((r) => [r.name, r.qty, r.left])).toEqual([['雙人套票', 3, 2]]);
+    [p] = await listPreorders(db);
+    expect(p.released).toEqual([`combo:${combo2}`]);
   });
 });

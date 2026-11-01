@@ -1727,26 +1727,48 @@ function Queue() {
   );
 }
 
-/** 表單來的訂單：先設定他可以劃的內容與數量 */
+/** 設定／修改訂單的內容與份數：表單來的（沒有數量）先設定；買方誤填可以改（已發連結的，劃位上限立刻跟著變） */
 function FormItems({ p }: { p: Pre }) {
   const { st, act, busy, setMsg } = useAdmin();
-  const [qty, setQty] = useState<Record<string, string>>({});
-  const items = st.preMenu.map((m) => ({ m, n: Math.max(0, parseInt(qty[`${m.kind}${m.id}`] || '0') || 0) })).filter((x) => x.n > 0);
+  const editing = p.items.length > 0;
+  const [open, setOpen] = useState(!editing);
+  const init = () => Object.fromEntries(p.items.map((i) => [`${i.kind}${i.id}`, String(i.qty)]));
+  const [qty, setQty] = useState<Record<string, string>>(init);
+  // 菜單上沒有、但訂單裡有的舊項目也要能改
+  const menu = [...st.preMenu, ...p.items.filter((i) => !st.preMenu.some((m) => m.kind === i.kind && m.id === i.id))
+    .map((i) => ({ kind: i.kind as 'combo' | 'zone', id: i.id, name: i.name, price: i.price, desc: '', unit: i.kind === 'combo' ? '份' : '席' }))];
+  const items = menu.map((m) => ({ m, n: Math.max(0, parseInt(qty[`${m.kind}${m.id}`] || '0') || 0) })).filter((x) => x.n > 0);
+  const total = items.reduce((a, x) => a + x.m.price * x.n, 0);
+  if (!open) return <button className="btn" onClick={() => { setQty(init()); setOpen(true); }}>修改內容／份數</button>;
   return (
     <div style={{ width: '100%' }}>
-      <div className="small" style={{ marginBottom: 6 }}><b>先設定他可以劃的內容與數量</b>（依你們確認的款項；設定後才能發劃位連結）</div>
-      {!st.preMenu.length && <div className="note err">還沒有可選的項目：請先到「二、價格設定」發布組合票或票種。</div>}
+      <div className="small" style={{ marginBottom: 6 }}>
+        {editing
+          ? <><b>修改內容／份數</b>（買方填錯時用；依實際匯款改）{p.linkCode && <><br />已發劃位連結：存檔後他的劃位上限<b>立刻</b>跟著變；不能改得比他已劃的少。</>}</>
+          : <><b>先設定他可以劃的內容與數量</b>（依你們確認的款項；設定後才能發劃位連結）</>}
+      </div>
+      {!menu.length && <div className="note err">還沒有可選的項目：請先到「二、價格設定」發布組合票或票種。</div>}
       <div className="fields">
-        {st.preMenu.map((m) => (
+        {menu.map((m) => (
           <label key={`${m.kind}${m.id}`} className="f">{m.name}<span className="small muted">　{money(m.price)}／{m.unit}</span>
             <input inputMode="numeric" value={qty[`${m.kind}${m.id}`] ?? ''} placeholder="0"
               onChange={(e) => setQty({ ...qty, [`${m.kind}${m.id}`]: e.target.value.replace(/\D/g, '').slice(0, 3) })} /></label>
         ))}
       </div>
-      <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !items.length} onClick={() => {
-        if (!items.length) { setMsg({ kind: 'err', text: '請先填數量' }); return; }
-        act({ action: 'preorder.items', id: p.id, items: items.map((x) => ({ kind: x.m.kind, id: x.m.id, qty: x.n })) }, `已設定 ${p.name}：${items.map((x) => `${x.m.name} × ${x.n}`).join('、')}`);
-      }}>儲存內容</button>
+      {p.source !== 'form' && items.length > 0 && <div className="small" style={{ marginTop: 6 }}>改後應付 {money(total)}・他匯 {money(p.paidAmount)}
+        {total === p.paidAmount ? <b style={{ color: 'var(--ok)' }}>　✓ 相符</b> : <b style={{ color: 'var(--red)' }}>　⚠ {total > p.paidAmount ? `少 ${money(total - p.paidAmount)}` : `多 ${money(p.paidAmount - total)}`}</b>}</div>}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn pri" disabled={busy || !items.length} onClick={async () => {
+          if (!items.length) { setMsg({ kind: 'err', text: '請先填數量' }); return; }
+          const text = items.map((x) => `${x.m.name} × ${x.n}`).join('、');
+          const r = await act({ action: 'preorder.items', id: p.id, items: items.map((x) => ({ kind: x.m.kind, id: x.m.id, qty: x.n })) });
+          if (!r) return;
+          const warn = typeof r === 'object' && 'warn' in r ? String((r as { warn: string }).warn) : '';
+          setMsg({ kind: warn ? 'warn' : 'ok', text: `已${editing ? '改為' : '設定'} ${p.name}：${text}${warn ? `。注意：${warn}` : ''}` });
+          if (editing) setOpen(false);
+        }}>{editing ? '儲存修改' : '儲存內容'}</button>
+        {editing && <button className="btn" disabled={busy} onClick={() => setOpen(false)}>不改了</button>}
+      </div>
     </div>
   );
 }
@@ -1839,7 +1861,7 @@ function Preorders() {
                       {p.linkCode && <><span className="muted">劃位連結</span><span className="mono">{base}/t/{p.linkCode}</span></>}
                       {p.note && <><span className="muted">備註</span><span>{p.note}</span></>}
                     </div>
-                    {p.status !== 'cancelled' && !p.items.length && <div style={{ marginTop: 10 }}><FormItems p={p} /></div>}
+                    {p.status !== 'cancelled' && <div style={{ marginTop: 10 }}><FormItems key={p.items.map((i) => `${ik(i)}x${i.qty}`).join()} p={p} /></div>}
                     {p.status !== 'cancelled' && p.items.length > 0 && !st.notify.email.ready && <div className="note err" style={{ marginTop: 10 }}>尚未設定 Gmail：發出後劃位連結<b>不會寄出</b>，請用「複製連結＋說明」傳給對方，或先到「八、通知設定」設定。</div>}
                     <div className="row" style={{ marginTop: 10 }}>
                       {p.waitlist && p.status !== 'cancelled' && <button className="btn pri" disabled={busy} onClick={() => confirm2(`pm${p.id}`, () => act({ action: 'preorder.promote', id: p.id }, `${p.name} 已轉為正取，會依登記順序排進劃位`))}>{sure === `pm${p.id}` ? '再按一次：轉為正取' : '候補轉正取'}</button>}
