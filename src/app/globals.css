@@ -258,3 +258,6 @@ ol.flow li.on { font-weight: 700; }
   input[type="checkbox"], input[type="radio"] { min-width: 18px; min-height: 18px; }
   select { max-width: 100%; }
 }
+/* 送出中轉圈 */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin .9s linear infinite; }

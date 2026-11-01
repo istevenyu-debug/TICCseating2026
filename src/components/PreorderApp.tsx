@@ -83,6 +83,19 @@ function MyPreorders({ mine, reload }: { mine: Mine[]; reload: () => void }) {
   );
 }
 
+/** 送出中：整個畫面蓋一層，避免以為沒反應而連按 */
+export function SendingOverlay({ text }: { text: string }) {
+  return (
+    <div role="status" aria-live="polite" style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(20,24,36,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#fff', borderRadius: 14, padding: '24px 22px', maxWidth: 320, textAlign: 'center', boxShadow: '0 8px 30px rgba(0,0,0,.25)' }}>
+        <div className="spin" style={{ width: 38, height: 38, margin: '0 auto 12px', border: '4px solid #eadfc8', borderTopColor: '#8a6a2a', borderRadius: '50%' }} />
+        <div style={{ fontSize: 17, fontWeight: 700, color: '#1f2a44' }}>{text}，請稍候…</div>
+        <div className="small" style={{ marginTop: 6, color: '#6b7488' }}>請不要關閉或重新整理頁面</div>
+      </div>
+    </div>
+  );
+}
+
 /** 開頭文字（後台可編輯）：「## 」開頭為小標題，「1. 」開頭為步驟，空行分段 */
 function Intro({ text }: { text: string }) {
   const blocks = text.replace(/\r/g, '').split(/\n\s*\n/);
@@ -233,7 +246,8 @@ export default function PreorderApp() {
               onClick={() => navigator.clipboard?.writeText(menu.event.bankAccount.replace(/-/g, '')).catch(() => undefined)}>複製帳號</button>
             <div className="small muted" style={{ marginTop: 4 }}>匯款帳戶也已寫在確認信裡。</div>
           </div>}
-          <p className="note warn">劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
+          <p className="note ok" style={{ margin: '8px 0' }}>📧 確認信約 <b>1 分鐘內</b>寄到 <b>{f.email.trim()}</b>，請稍候查收。</p>
+          <p className="note warn">確認信與之後的劃位通知信可能被歸到<b>垃圾郵件匣</b>，沒看到請到垃圾郵件匣找找看。{menu.mailFrom && <>建議先把寄件信箱 <b className="mono">{menu.mailFrom}</b> 加入聯絡人。</>}</p>
           <p className="small muted" style={{ marginBottom: 0 }}>確認信已寄出。之後用<b>這支手機</b>回到這個網頁，就能看到登記進度。如需修改或取消，請聯繫主辦方並提供登記編號 {done.no}。</p>
         </div>
         {head}
@@ -246,6 +260,7 @@ export default function PreorderApp() {
 
   return (
     <main className="wrap" style={{ maxWidth: 640 }}>
+      {busy && review && <SendingOverlay text="正在送出您的贊助登記" />}
       {head}
       <MyPreorders mine={mine} reload={reload} />
       {restored && !review && lines.length > 0 && (

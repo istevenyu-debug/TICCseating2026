@@ -7,6 +7,7 @@ import { autoHolders, phoneProblem } from '@/lib/validation';
 import { bundleIndex } from '@/lib/bundle';
 import TicketQR from './TicketQR';
 import SeatMap from './SeatMap';
+import { SendingOverlay } from './PreorderApp';
 
 type ApiOk<T> = { ok: true; data: T };
 type ApiErr = { ok: false; code: string; message: string; detail: unknown };
@@ -273,7 +274,7 @@ export default function BookingApp({ code }: { code: string }) {
     // 買了多種：還有其他沒劃的，提示並自動切換到下一種（cur 會自動選還可劃的那一種）
     const rest = (st?.paid?.rows ?? []).filter((x) => x.left > 0 && !(x.kind === 'combo' && x.id === held.comboId));
     const seatsText = held.seatIds.map((id, i) => `・${seatById[id]?.label ?? id}　出席貴賓 ${holderOf(id, i).name}`).join('\n');
-    setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n主辦方確認後，會寄出劃位成功通知與入場 QR code 到 ${form.email.trim()}。`
+    setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n📧 確認信約 1 分鐘內寄到 ${form.email.trim()}。主辦方確認後，會再寄出劃位成功通知與入場 QR code。`
       + (rest.length ? `　還有「${rest.map((x) => `${x.name} ${x.left} ${x.unit}`).join('、')}」要劃，已幫您切換，請繼續在座位圖上選位。` : '') });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
@@ -295,6 +296,7 @@ export default function BookingApp({ code }: { code: string }) {
 
   return (
     <main className="wrap">
+      {busy && <SendingOverlay text={review ? '正在送出劃位資料' : held ? '處理中' : '正在保留座位'} />}
       <div className="card">
         <h1>{st.event.name}</h1>
         <div className="muted">{fmtDate(st.event.showAt)}・台北國際會議中心 大會堂</div>
