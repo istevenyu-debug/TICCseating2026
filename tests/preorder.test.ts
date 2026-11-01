@@ -12,7 +12,7 @@ let db: Db;
 let combo2: number; let zoneA: number;
 const body = (o: Partial<Record<string, unknown>> = {}) => ({
   items: [{ kind: 'combo', id: combo2, qty: 2 }, { kind: 'zone', id: zoneA, qty: 1 }],
-  name: '林大同', phone: '0912-345-678', email: 'lin@example.com', paidAmount: 15360, last5: '54321', agree: true, ...o,
+  name: '林大同', phone: '0912-345-678', email: 'lin@example.com', paidAmount: 15360, last5: '54321', agree: true, confirmDup: true, ...o,
 });
 
 beforeEach(async () => {
@@ -244,6 +244,21 @@ describe('老大依序發劃位：打勾不寄，按「發出」才寄；可分�
     expect(rr.content).not.toMatch(/\$|元/);
     const { entText, entitle } = await import('@/lib/entitle');
     expect(entText(entitle([{ kind: 'combo', id: 1, name: '功德組', qty: 1 }], []).rows)).toBe('功德組：已付 1 份，已劃 0 份（還沒劃）');
+  });
+});
+
+describe('同一支手機重複登記', () => {
+  it('同手機已登記（未取消）先提醒；確認後可再登記；取消後不再提醒', async () => {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await setLineCfg(db, 'admin', { groups: [], map: {} });
+    const first = await submitPreorder(db, body({ confirmDup: false }));
+    await expect(submitPreorder(db, body({ confirmDup: false }))).rejects.toMatchObject({ code: 'DUPLICATE' });
+    await expect(submitPreorder(db, body({ confirmDup: false }))).rejects.toThrow(first.no);
+    const again = await submitPreorder(db, body({ confirmDup: true }));
+    expect(again.no).not.toBe(first.no);
+    const [p1, p2] = await listPreorders(db);
+    await cancelPreorder(db, 'admin', p1.id); await cancelPreorder(db, 'admin', p2.id);
+    await expect(submitPreorder(db, body({ confirmDup: false }))).resolves.toMatchObject({ no: expect.any(String) });
   });
 });
 

@@ -77,6 +77,7 @@ const submitBody = z.object({
   })).max(5).optional(),
   lineName: z.string().trim().max(40).optional().default(''),
   confirmMismatch: z.boolean().optional().default(false), // 買方看到「金額與數量不相當」後，仍確認送出
+  confirmDup: z.boolean().optional().default(false), // 同一支手機已登記過，買方確認要再登記一筆
   agree: z.literal(true, { errorMap: () => ({ message: '請勾選同意個資蒐集' }) }),
   invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']).default('member'),
   invCode: z.string().trim().toUpperCase().max(20).default(''),
@@ -196,6 +197,16 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
   // 金額與數量不相當：先提醒，買方確認後才送出（不告訴他應付多少）
   const amount0 = items.reduce((a, x) => a + x.price * x.qty, 0);
   if (paidAmount !== amount0 && !p.data.confirmMismatch) throw new BookingError('AMOUNT_MISMATCH', '認購金額與認購數量不相當，請檢查確認後，再按送出。');
+  // 同一支手機已登記過（未取消）：先提醒，避免「不確定剛才有沒有送出成功」而重複登記
+  if (!p.data.confirmDup) {
+    const ev0 = await currentEvent(db);
+    const [dup] = await db.select({ no: t.preorder.no, at: t.preorder.createdAt }).from(t.preorder)
+      .where(and(eq(t.preorder.eventId, ev0.id), eq(t.preorder.phone, p.data.phone), sql`${t.preorder.status} <> 'cancelled'`)).orderBy(desc(t.preorder.createdAt)).limit(1);
+    if (dup) {
+      const when = dup.at.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+      throw new BookingError('DUPLICATE', `這支手機在 ${when} 已送出過認購登記（${dup.no}），不需要重送。若您是要「再多認購一筆」，請按「確定要再登記一筆」。`);
+    }
+  }
   rateLimit(ip, now.getTime(), ps.rateLimit);
   // 手機條碼、愛心碼、統編：送出前先向綠界確認，確定錯的請訂購人改正
   if (menu.invoice) {

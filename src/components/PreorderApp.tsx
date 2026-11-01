@@ -130,7 +130,9 @@ export default function PreorderApp() {
   const [review, setReview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ no: string; token: string; waitlist: number | null } | null>(null);
-  const [mismatch, setMismatch] = useState('');
+  const [mismatch, setMismatch] = useState(''); // 金額不相當或手機已登記過：先提醒，買方確認後再送
+  const [warnCode, setWarnCode] = useState('');
+  const [okFlags, setOkFlags] = useState<{ confirmMismatch?: boolean; confirmDup?: boolean }>({});
   const [mine, setMine] = useState<Mine[]>([]);
 
   const reload = useCallback(async () => {
@@ -197,18 +199,19 @@ export default function PreorderApp() {
     if (miss) return bad(`請先加入「${miss.name}」並勾選「我已加入」（已經在群裡的，直接打勾即可）`, `p-line-${lineGroups.indexOf(miss)}`);
     setErr(''); setReview(true); window.scrollTo({ top: 0, behavior: 'smooth' });
   }
-  async function send(confirmMismatch = false) {
+  async function send(more: { confirmMismatch?: boolean; confirmDup?: boolean } = {}) {
+    const flags = { ...okFlags, ...more }; setOkFlags(flags);
     setBusy(true); setMismatch('');
     const r = await api<{ no: string; token: string; waitlist: number | null }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), agree: f.agree, lineName: f.lineName.trim(),
       remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
       invType: inv.type, invCode: inv.type === 'company' ? inv.code.trim() : '', invTitle: inv.type === 'company' ? inv.title.trim() : '',
-      confirmMismatch,
+      confirmMismatch: !!flags.confirmMismatch, confirmDup: !!flags.confirmDup,
     });
     setBusy(false);
-    if (!r.ok && r.code === 'AMOUNT_MISMATCH') { setMismatch(r.message); return; } // 留在確認畫面，讓他選「返回修改」或「確認送出」
-    if (!r.ok) { setReview(false); setErr(r.message); return; }
+    if (!r.ok && (r.code === 'AMOUNT_MISMATCH' || r.code === 'DUPLICATE')) { setWarnCode(r.code); setMismatch(r.message); return; } // 留在確認畫面，讓他選
+    if (!r.ok) { setReview(false); setOkFlags({}); setErr(r.message); return; }
     addSaved({ token: r.data.token, no: r.data.no });
     clearDraft();
     setDone(r.data); window.scrollTo({ top: 0 });
@@ -288,14 +291,19 @@ export default function PreorderApp() {
             <div className="note warn" style={{ marginTop: 12 }}>
               <b>{mismatch}</b>
               <div className="row" style={{ marginTop: 10 }}>
-                <button className="btn" disabled={busy} onClick={() => { setMismatch(''); setReview(false); }}>返回修改</button>
-                <button className="btn pri" disabled={busy} onClick={() => send(true)}>{busy ? '送出中…' : '我已確認無誤，送出'}</button>
+                {warnCode === 'DUPLICATE' ? <>
+                  <button className="btn pri" disabled={busy} onClick={() => { setMismatch(''); setReview(false); setOkFlags({}); }}>不用了（不重送）</button>
+                  <button className="btn" disabled={busy} onClick={() => send({ confirmDup: true })}>{busy ? '送出中…' : '確定要再登記一筆'}</button>
+                </> : <>
+                  <button className="btn" disabled={busy} onClick={() => { setMismatch(''); setReview(false); setOkFlags({}); }}>返回修改</button>
+                  <button className="btn pri" disabled={busy} onClick={() => send({ confirmMismatch: true })}>{busy ? '送出中…' : '我已確認無誤，送出'}</button>
+                </>}
               </div>
             </div>
           ) : (
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn pri" style={{ flex: 1 }} disabled={busy} onClick={() => send()}>{busy ? '送出中…' : '資料正確，確認送出'}</button>
-            <button className="btn" disabled={busy} onClick={() => setReview(false)}>返回修改</button>
+            <button className="btn" disabled={busy} onClick={() => { setReview(false); setOkFlags({}); }}>返回修改</button>
           </div>)}
         </div>
       ) : (

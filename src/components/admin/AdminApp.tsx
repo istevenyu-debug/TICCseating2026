@@ -1729,7 +1729,15 @@ function Preorders() {
   const ver = (() => { let h = 0; for (const c of `${st.event.name}|${st.preorderSettings.intro.split(/\n\s*\n/)[0]}`) h = (h * 31 + c.charCodeAt(0)) % 9973; return h; })();
   const buyUrl = `${base}/buy?v=${ver}`;
   const mismatch = (p: Pre) => p.source !== 'form' && p.status !== 'cancelled' && p.items.length > 0 && p.paidAmount !== p.amount;
-  const match = (p: Pre, k: string) => k === 'all' || (k === 'todo' ? needsCheck(p) : k === 'ready' ? isReady(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
+  // 依方案（席別）篩選：'combo:3'、'zone:5'；不含已取消
+  const planKeys = [...new Map(st.preorders.filter((p) => p.status !== 'cancelled').flatMap((p) => p.items.map((i) => [ik(i), i.name] as const))).entries()];
+  const planStat = (k: string) => {
+    const rows = st.preorders.filter((p) => p.status !== 'cancelled' && p.items.some((i) => ik(i) === k));
+    const qty = (w: boolean) => rows.filter((p) => p.waitlist === w).reduce((a, p) => a + p.items.filter((i) => ik(i) === k).reduce((b, i) => b + i.qty, 0), 0);
+    return { people: rows.filter((p) => !p.waitlist).length, qty: qty(false), waitPeople: rows.filter((p) => p.waitlist).length, waitQty: qty(true) };
+  };
+  const shortName = (n: string) => n.split(/[(（]/)[0].trim() || n;
+  const match = (p: Pre, k: string) => k.includes(':') ? p.status !== 'cancelled' && p.items.some((i) => ik(i) === k) : k === 'all' || (k === 'todo' ? needsCheck(p) : k === 'ready' ? isReady(p) : k === 'confirmed' ? p.status === 'confirmed' : p.status === k);
   const list = st.preorders.filter((p) => (match(p, filter) || (filter === 'todo' && stick.includes(p.id) && p.status !== 'cancelled'))
     && (!q.trim() || [p.no, p.name, p.phone, p.email, p.last5, p.lineName].some((x) => x.includes(q.trim())))).sort(bySeq);
   const cnt = (k: string) => st.preorders.filter((p) => match(p, k)).length;
@@ -1748,6 +1756,10 @@ function Preorders() {
             {[['todo', '待核帳'], ['ready', '已核好'], ['confirmed', '已發連結'], ['all', '全部'], ['cancelled', '已取消']].map(([k, n]) => (
               <button key={k} className={`chip${filter === k ? ' on' : ''}`} onClick={() => setFilter(k)}>{n}（{cnt(k)}）</button>
             ))}
+            {planKeys.length > 0 && <span className="small muted" style={{ margin: '0 2px 0 8px' }}>席別：</span>}
+            {planKeys.map(([k, n]) => { const x = planStat(k); return (
+              <button key={k} title={n} className={`chip${filter === k ? ' on' : ''}`} onClick={() => setFilter(k)}>
+                {shortName(n)}（{x.people} 人・{x.qty} 份{x.waitPeople ? `，另候補 ${x.waitPeople} 人` : ''}）</button>); })}
           </div>
           <input value={q} placeholder="搜尋姓名、手機、LINE、末五碼" style={{ width: 240 }} onChange={(e) => setQ(e.target.value)} />
         </div>
