@@ -60,8 +60,31 @@ export async function preorderMenu(db: Db) {
   const cap = await capacityOf(db);
   const ps = await getPreorderSettings(db);
   const fi = await getFlowImage(db);
-  return { ...m, intro: ps.intro, flowImage: fi ? `/api/buy/flow-image?v=${fi.ver}` : null, items: m.items.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
+  const ext = fi ? (fi.type === 'image/png' ? 'png' : fi.type === 'image/webp' ? 'webp' : 'jpg') : '';
+  // 圖檔網址帶版本與副檔名：Cloudflare 會在各地快取，不必每個人都從家裡電腦下載
+  return { ...m, intro: ps.intro, flowImage: fi ? `/buy/flow/${fi.ver}.${ext}` : null, items: m.items.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
 }
+
+/**
+ * 公開認購頁的資料，人多時共用：同一時間只算一次，3 秒內重複使用（名額狀態最多晚 3 秒，送出時仍以伺服器即時檢查為準）。
+ * 回傳已壓縮好的 JSON，減少從家裡電腦上傳的資料量。
+ */
+let menuCache: { at: number; json: string; gz: Buffer } | null = null;
+let menuBusy: Promise<{ json: string; gz: Buffer }> | null = null;
+export async function preorderMenuShared(db: Db, now = Date.now()) {
+  if (menuCache && now - menuCache.at < 3000) return menuCache;
+  if (!menuBusy) {
+    menuBusy = (async () => {
+      const json = JSON.stringify({ ok: true, data: await preorderMenu(db) });
+      const { gzipSync } = await import('node:zlib');
+      const v = { at: Date.now(), json, gz: gzipSync(json) };
+      menuCache = v;
+      return v;
+    })().finally(() => { menuBusy = null; });
+  }
+  return menuBusy;
+}
+export const clearMenuCache = () => { menuCache = null; };
 
 const submitBody = z.object({
   items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30),
