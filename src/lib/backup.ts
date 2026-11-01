@@ -17,7 +17,7 @@ import type { Db } from '@/db/client';
 /** 依外鍵順序（還原時先刪後面的、先建前面的） */
 export const TABLES = [
   'venue_seat', 'event', 'price_zone', 'seat_usage', 'event_seat', 'combo', 'combo_item', 'invite_link', 'orders', 'order_seat',
-  'payment', 'notification', 'preorder', 'gate', 'checkin', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
+  'payment', 'notification', 'preorder', 'bank_tx', 'gate', 'checkin', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
 ] as const;
 
 export interface BackupFile { format: 'ticc-backup'; version: number; at: string; tables: Record<string, Record<string, unknown>[]> }

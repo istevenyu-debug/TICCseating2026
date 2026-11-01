@@ -313,3 +313,17 @@ export const invoice = pgTable('invoice', {
   checks: jsonb('checks').$type<string[]>().notNull().default([]), // 電腦核對發現的異常
   issuedBy: text('issued_by'),
 }, (t) => ({ order: index('invoice_order_idx').on(t.orderId), preorder: index('invoice_preorder_idx').on(t.preorderId) }));
+
+/** 網銀入帳（後台上傳明細）：只存後五碼，不存完整帳號；key 用來避免重複匯入 */
+export const bankTx = pgTable('bank_tx', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  at: timestamp('at', { withTimezone: true }).notNull(),
+  amount: integer('amount').notNull(),
+  last5: text('last5').notNull().default(''),
+  memo: text('memo').notNull().default(''),
+  key: text('key').notNull(),
+  ignored: boolean('ignored').notNull().default(false), // 不是認購款（後台按「略過」）
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  createdBy: text('created_by').notNull().default(''),
+}, (t) => ({ key: uniqueIndex('bank_tx_key_idx').on(t.eventId, t.key) }));

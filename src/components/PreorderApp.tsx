@@ -42,7 +42,7 @@ const STORE = 'ticc.preorders';
 type Saved = { token: string; no: string };
 /** 草稿：去匯款、去加 LINE 群再回來，選的、填的都還在（只存在這支手機的這個瀏覽器） */
 const DRAFT = 'ticc.buyDraft';
-type Draft = { qty: Record<string, number>; f: Record<string, string>; extra: { last5: string; amount: string }[]; lineOpened: string[]; lineJoined: string[]; inv: { type: InvType; code: string; title: string }; paidTouched: boolean; at: number };
+type Draft = { qty: Record<string, number>; f: Record<string, string | boolean>; extra: { last5: string; amount: string }[]; lineOpened: string[]; lineJoined: string[]; inv: { type: InvType; code: string; title: string }; paidTouched: boolean; at: number };
 function loadDraft(): Draft | null {
   try { const v = JSON.parse(localStorage.getItem(DRAFT) ?? 'null') as Draft | null; return v && Date.now() - v.at < 30 * 86400_000 ? v : null; } catch { return null; }
 }
@@ -119,7 +119,7 @@ export default function PreorderApp() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [err, setErr] = useState('');
   const [qty, setQty] = useState<Record<string, number>>({});
-  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', lineName: '', agree: false });
+  const [f, setF] = useState({ name: '', phone: '', email: '', paid: '', last5: '', lineName: '', agree: false, later: false });
   const [extra, setExtra] = useState<{ last5: string; amount: string }[]>([]); // 第二個以上的匯款帳號
   const [restored, setRestored] = useState<boolean | null>(null);
   const [hl, setHl] = useState<string | null>(null); // 座位圖上要亮起哪個項目的區域
@@ -188,8 +188,8 @@ export default function PreorderApp() {
     if (pp) return bad(pp, 'p-phone');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim())) return bad('Email 格式不正確，劃位連結會寄到這個信箱', 'p-email');
     if (!(parseInt(paid.replace(/\D/g, '')) > 0)) return bad('請填寫認購金額', 'p-paid');
-    if (!/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字', 'p-last5');
-    for (const [n, r] of extra.entries()) {
+    if (!f.later && !/^\d{5}$/.test(f.last5.trim())) return bad('匯款帳號末 5 碼應為 5 位數字（還沒匯款的，請勾「還沒匯款，之後補填」）', 'p-last5');
+    if (!f.later) for (const [n, r] of extra.entries()) {
       if (!/^\d{5}$/.test(r.last5.trim())) return bad(`第 ${n + 2} 筆匯款：帳號末 5 碼應為 5 位數字`, `p-x5-${n}`);
       if (!(parseInt(r.amount.replace(/\D/g, '')) > 0)) return bad(`第 ${n + 2} 筆：請填寫認購金額`, `p-xa-${n}`);
     }
@@ -205,7 +205,7 @@ export default function PreorderApp() {
     const r = await api<{ no: string; token: string; waitlist: number | null }>({
       items: menu!.items.map((i) => ({ kind: i.kind, id: i.id, qty: qty[key(i)] ?? 0 })),
       name: f.name.trim(), phone: f.phone, email: f.email.trim(), agree: f.agree, lineName: f.lineName.trim(),
-      remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
+      ...(f.later ? { last5Later: true, paidAmount: remits[0].amount } : { remits: remits.map((r) => ({ last5: r.last5, amount: r.amount })) }), lineJoined: lineGroups.map((g) => g.name).filter((n) => lineJoined.includes(n)),
       invType: inv.type, invCode: inv.type === 'company' ? inv.code.trim() : '', invTitle: inv.type === 'company' ? inv.title.trim() : '',
       confirmMismatch: !!flags.confirmMismatch, confirmDup: !!flags.confirmDup,
     });
@@ -280,7 +280,7 @@ export default function PreorderApp() {
             <span className="muted">手機</span><span className="mono"><b>{f.phone.replace(/\D/g, '').replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3')}</b></span>
             <span className="muted">Email</span><span className="mono"><b>{f.email.trim()}</b></span>
             {f.lineName.trim() && <><span className="muted">LINE 名稱</span><span>{f.lineName.trim()}</span></>}
-            <span className="muted">匯款帳號後五碼</span><span className="mono">{remits.map((r) => r.last5).join('、')}</span>
+            <span className="muted">匯款帳號後五碼</span><span className="mono">{f.later ? <span style={{ fontFamily: 'inherit' }}>匯款後再補填（確認信裡有連結）</span> : remits.map((r) => r.last5).join('、')}</span>
             <span className="muted">發票</span><span>{inv.type === 'company' ? `三聯：${inv.title.trim()}（統編 ${inv.code.trim()}）` : '二聯（個人）'}</span>
           </div>
           <h3>認購方案</h3>
@@ -377,7 +377,8 @@ export default function PreorderApp() {
             </div>
             <label className="f" style={{ marginTop: 8 }}>LINE 顯示名稱（選填，方便主辦方在群裡找到您）<input value={f.lineName} maxLength={40} onChange={(e) => upd({ lineName: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
-              <label className="f">您的匯款帳號後五碼<input id="p-last5" value={f.last5} maxLength={5} inputMode="numeric" onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} /></label>
+              <label className="f">您的匯款帳號後五碼<input id="p-last5" value={f.later ? '' : f.last5} maxLength={5} inputMode="numeric" disabled={f.later} placeholder={f.later ? '匯款後再補填' : ''} onChange={(e) => upd({ last5: e.target.value.replace(/\D/g, '') })} />
+                <label className="check small" style={{ marginTop: 4 }}><input type="checkbox" checked={f.later} onChange={(e) => { upd({ later: e.target.checked }); if (e.target.checked) setExtra([]); }} />還沒匯款，之後補填（確認信會附填寫連結）</label></label>
               <label className="f">認購金額<input id="p-paid" value={paid} inputMode="numeric" onChange={(e) => { setPaidTouched(true); upd({ paid: e.target.value }); }} /></label>
             </div>
             {extra.map((r, n) => (
@@ -387,7 +388,7 @@ export default function PreorderApp() {
                   <button type="button" className="btn small" aria-label="刪除這筆" onClick={() => setExtra(extra.filter((_, m) => m !== n))}>✕</button></span></label>
               </div>
             ))}
-            {extra.length < 4 && <button type="button" className="btn small" style={{ marginTop: 6 }} onClick={() => setExtra([...extra, { last5: '', amount: '' }])}>＋再加一筆匯款</button>}
+            {!f.later && extra.length < 4 && <button type="button" className="btn small" style={{ marginTop: 6 }} onClick={() => setExtra([...extra, { last5: '', amount: '' }])}>＋再加一筆匯款</button>}
             <div style={{ marginTop: 12 }}>
               <h3 style={{ margin: '0 0 6px' }}>發票</h3>
               <div className="row">

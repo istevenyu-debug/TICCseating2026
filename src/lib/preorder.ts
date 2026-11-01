@@ -12,6 +12,8 @@ import { BookingError, loadCombos, linkEntitle } from './booking';
 import { comboDesc } from './pricing';
 import { createInviteLink, linkUrl } from './admin';
 import { normalizePhone } from './validation';
+import { formatRemits, parseRemits } from './reconcile';
+import { siteOrigin } from './push';
 import { invDesc, invProblem } from './invoiceRules';
 import { getEinvConfig, verifyBuyer, type EinvPost } from './einvoice';
 
@@ -99,6 +101,7 @@ const submitBody = z.object({
     amount: z.number().int().min(1, '請填寫每一筆的匯款金額').max(10_000_000),
   })).max(5).optional(),
   lineName: z.string().trim().max(40).optional().default(''),
+  last5Later: z.boolean().optional().default(false), // 還沒匯款：後五碼之後再補填（確認信有連結）
   confirmMismatch: z.boolean().optional().default(false), // 買方看到「金額與數量不相當」後，仍確認送出
   confirmDup: z.boolean().optional().default(false), // 同一支手機已登記過，買方確認要再登記一筆
   agree: z.literal(true, { errorMap: () => ({ message: '請勾選同意個資蒐集' }) }),
@@ -195,13 +198,15 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選擇一項認購方案');
-  const remits = p.data.remits?.length ? p.data.remits : [{ last5: p.data.last5, amount: p.data.paidAmount }];
+  const later = p.data.last5Later;
+  const remits = later ? [] : p.data.remits?.length ? p.data.remits : [{ last5: p.data.last5, amount: p.data.paidAmount }];
   for (const r of remits) {
     if (!/^\d{5}$/.test(r.last5)) throw new BookingError('INVALID', '匯款帳號末 5 碼應為 5 位數字');
     if (!(r.amount > 0)) throw new BookingError('INVALID', '請填寫匯款金額');
   }
-  const paidAmount = remits.reduce((a, r) => a + r.amount, 0);
-  const last5 = remits.length > 1 ? remits.map((r) => `${r.last5}（NT$${r.amount.toLocaleString('en-US')}）`).join('、') : remits[0].last5;
+  if (later && !(p.data.paidAmount > 0)) throw new BookingError('INVALID', '請填寫認購金額');
+  const paidAmount = later ? p.data.paidAmount : remits.reduce((a, r) => a + r.amount, 0);
+  const last5 = formatRemits(remits);
   const lineMiss = lineNeeded(menu.line, items).filter((g) => !p.data.lineJoined.includes(g.name));
   if (lineMiss.length) throw new BookingError('INVALID', `請先加入 LINE 群：${lineMiss.map((g) => g.name).join('、')}，並勾選「我已加入」`);
   // 發票：預購單只問二聯（個人）／三聯（公司名稱＋統編）；電子發票之後由後台統一開立
@@ -249,7 +254,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       }).returning();
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
-        content: receivedText(ev, row.name, no, items, waitlist ? await waitPos(db, row.id) : null),
+        content: receivedText(ev, row.name, no, items, waitlist ? await waitPos(db, row.id) : null, false, await payUrl(db, viewToken), !last5),
       });
       // token 只交給送出的這台裝置：之後用它查進度、開推播；不能用電話或姓名查（避免別人拿走劃位連結）
       return { no, token: viewToken, waitlist: waitlist ? await waitPos(db, row.id) : null }; // 買方看不到金額
@@ -458,11 +463,71 @@ export async function releasePreorder(db: Db, actor: string, id: number, keys: s
 
 /** 改 Email（買方打錯時）；已發過劃位連結的，可以順便補寄一封到新信箱 */
 /** 「已收到您的認購登記」確認信內容（送出時與後台補寄共用；不含金額） */
-function receivedText(ev: { name: string; bankName: string; bankAccount: string; accountName: string }, name: string, no: string, items: t.PreorderItem[], wait: number | null, again = false) {
+function receivedText(ev: { name: string; bankName: string; bankAccount: string; accountName: string }, name: string, no: string, items: t.PreorderItem[], wait: number | null, again = false, pay = '', noLast5 = false) {
   const tag = again ? '（補寄）' : '';
+  const fill = pay ? (noLast5
+    ? `　您尚未填寫匯款帳號後五碼：匯款後，請點以下連結填寫，方便我們核對款項：${pay}`
+    : `　如果匯款帳號與登記時不同，或分成多筆匯款，請點以下連結更正後五碼：${pay}`) : '';
   return wait
     ? `【${ev.name}】${name} 您好，已收到您的認購登記 ${no}${tag}：${itemsText(items)}。目前為候補第 ${wait} 位，有名額釋出時，我們會依序與您聯繫，感恩您的耐心等候。`
-    : `【${ev.name}】${name} 您好，已收到您的認購登記 ${no}${tag}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。`;
+    : `【${ev.name}】${name} 您好，已收到您的認購登記 ${no}${tag}：${itemsText(items)}，感恩您的護持。請依以下帳戶完成匯款：${ev.bankName} 帳號 ${ev.bankAccount}，戶名 ${ev.accountName}。主辦方確認款項、並依登記順序輪到您時，會由寄這封信的同一個信箱寄出「劃位通知」。若沒看到，請查看垃圾郵件匣，並建議先把這個信箱加入聯絡人。${fill}`;
+}
+
+/** 買方自己補填／更正後五碼的網址（確認信裡附上） */
+async function payUrl(db: Db, token: string) {
+  return `${await siteOrigin(db)}/buy/pay/${token}`;
+}
+
+const remitsBody = z.array(z.object({
+  last5: z.string().trim().regex(/^\d{5}$/, '匯款帳號後五碼應為 5 位數字'),
+  amount: z.number().int().min(1, '請填寫每一筆的匯款金額').max(10_000_000),
+})).max(5);
+
+async function saveRemits(db: Db, po: typeof t.preorder.$inferSelect, raw: unknown, actor: string, by: string) {
+  const p = remitsBody.safeParse(raw);
+  if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
+  const remits = p.data;
+  const last5 = formatRemits(remits);
+  const paidAmount = remits.length ? remits.reduce((a, r) => a + r.amount, 0) : po.paidAmount;
+  if (last5 === po.last5 && paidAmount === po.paidAmount) throw new BookingError('INVALID', '內容沒有變更');
+  const stamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const note = `${po.note ? `${po.note}\n` : ''}${stamp} ${by}改後五碼：${po.last5 || '（未填）'} → ${last5 || '（未填）'}`.slice(-1000);
+  await db.update(t.preorder).set({ last5, paidAmount, note }).where(eq(t.preorder.id, po.id));
+  await db.insert(t.auditLog).values({ actor, action: 'preorder_last5', target: `preorder:${po.id}`, detail: `${po.last5} → ${last5}` });
+  return { last5 };
+}
+
+/** 後台補填／修改後五碼（可多筆，各自金額） */
+export async function setPreorderRemits(db: Db, actor: string, id: number, remits: unknown) {
+  const ev = await currentEvent(db);
+  const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這張訂單已取消');
+  return saveRemits(db, po, remits, actor, `${actor} `);
+}
+
+/** 買方用確認信裡的連結查看自己的登記（只認隨機碼） */
+export async function payInfo(db: Db, token: string) {
+  if (!/^[\w-]{20,40}$/.test(token)) throw new BookingError('NOT_FOUND', '連結不正確');
+  const [po] = await db.select().from(t.preorder).where(eq(t.preorder.viewToken, token));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這筆認購登記，請確認連結是否完整');
+  const ev = await currentEvent(db);
+  return {
+    no: po.no, name: po.name, items: itemsText(po.items), status: po.status,
+    locked: po.status === 'cancelled' ? '這筆登記已取消。' : po.paidOkAt ? '主辦方已核對到您的款項，不需要再填寫。' : '',
+    remits: parseRemits(po.last5, po.paidAmount), bank: { name: ev.bankName, account: ev.bankAccount, holder: ev.accountName },
+  };
+}
+
+/** 買方自己補填／更正後五碼（已核對收款或已取消就不能再改） */
+export async function payUpdate(db: Db, token: string, remits: unknown) {
+  if (!/^[\w-]{20,40}$/.test(token)) throw new BookingError('NOT_FOUND', '連結不正確');
+  const [po] = await db.select().from(t.preorder).where(eq(t.preorder.viewToken, token));
+  if (!po) throw new BookingError('NOT_FOUND', '找不到這筆認購登記');
+  if (po.status === 'cancelled') throw new BookingError('INVALID', '這筆登記已取消');
+  if (po.paidOkAt) throw new BookingError('INVALID', '主辦方已核對到您的款項，不需要再填寫。如需更正請與主辦方聯繫。');
+  if (!Array.isArray(remits) || !remits.length) throw new BookingError('INVALID', '請至少填一筆匯款帳號後五碼');
+  return saveRemits(db, po, remits, 'buyer', '買方');
 }
 
 /** 後台補寄「已收到您的認購登記」確認信，寄到這筆訂單目前的 Email */
@@ -474,7 +539,7 @@ export async function resendReceived(db: Db, actor: string, id: number) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(po.email ?? '')) throw new BookingError('INVALID', '這筆訂單沒有正確的 Email，請先按「改 Email」');
   const wait = po.waitlist ? await waitPos(db, po.id) : null;
   const [n] = await db.insert(t.notification).values({
-    channel: 'email', template: 'preorder_received', recipient: po.email, content: receivedText(ev, po.name, po.no, po.items, wait, true),
+    channel: 'email', template: 'preorder_received', recipient: po.email, content: receivedText(ev, po.name, po.no, po.items, wait, true, po.viewToken ? await payUrl(db, po.viewToken) : '', !po.last5),
   }).returning({ id: t.notification.id });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_resend_received', target: `preorder:${id}`, detail: JSON.stringify({ to: po.email }) });
   return { notificationId: n.id, email: po.email };

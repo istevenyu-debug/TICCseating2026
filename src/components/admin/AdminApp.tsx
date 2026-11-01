@@ -7,6 +7,7 @@ import { comboDesc, comboQty } from '@/lib/pricing';
 import { phoneProblem } from '@/lib/validation';
 import { APP_VERSION } from '@/lib/version';
 import { bundleIndex } from '@/lib/bundle';
+import { parseRemits, pasteToGrid, reconcile } from '@/lib/reconcile';
 import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
 import { INV_TYPES } from '@/lib/invoiceRules';
@@ -24,7 +25,8 @@ type Checkins = { total: number; entered: number; recent: { id: number; serial: 
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
-type State = AdminState & { user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
+type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1775,6 +1777,130 @@ function FormItems({ p }: { p: Pre }) {
 
 const PRE_STATUS: Record<string, string> = { submitted: '待發連結', confirmed: '已發連結', cancelled: '已取消' };
 
+/** 網銀對帳：上傳明細 → 依後五碼加總比對 → 對上的一次勾「已匯款」，其餘列出來人工看 */
+type Rec = ReturnType<typeof reconcile>;
+function BankRecon({ rec }: { rec: Rec }) {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const [paste, setPaste] = useState('');
+  const [show, setShow] = useState<string>('');
+  const [undo, setUndo] = useState<number[] | null>(null);
+  const byId = new Map(st.preorders.map((p) => [p.id, p]));
+  const dep = new Map(st.bank.map((d) => [d.id, d]));
+  const live = st.preorders.filter((p) => p.status !== 'cancelled');
+  const stOf = (p: Pre) => rec.state.get(p.id)?.state;
+  const okTodo = live.filter((p) => stOf(p) === 'ok' && !p.paidOkAt);
+  const okDone = live.filter((p) => stOf(p) === 'ok' && p.paidOkAt);
+  const diffGroups = rec.groups.filter((g) => g.deposits.length && g.got !== g.due);
+  const waiting = live.filter((p) => stOf(p) === 'waiting' && !p.paidOkAt);
+  const nolast5 = live.filter((p) => stOf(p) === 'nolast5' && !p.paidOkAt);
+  const unknown = rec.unknown.map((id) => dep.get(id)!).filter(Boolean);
+  const ignored = st.bank.filter((d) => d.ignored);
+  const total = st.bank.filter((d) => !d.ignored).reduce((a, d) => a + d.amount, 0);
+  const lastAt = st.bank.length ? st.bank[0].at : null;
+
+  async function sendGrid(grid: unknown[][]) {
+    const r = await act({ action: 'bank.import', grid }) as { rows: number; added: number; dup: number; noCode: number } | null;
+    if (r) { setMsg({ kind: r.noCode ? 'warn' : 'ok', text: `讀到 ${r.rows} 筆入帳：新增 ${r.added} 筆${r.dup ? `，${r.dup} 筆之前已匯入（略過）` : ''}${r.noCode ? `；${r.noCode} 筆看不到對方帳號` : ''}` }); setPaste(''); }
+  }
+  async function onFile(f: File) {
+    try {
+      const X = await import('xlsx');
+      const wb = X.read(new Uint8Array(await f.arrayBuffer()), { type: 'array', cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const grid = X.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: false, dateNF: 'yyyy/mm/dd', defval: '' });
+      await sendGrid(grid.slice(0, 5000).map((r) => r.slice(0, 40).map((c) => String(c ?? '').slice(0, 200))));
+    } catch { setMsg({ kind: 'err', text: '讀不到這個檔案。請用網銀下載的 Excel（.xls／.xlsx），或改用下方「貼上」。' }); }
+  }
+  const pre = (p: Pre) => <div key={p.id} className="small"><b className="mono">{p.seq ?? '—'}</b> {p.name}・{p.items.map((i) => `${i.name}×${i.qty}`).join('、')}・應付 {money(p.amount)}・後五碼 <span className="mono">{p.last5 || '（未填）'}</span>{p.paidOkAt && <span className="pill" style={{ marginLeft: 4 }}>已勾</span>}</div>;
+  const dp = (d: Bank) => <div key={d.id} className="small mono">{tw(d.at)}　{money(d.amount)}　{d.last5 || '—'}</div>;
+  const sec = (k: string, title: React.ReactNode, n: number, body: React.ReactNode) => n > 0 && (
+    <div style={{ marginTop: 8 }}>
+      <button className={`chip${show === k ? ' on' : ''}`} onClick={() => setShow(show === k ? '' : k)}>{title}（{n}）{show === k ? '▲' : '▼'}</button>
+      {show === k && <div style={{ marginTop: 6, paddingLeft: 4 }}>{body}</div>}
+    </div>
+  );
+  return (
+    <div className="card">
+      <h3 style={{ margin: 0 }}>網銀對帳 <span className="small muted">上傳網銀「交易明細」，依匯款帳號後五碼自動比對（同一個後五碼的多筆入帳會加總）</span></h3>
+      <div className="row" style={{ marginTop: 8 }}>
+        <label className="btn pri" style={{ cursor: 'pointer' }}>上傳網銀明細（Excel）
+          <input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
+        <span className="small muted">{st.bank.length ? `已匯入 ${st.bank.length} 筆入帳，共 ${money(total)}・最新 ${tw(lastAt)}` : '還沒有匯入任何入帳。可以重複上傳，同一筆只算一次。'}</span>
+      </div>
+      <details style={{ marginTop: 6 }}><summary className="small">或從 Excel 複製幾列貼上</summary>
+        <textarea value={paste} rows={4} style={{ width: '100%', marginTop: 6 }} placeholder="在 Excel 選取入帳那幾列（含日期、時間、金額、備註帳號）→ 複製 → 貼在這裡" onChange={(e) => setPaste(e.target.value)} />
+        <button className="btn small" disabled={busy || !paste.trim()} onClick={() => sendGrid(pasteToGrid(paste).slice(0, 5000))}>匯入貼上的內容</button>
+      </details>
+
+      {st.bank.length > 0 && <>
+        {undo && <div className="note ok" style={{ marginTop: 8 }}>已勾 {undo.length} 筆「已匯款」 ✓
+          <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={async () => { if (await act({ action: 'preorder.checkMany', ids: undo, paid: false }, `已復原 ${undo.length} 筆`)) setUndo(null); }}>復原</button></div>}
+        <div className="note ok" style={{ marginTop: 8 }}>
+          ✅ <b>對上，還沒勾 {okTodo.length} 筆</b>（已勾 {okDone.length} 筆）
+          {okTodo.length > 0 && <button className="btn small pri" style={{ marginLeft: 8 }} disabled={busy} onClick={() => confirm2('bankAll', async () => {
+            const ids = okTodo.map((p) => p.id);
+            if (await act({ action: 'preorder.checkMany', ids, paid: true })) { setUndo(ids); setMsg({ kind: 'ok', text: `已勾 ${ids.length} 筆「已匯款」（不會寄信）` }); }
+          })}>{sure === 'bankAll' ? `再按一次：勾這 ${okTodo.length} 筆已匯款` : '全部勾已匯款'}</button>}
+        </div>
+        {sec('ok', '✅ 對上，還沒勾', okTodo.length, okTodo.map(pre))}
+        {sec('diff', <span style={{ color: 'var(--red)' }}>⚠ 有入帳但金額不符</span>, diffGroups.length, diffGroups.map((g, n) => (
+          <div key={n} style={{ borderTop: n ? '1px solid var(--line)' : undefined, padding: '6px 0' }}>
+            <div className="small"><b>後五碼 {g.codes.join('、')}</b>：實收 {money(g.got)}，應付 {money(g.due)}・<b style={{ color: 'var(--red)' }}>{g.got > g.due ? `多 ${money(g.got - g.due)}` : `少 ${money(g.due - g.got)}`}</b>
+              {g.orders.length > 1 && <span className="muted">（{g.orders.length} 筆訂單用同一個後五碼，一起算）</span>}</div>
+            {g.orders.map((id) => byId.get(id)).filter((p): p is Pre => !!p).map(pre)}
+            <div style={{ paddingLeft: 12 }}>{g.deposits.map((id) => dep.get(id)).filter((d): d is Bank => !!d).map(dp)}</div>
+          </div>
+        )))}
+        {sec('unknown', '❓ 有入帳，找不到訂單', unknown.length, <>
+          <div className="small muted" style={{ marginBottom: 4 }}>多半是買方後五碼填錯或沒填。找到是誰後，在他的訂單按「補填／修改後五碼」；不是認購款的按「略過」。</div>
+          {unknown.map((d) => {
+            const cand = nolast5.filter((p) => p.amount === d.amount).slice(0, 3);
+            return <div key={d.id} className="row" style={{ padding: '3px 0' }}>{dp(d)}
+              {cand.map((p) => <button key={p.id} className="btn small" disabled={busy} title="這位沒填後五碼、應付金額相同" onClick={() => confirm2(`bk${d.id}-${p.id}`, () => act({ action: 'preorder.remits', id: p.id, remits: [{ last5: d.last5, amount: d.amount }] }, `已把 ${p.name} 的後五碼設為 ${d.last5}`))}>
+                {sure === `bk${d.id}-${p.id}` ? `再按一次：是 ${p.name}` : `是 ${p.name}（${p.seq ?? p.no}）？`}</button>)}
+              <button className="btn small" disabled={busy} onClick={() => act({ action: 'bank.ignore', id: d.id, on: true }, '已略過這筆入帳')}>略過（不是認購款）</button></div>;
+          })}</>)}
+        {sec('waiting', '⏳ 有訂單，還沒看到入帳', waiting.length, waiting.map(pre))}
+        {sec('nolast5', '🔢 沒填後五碼', nolast5.length, <><div className="small muted" style={{ marginBottom: 4 }}>確認信裡有補填連結；也可以問到後在訂單裡補填。</div>{nolast5.map(pre)}</>)}
+        {sec('ignored', '已略過的入帳', ignored.length, ignored.map((d) => <div key={d.id} className="row">{dp(d)}
+          <button className="btn small" disabled={busy} onClick={() => act({ action: 'bank.ignore', id: d.id, on: false }, '已復原這筆入帳')}>復原</button></div>))}
+        <div style={{ marginTop: 10 }}>
+          <button className="btn small danger" disabled={busy} onClick={() => confirm2('bankClear', () => act({ action: 'bank.clear' }, '已清除所有匯入的入帳（訂單不受影響）'))}>
+            {sure === 'bankClear' ? '再按一次：清除所有入帳' : '清除所有入帳（傳錯檔案時用）'}</button></div>
+      </>}
+    </div>
+  );
+}
+
+/** 後台補填／修改後五碼（買方填錯、沒填，或分成多筆） */
+function RemitsEdit({ p }: { p: Pre }) {
+  const { act, busy, setMsg } = useAdmin();
+  const cur = parseRemits(p.last5, p.paidAmount);
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<{ last5: string; amount: string }[]>([]);
+  if (!open) return <button className="btn" onClick={() => { setRows(cur.length ? cur.map((r) => ({ last5: r.last5, amount: String(r.amount) })) : [{ last5: '', amount: String(p.amount) }]); setOpen(true); }}>{cur.length ? '修改後五碼' : '補填後五碼'}</button>;
+  return (
+    <div style={{ width: '100%' }}>
+      <div className="small"><b>{cur.length ? '修改' : '補填'}匯款帳號後五碼</b>（分多筆匯款就各填一筆）</div>
+      {rows.map((r, n) => (
+        <div key={n} className="row" style={{ marginTop: 4 }}>
+          <input value={r.last5} maxLength={5} inputMode="numeric" placeholder="後五碼" style={{ width: 90 }} onChange={(e) => setRows(rows.map((x, m) => (m === n ? { ...x, last5: e.target.value.replace(/\D/g, '') } : x)))} />
+          <input value={r.amount} inputMode="numeric" placeholder="這筆金額" style={{ width: 120 }} onChange={(e) => setRows(rows.map((x, m) => (m === n ? { ...x, amount: e.target.value.replace(/\D/g, '') } : x)))} />
+          {rows.length > 1 && <button className="btn small" onClick={() => setRows(rows.filter((_, m) => m !== n))}>✕</button>}
+        </div>
+      ))}
+      <div className="row" style={{ marginTop: 6 }}>
+        {rows.length < 5 && <button className="btn small" onClick={() => setRows([...rows, { last5: '', amount: '' }])}>＋再加一筆</button>}
+        <button className="btn small pri" disabled={busy} onClick={async () => {
+          if (rows.some((r) => !/^\d{5}$/.test(r.last5) || !(Number(r.amount) > 0))) { setMsg({ kind: 'err', text: '每一筆都要填 5 位數字的後五碼和金額' }); return; }
+          if (await act({ action: 'preorder.remits', id: p.id, remits: rows.map((r) => ({ last5: r.last5, amount: Number(r.amount) })) }, `已更新 ${p.name} 的後五碼：${rows.map((r) => r.last5).join('、')}`)) setOpen(false);
+        }}>儲存</button>
+        <button className="btn small" onClick={() => setOpen(false)}>不改了</button>
+      </div>
+    </div>
+  );
+}
+
 function Preorders() {
   const { st, act, busy, setMsg, sure, confirm2, go } = useAdmin();
   const [filter, setFilter0] = useState('todo');
@@ -1804,6 +1930,15 @@ function Preorders() {
   const cnt = (k: string) => st.preorders.filter((p) => match(p, k)).length;
   const stuckReady = stick.some((id) => { const x = st.preorders.find((y) => y.id === id); return !!x && !needsCheck(x); });
   const open = (p: Pre) => { setOpenId(openId === p.id ? null : p.id); if (p.isNew) act({ action: 'preorder.seen', id: p.id }); };
+  const rec = reconcile(st.preorders.map((p) => ({ id: p.id, no: p.no, name: p.name, amount: p.amount, last5: p.last5, paidAmount: p.paidAmount, paidOk: !!p.paidOkAt, status: p.status, waitlist: p.waitlist })), st.bank);
+  const recTag = (p: Pre) => {
+    if (!st.bank.length || p.status === 'cancelled' || p.source === 'form') return null;
+    const s0 = rec.state.get(p.id)?.state;
+    return s0 === 'ok' ? <div className="small" style={{ color: 'var(--ok)', fontWeight: 700 }}>🏦 網銀已入帳</div>
+      : s0 === 'diff' ? <div className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>🏦 入帳金額不符</div>
+      : s0 === 'nolast5' ? <div className="small muted">🔢 沒填後五碼</div>
+      : <div className="small muted">⏳ 網銀還沒看到</div>;
+  };
   return (
     <div className="pstack">
       <div className="card" style={{ paddingBottom: 8 }}>
@@ -1811,6 +1946,7 @@ function Preorders() {
         <div style={{ marginTop: 6 }}>待核帳 <b>{cnt('todo')}</b> 筆・金額不符 <b className={st.preorders.some(mismatch) ? 'err-text' : ''}>{st.preorders.filter(mismatch).length}</b> 筆・已核好待發 <b>{cnt('ready')}</b> 筆　
           {cnt('ready') > 0 && <button className="btn small pri" onClick={() => go('links')}>到五依序發連結 →</button>}</div>
       </div>
+      <BankRecon rec={rec} />
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <div className="row">
@@ -1845,7 +1981,7 @@ function Preorders() {
                     {p.items.length ? p.items.map((i) => <div key={ik(i)}>{p.released.includes(ik(i)) ? '✅ ' : '・'}{i.name} × {i.qty}</div>) : <span className="err-text">請點開設定內容</span>}</td>
                   {p.source === 'form'
                     ? <td className="small" style={{ maxWidth: 220 }}>{p.last5 || '—'}</td>
-                    : <td className="mono">{money(p.paidAmount)}{p.paidAmount !== p.amount && <div className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ 金額與數量不相當<br />應付 {money(p.amount)}，{p.paidAmount < p.amount ? `少 ${money(p.amount - p.paidAmount)}` : `多 ${money(p.paidAmount - p.amount)}`}</div>}<div className="small muted">{p.last5}</div></td>}
+                    : <td className="mono">{money(p.paidAmount)}{p.paidAmount !== p.amount && <div className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>⚠ 金額與數量不相當<br />應付 {money(p.amount)}，{p.paidAmount < p.amount ? `少 ${money(p.amount - p.paidAmount)}` : `多 ${money(p.paidAmount - p.amount)}`}</div>}<div className="small muted">{p.last5 || '（未填後五碼）'}</div>{recTag(p)}</td>}
                   <td><Checks p={p} onDone={onDone} />{filter === 'todo' && !needsCheck(p) && <div className="small" style={{ color: 'var(--ok)', fontWeight: 700, marginTop: 2 }}>✓ 已核好</div>}</td>
                   <td><span className={`pill ${p.status === 'confirmed' ? 'p-paid' : p.status === 'submitted' ? 'p-pending' : 'p-cancelled'}`}>{unreleased(p).length && p.status === 'confirmed' ? '部分已發' : PRE_STATUS[p.status]}</span>
                     {p.status === 'confirmed' && inProgress(p) && <div className="small err-text">劃位中</div>}</td>
@@ -1861,6 +1997,7 @@ function Preorders() {
                       {p.linkCode && <><span className="muted">劃位連結</span><span className="mono">{base}/t/{p.linkCode}</span></>}
                       {p.note && <><span className="muted">備註</span><span>{p.note}</span></>}
                     </div>
+                    {p.status !== 'cancelled' && p.source !== 'form' && <div style={{ marginTop: 10 }}><RemitsEdit key={p.last5} p={p} /></div>}
                     {p.status !== 'cancelled' && <div style={{ marginTop: 10 }}><FormItems key={p.items.map((i) => `${ik(i)}x${i.qty}`).join()} p={p} /></div>}
                     {p.status !== 'cancelled' && p.items.length > 0 && !st.notify.email.ready && <div className="note err" style={{ marginTop: 10 }}>尚未設定 Gmail：發出後劃位連結<b>不會寄出</b>，請用「複製連結＋說明」傳給對方，或先到「八、通知設定」設定。</div>}
                     <div className="row" style={{ marginTop: 10 }}>
