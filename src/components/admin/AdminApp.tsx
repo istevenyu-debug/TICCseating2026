@@ -2200,7 +2200,7 @@ function EinvSettings() {
 }
 
 function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void }) {
-  const { act, busy, sure, confirm2 } = useAdmin();
+  const { act, busy, sure, confirm2, setMsg } = useAdmin();
   const [open, setOpen] = useState(false);
   const [ed, setEd] = useState({ invType: x.invType, invCode: x.invCode, invTitle: x.invTitle });
   const [vr, setVr] = useState({ reason: '', reopen: true });
@@ -2257,7 +2257,7 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
             <div className="row" style={{ marginTop: 8 }}>
               <input value={vr.reason} maxLength={20} placeholder="作廢原因（必填，20 字內）" style={{ maxWidth: 260 }} onChange={(e) => setVr({ ...vr, reason: e.target.value })} />
               <label className="switch small"><input type="checkbox" checked={vr.reopen} onChange={(e) => setVr({ ...vr, reopen: e.target.checked })} />作廢後重新建立待開發票</label>
-              <button className="btn small danger" disabled={busy || !vr.reason.trim()} onClick={() => confirm2(`void${x.id}`, () => act({ action: 'invoice.void', id: x.id, ...vr }, `已作廢發票 ${x.invoiceNo}`))}>
+              <button className="btn small danger" disabled={busy || !vr.reason.trim()} onClick={() => confirm2(`void${x.id}`, async () => { const r = await act({ action: 'invoice.void', id: x.id, ...vr }) as { reopened: boolean; why: string } | null; if (r) setMsg({ kind: vr.reopen && !r.reopened ? 'warn' : 'ok', text: `已作廢發票 ${x.invoiceNo}${vr.reopen ? (r.reopened ? '，已重新建立待開發票（在「待開立」）' : `；沒有重建待開發票：${r.why}`) : ''}` }); })}>
                 {sure === `void${x.id}` ? '再按一次確認作廢' : '作廢這張發票'}</button>
             </div>
           )}

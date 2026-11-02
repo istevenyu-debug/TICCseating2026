@@ -323,8 +323,15 @@ export async function voidInvoice(db: Db, invoiceId: number, actor: string, reas
   if (r.RtnCode !== 1) throw new BookingError('EINVOICE', `發票 ${inv.invoiceNo} 作廢失敗（綠界：${r.RtnMsg}）`);
   const [v] = await db.update(t.invoice).set({ status: 'void', voidedAt: new Date(), voidReason: reason.trim() }).where(eq(t.invoice.id, invoiceId)).returning();
   await db.insert(t.auditLog).values({ actor, action: 'invoice_void', target: `invoice:${invoiceId}`, detail: `${inv.invoiceNo}：${reason.trim()}` });
-  if (reopen && inv.preorderId) await createForPreorder(db, inv.preorderId, actor, post);
-  return v;
+  let reopened = false; let why = '';
+  if (reopen && inv.preorderId) {
+    reopened = !!(await createForPreorder(db, inv.preorderId, actor, post));
+    if (!reopened) {
+      const [po] = await db.select().from(t.preorder).where(eq(t.preorder.id, inv.preorderId));
+      why = !po ? '找不到訂單' : po.status === 'cancelled' ? '這筆訂單已取消' : po.status !== 'confirmed' && !po.paidOkAt ? '這筆訂單還沒勾「已匯款」' : po.amount <= 0 ? '訂單金額是 0' : '電子發票未啟用';
+    }
+  }
+  return { ...v, reopened, why };
 }
 
 /** 後台清單：發票＋訂單的真實資料 */

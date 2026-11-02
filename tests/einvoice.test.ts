@@ -167,7 +167,7 @@ describe('一筆訂單（收款）開一張發票', () => {
     expect((await issueBatch(db, [inv!.id], 'admin', false, ecpay.post))[0]).toMatchObject({ status: 'issued', invoiceNo: 'EF00000002' });
     await expect(voidInvoice(db, inv!.id, 'admin', '', true, ecpay.post)).rejects.toThrow('作廢原因');
     const v = await voidInvoice(db, inv!.id, 'admin', '抬頭有誤', true, ecpay.post);
-    expect(v).toMatchObject({ status: 'void', voidReason: '抬頭有誤' });
+    expect(v).toMatchObject({ status: 'void', voidReason: '抬頭有誤', reopened: true });
     expect(ecpay.calls.find((c) => c.path === '/B2CInvoice/Invalid')!.data).toMatchObject({ InvoiceNo: 'EF00000002', InvoiceDate: '2026-11-15', Reason: '抬頭有誤' });
     const all = await listInvoices(db);
     expect(all.map((x) => x.status)).toEqual(['pending', 'void']);
