@@ -25,7 +25,7 @@ type Gate = { id: number; name: string; token: string; active: boolean; count: n
 type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
-  issuedBy: string | null; voidReason: string | null; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
+  issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
 type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
 type Delivery = { channel: string; status: string; error: string | null }[];
@@ -2195,6 +2195,8 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
           <div className="bank">
             <span className="muted">訂購人</span><span>{x.name}・{x.phone}・{x.email}</span>
             <span className="muted">金額</span><span className="mono">訂單 {money(x.amount)}{x.paidAmount !== null && x.paidAmount !== x.amount && <b className="err-text">（匯款 {money(x.paidAmount)}）</b>}</span>
+            <span className="muted">發票內容</span><span>{x.lines.map((l, i) => <div key={i} className="small">{l.name}　{l.qty} {l.unit} × {money(l.price)} ＝ <b>{money(l.amount)}</b></div>)}
+              {x.status === 'issued' && <div className="small muted">（依目前的品名設定顯示）</div>}</span>
             <span className="muted">發票對象</span><span>{x.buyer}<span className="small muted">（送綠界的買受人名稱：{x.invType === 'company' ? x.invTitle : '貴賓'}）</span></span>
             {x.checks.length > 0 && <><span className="muted">電腦核對</span><span className="err-text">{x.checks.map((c, i) => <div key={i}>⚠ {c}</div>)}</span></>}
             {x.status === 'issued' && <><span className="muted">發票</span><span className="mono">{x.invoiceNo}・{x.invoiceDate}・隨機碼 {x.randomNumber}・{x.issuedBy}</span></>}

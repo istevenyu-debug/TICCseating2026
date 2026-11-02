@@ -330,7 +330,15 @@ export async function voidInvoice(db: Db, invoiceId: number, actor: string, reas
 /** 後台清單：發票＋訂單的真實資料 */
 export async function listInvoices(db: Db) {
   const rows = await db.select({ inv: t.invoice, po: t.preorder }).from(t.invoice).leftJoin(t.preorder, eq(t.preorder.id, t.invoice.preorderId)).orderBy(desc(t.invoice.id));
+  const evs = await db.select({ id: t.event.id, name: t.event.name, item: t.event.invItemName }).from(t.event);
+  const lines = (po: typeof t.preorder.$inferSelect | null) => {
+    const ev = po && evs.find((e) => e.id === po.eventId);
+    if (!po || !ev) return [];
+    const label = invLabel(ev.name, ev.item);
+    return po.items.map((it) => ({ name: invItemName(label, it.kind, it.name), qty: it.qty, unit: it.kind === 'combo' ? '套' : '張', price: it.price, amount: it.price * it.qty }));
+  };
   return rows.map(({ inv, po }) => ({
+    lines: lines(po),
     id: inv.id, orderNo: inv.orderNo, status: inv.status, env: inv.env, invoiceNo: inv.invoiceNo, invoiceDate: inv.invoiceDate, randomNumber: inv.randomNumber,
     amount: inv.amount, buyer: inv.buyer, checks: inv.checks, error: inv.error, issuedBy: inv.issuedBy, voidReason: inv.voidReason,
     name: po?.name ?? '', phone: po?.phone ?? '', email: po?.email ?? '', paidAmount: po?.paidAmount ?? null,
