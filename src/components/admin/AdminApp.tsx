@@ -8,6 +8,7 @@ import { phoneProblem } from '@/lib/validation';
 import { APP_VERSION } from '@/lib/version';
 import { bundleIndex } from '@/lib/bundle';
 import { parseRemits, pasteToGrid, reconcile } from '@/lib/reconcile';
+import { invItemName, invLabel } from '@/lib/invName';
 import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
 import { INV_TYPES } from '@/lib/invoiceRules';
@@ -2142,8 +2143,9 @@ function EinvSettings() {
           <option value="review">核對後開（確認收訖後進待開清單，人工開立）</option><option value="auto">即開（確認收訖、核對無異常就開）</option></select></label>
         <label className="f">課稅別（本場）<select value={f.taxType} onChange={(e) => setF({ ...f, taxType: e.target.value })}><option value="1">應稅（5%，內含）</option><option value="3">免稅</option></select></label>
       </div>
-      <label className="f" style={{ marginTop: 8 }}>品名（本場）<input value={f.itemName} onChange={(e) => setF({ ...f, itemName: e.target.value })} /></label>
-      <p className="small muted" style={{ margin: '4px 0 0' }}>發票品名＝「演出名稱 品名（購票方式）」，例：「{st.event.name || '演出名稱'} {f.itemName || '入場券'}（功德組）」。</p>
+      <label className="f" style={{ marginTop: 8 }}>發票品名（開頭整段）<input value={f.itemName} placeholder="萬變中 喚醒不變的力量 入場券" onChange={(e) => setF({ ...f, itemName: e.target.value })} /></label>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>發票上每一項＝「品名（方案）」，方案名會去掉括號、加「套票」，單位「套」，單價依「二、價格設定」。</p>
+      <div className="small" style={{ marginTop: 4 }}>{st.preMenu.map((m) => <div key={`${m.kind}${m.id}`}>預覽：<b>{invItemName(invLabel(st.event.name, f.itemName), m.kind, m.name)}</b>　1 {m.kind === 'combo' ? '套' : '張'}　{money(m.price)}</div>)}</div>
       {f.mode === 'prod' && (
         <div className="fields" style={{ marginTop: 8 }}>
           <label className="f">特店編號（MerchantID）<input value={f.merchantId} placeholder="綠界廠商後台 → 系統介接設定" onChange={(e) => setF({ ...f, merchantId: e.target.value })} /></label>

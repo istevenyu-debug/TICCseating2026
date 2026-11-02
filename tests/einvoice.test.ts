@@ -113,7 +113,7 @@ describe('一筆訂單（收款）開一張發票', () => {
       MerchantID: '2000132', CustomerName: '貴賓', CustomerEmail: 'lin@example.com', CustomerIdentifier: '', CarrierType: '3', CarrierNum: '/ABC1234',
       Print: '0', Donation: '0', TaxType: '1', InvType: '07', vat: '1', SalesAmount: 12160, InvoiceRemark: '訂單 P0001',
     });
-    expect(d.Items).toEqual([{ ItemSeq: 1, ItemName: '祈福音樂會 入場券（雙人套票）', ItemCount: 2, ItemWord: '組', ItemPrice: 6080, ItemTaxType: '1', ItemAmount: 12160, ItemRemark: '' }]);
+    expect(d.Items).toEqual([{ ItemSeq: 1, ItemName: '祈福音樂會 入場券（雙人套票）', ItemCount: 2, ItemWord: '套', ItemPrice: 6080, ItemTaxType: '1', ItemAmount: 12160, ItemRemark: '' }]);
     expect(await createForPreorder(db, preorderId, 'admin', ecpay.post)).toMatchObject({ invoiceNo: 'AB12345678' }); // 不重複開
 
     // 劃位成功信附上這筆訂單的發票
@@ -183,5 +183,16 @@ describe('一筆訂單（收款）開一張發票', () => {
     expect(await backfillInvoices(db, 'admin')).toEqual({ created: 1 });
     expect(await backfillInvoices(db, 'admin')).toEqual({ created: 0 });
     expect((await listInvoices(db)).map((x) => x.status)).toEqual(['pending']);
+  });
+});
+
+describe('發票品名', () => {
+  it('開頭整段可設定；方案名去括號加「套票」；舊預設「入場券」自動加活動名稱', async () => {
+    const { invItemName, invLabel } = await import('@/lib/invName');
+    const L = invLabel('古儒吉大師課程｜萬變中 喚醒不變的力量', '萬變中 喚醒不變的力量 入場券');
+    expect(invItemName(L, 'combo', '尊榮席(1+2)')).toBe('萬變中 喚醒不變的力量 入場券（尊榮席套票）');
+    expect(invItemName(L, 'combo', '感恩席（10+2）')).toBe('萬變中 喚醒不變的力量 入場券（感恩席套票）');
+    expect(invItemName(L, 'zone', 'A區 單張')).toBe('萬變中 喚醒不變的力量 入場券（A區 單張）');
+    expect(invItemName(invLabel('祈福音樂會', '入場券'), 'combo', '雙人套票')).toBe('祈福音樂會 入場券（雙人套票）');
   });
 });

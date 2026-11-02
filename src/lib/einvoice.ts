@@ -19,6 +19,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { invDesc } from './invoiceRules';
+import { invItemName, invLabel } from './invName';
 
 export const ECPAY_TEST = { merchantId: '2000132', hashKey: 'ejCk326UnaZWKisg', hashIV: 'q9jcZX8Ib9LM8wYk' };
 const BASE = { test: 'https://einvoice-stage.ecpay.com.tw', prod: 'https://einvoice.ecpay.com.tw' };
@@ -235,13 +236,13 @@ export async function issueInvoice(db: Db, invoiceId: number, actor: string, for
   // 品項：依訂單內容；組合票含贈票時註明
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
   const comboItems = await db.select().from(t.comboItem);
-  const label = `${ev.name} ${ev.invItemName}`.trim();
+  const label = invLabel(ev.name, ev.invItemName);
   const items = po.items.map((it, k) => {
     const gift = it.kind === 'combo'
       ? comboItems.filter((c) => c.comboId === it.id && (zones.find((z) => z.id === c.zoneId)?.price ?? 1) === 0).reduce((a, c) => a + c.qty, 0) : 0;
     return {
-      ItemSeq: k + 1, ItemName: `${label}（${it.name}）`.slice(0, 500), ItemCount: it.qty, ItemWord: it.kind === 'combo' ? '組' : '張',
-      ItemPrice: it.price, ItemTaxType: ev.invTaxType, ItemAmount: it.price * it.qty, ItemRemark: gift ? `每組含贈票 ${gift} 張` : '',
+      ItemSeq: k + 1, ItemName: invItemName(label, it.kind, it.name).slice(0, 500), ItemCount: it.qty, ItemWord: it.kind === 'combo' ? '套' : '張',
+      ItemPrice: it.price, ItemTaxType: ev.invTaxType, ItemAmount: it.price * it.qty, ItemRemark: gift ? `每套含贈票 ${gift} 張` : '',
     };
   });
   if (items.reduce((a, i) => a + i.ItemAmount, 0) !== inv.amount) throw new BookingError('CHECK', `${inv.orderNo} 品項合計與發票金額不符，請聯絡網管`);
