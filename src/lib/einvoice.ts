@@ -208,7 +208,7 @@ export async function createForPreorder(db: Db, preorderId: number, actor: strin
   const cfg = await getEinvConfig(db);
   if (!cfg.enabled) return null;
   const [po] = await db.select().from(t.preorder).where(eq(t.preorder.id, preorderId));
-  if (!po || po.status !== 'confirmed' || po.amount <= 0) return null;
+  if (!po || po.amount <= 0 || po.status === 'cancelled' || (po.status !== 'confirmed' && !po.paidOkAt)) return null; // 已發連結，或已勾「已匯款」
   const prev = await db.select().from(t.invoice).where(and(eq(t.invoice.preorderId, preorderId), sql`${t.invoice.status} <> 'void'`));
   if (prev.length) return prev[0];
   const checks = await checksFor(db, po, post);
@@ -344,7 +344,7 @@ export async function backfillInvoices(db: Db, actor: string, post: EinvPost = r
   const cfg = await getEinvConfig(db);
   if (!cfg.enabled) throw new BookingError('INVALID', '請先啟用電子發票');
   const pos = await db.select({ id: t.preorder.id }).from(t.preorder)
-    .where(and(eq(t.preorder.status, 'confirmed'), sql`${t.preorder.amount} > 0`,
+    .where(and(sql`(${t.preorder.status} = 'confirmed' or (${t.preorder.status} = 'submitted' and ${t.preorder.paidOkAt} is not null))`, sql`${t.preorder.amount} > 0`,
       sql`not exists (select 1 from ${t.invoice} where ${t.invoice.preorderId} = ${t.preorder.id} and ${t.invoice.status} <> 'void')`));
   let n = 0;
   for (const p of pos) { if (await createForPreorder(db, p.id, actor, post)) n++; }

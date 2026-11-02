@@ -54,8 +54,9 @@ type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單核帳'],
   ['links', '五、劃位專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
-  // 十、電子發票、十一、招待：先收起來（賣完再開發票）；要用時把下一行加回來
-  // ['einv', '十、電子發票'], ['vip', '十一、招待'],
+  ['einv', '十、電子發票'],
+  // 十一、招待：先收起來；要用時把下一行加回來
+  // ['vip', '十一、招待'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -2237,7 +2238,7 @@ function Invoices() {
   const chosen = st.invoices.filter((x) => sel.has(x.id));
   const flagged = chosen.filter((x) => x.checks.length);
   const toggle = (id: number) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const missing = st.preorders.filter((p) => p.status === 'confirmed' && p.amount > 0 && (!p.invoiceState || p.invoiceState.status === 'void')).length;
+  const missing = st.preorders.filter((p) => (p.status === 'confirmed' || (p.status === 'submitted' && !!p.paidOkAt)) && p.amount > 0 && (!p.invoiceState || p.invoiceState.status === 'void')).length;
   const issue = async (force: boolean) => {
     const r = await act({ action: 'invoice.issue', ids: [...sel], force }) as { orderNo: string; status: string; invoiceNo: string; error: string | null }[] | null;
     if (!r) return;
@@ -2260,7 +2261,7 @@ function Invoices() {
           </h2>
           <p className="small muted" style={{ margin: '0 0 8px' }}>一筆訂單（收款）開一張。確認收訖時建立，電腦先核對金額與發票對象；有異常的紅底標出，人工確認後才能開。<b>發票日期是開立當天</b>，建議每天收工前把當天收訖的開完。</p>
           {c.enabled && missing > 0 && (
-            <div className="note warn" style={{ marginBottom: 8 }}>有 {missing} 筆訂單在啟用電子發票前就已確認收訖，還沒有發票。
+            <div className="note warn" style={{ marginBottom: 8 }}>有 {missing} 筆已匯款（或已發連結）的訂單還沒有發票。
               <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => act({ action: 'invoice.backfill' }, '已建立待開發票')}>建立待開發票</button></div>
           )}
           {filter === 'todo' && todo.length > 0 && (

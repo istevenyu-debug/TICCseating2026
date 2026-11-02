@@ -196,3 +196,22 @@ describe('發票品名', () => {
     expect(invItemName(invLabel('祈福音樂會', '入場券'), 'combo', '雙人套票')).toBe('祈福音樂會 入場券（雙人套票）');
   });
 });
+
+describe('已勾「已匯款」就能建立發票（不必等發劃位連結）', () => {
+  it('backfill 包含已匯款、未發連結的訂單；沒勾的不建', async () => {
+    const db = await createPgliteDb();
+    await seedVenue(db);
+    await createEvent(db, { name: '祈福音樂會', showAt: new Date('2026-12-20T19:30:00+08:00'), bankName: '台灣銀行', bankAccount: '123-456', accountName: '主辦' });
+    const combo2 = (await db.select().from(t.combo)).find((c) => c.name === '雙人套票')!.id;
+    await A.publish(db, 'admin');
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    const { checkPreorder } = await import('@/lib/preorder');
+    const b = (phone: string) => ({ items: [{ kind: 'combo', id: combo2, qty: 1 }], name: '林', phone, email: 'a@example.com', paidAmount: 6080, last5: '12345', agree: true, confirmDup: true });
+    await submitPreorder(db, b('0912345678'));
+    await submitPreorder(db, b('0922345678'));
+    await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'mock', timing: 'review' }, '網管測試');
+    const [p1] = (await listPreorders(db)).sort((x, y) => x.id - y.id);
+    await checkPreorder(db, 'admin', p1.id, { paid: true });
+    expect(await backfillInvoices(db, 'admin')).toEqual({ created: 1 });
+  });
+});
