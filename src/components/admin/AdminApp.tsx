@@ -2231,7 +2231,12 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
               {x.status === 'issued' && <div className="small muted">（依目前的品名設定顯示）</div>}</span>
             <span className="muted">發票對象</span><span>{x.buyer}<span className="small muted">（送綠界的買受人名稱：{x.invType === 'company' ? x.invTitle : '貴賓'}）</span></span>
             {x.checks.length > 0 && <><span className="muted">電腦核對</span><span className="err-text">{x.checks.map((c, i) => <div key={i}>⚠ {c}</div>)}</span></>}
-            {x.status === 'issued' && <><span className="muted">發票</span><span className="mono">{x.invoiceNo}・{x.invoiceDate}・隨機碼 {x.randomNumber}・{x.issuedBy}</span></>}
+            {x.status === 'issued' && <><span className="muted">發票</span><span><span className="mono">{x.invoiceNo}・{x.invoiceDate}・隨機碼 {x.randomNumber}・{x.issuedBy}</span>
+              {x.env !== 'mock' && <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={async () => {
+                const w = window.open('', '_blank'); // 先開視窗，避免被瀏覽器擋下
+                const r = await act({ action: 'invoice.print', id: x.id }) as { url: string } | null;
+                if (r && w) w.location.href = r.url; else if (r) location.href = r.url; else w?.close();
+              }}>看發票</button>}</span></>}
             {x.status === 'void' && <><span className="muted">作廢</span><span>{x.invoiceNo}：{x.voidReason}</span></>}
           </div>
           {canPick && (

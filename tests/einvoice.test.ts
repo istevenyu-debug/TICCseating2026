@@ -7,7 +7,7 @@ import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
 import { confirmPreorder, listPreorders, preorderMenu, submitPreorder } from '@/lib/preorder';
 import {
-  ECPAY_TEST, backfillInvoices, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
+  ECPAY_TEST, invoicePrintUrl, backfillInvoices, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
   publicEinvConfig, saveEinvConfig, voidInvoice, type EinvPost,
 } from '@/lib/einvoice';
 import { invProblem, ubnValid } from '@/lib/invoiceRules';
@@ -213,5 +213,18 @@ describe('已勾「已匯款」就能建立發票（不必等發劃位連結）'
     const [p1] = (await listPreorders(db)).sort((x, y) => x.id - y.id);
     await checkPreorder(db, 'admin', p1.id, { paid: true });
     expect(await backfillInvoices(db, 'admin')).toEqual({ created: 1 });
+  });
+});
+
+describe('看發票（綠界列印頁）', () => {
+  it('測試環境：向綠界要列印網址；模擬模式、模式不同時說明原因', async () => {
+    await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'test', timing: 'auto' }, '網管');
+    const ecpay = fakeEcpay({ '/B2CInvoice/Issue': issued('AB12345678'), '/B2CInvoice/InvoicePrint': () => ({ RtnCode: 1, RtnMsg: 'ok', InvoiceHtml: 'https://einvoice-stage.ecpay.com.tw/x/print?t=1' }) });
+    const { preorderId } = await confirmed({}, ecpay.post);
+    const inv = (await createForPreorder(db, preorderId, 'admin', ecpay.post))!;
+    expect(await invoicePrintUrl(db, inv.id, ecpay.post)).toEqual({ url: 'https://einvoice-stage.ecpay.com.tw/x/print?t=1' });
+    expect(ecpay.calls.at(-1)).toMatchObject({ path: '/B2CInvoice/InvoicePrint', data: { InvoiceNo: 'AB12345678', InvoiceDate: '2026-11-15', PrintStyle: 1, IsShowingDetail: 1 } });
+    await saveEinvConfig(db, 'admin', { mode: 'mock' }, '網管');
+    await expect(invoicePrintUrl(db, inv.id, ecpay.post)).rejects.toThrow('切回去');
   });
 });

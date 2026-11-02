@@ -136,7 +136,7 @@ const realPost: EinvPost = async (url, body) => {
   return r.json();
 };
 
-type EcpayReply = { RtnCode: number; RtnMsg: string; InvoiceNo?: string; InvoiceDate?: string; RandomNumber?: string; IsExist?: string; CompanyName?: string; OrganName?: string };
+type EcpayReply = { RtnCode: number; RtnMsg: string; InvoiceHtml?: string; InvoiceNo?: string; InvoiceDate?: string; RandomNumber?: string; IsExist?: string; CompanyName?: string; OrganName?: string };
 
 async function mockReply(db: Db, path: string): Promise<EcpayReply> {
   if (path === '/B2CInvoice/Issue') {
@@ -328,6 +328,20 @@ export async function voidInvoice(db: Db, invoiceId: number, actor: string, reas
 }
 
 /** 後台清單：發票＋訂單的真實資料 */
+/** 看發票：向綠界取得發票列印頁網址（1 小時內有效）。模擬模式沒有真的發票 */
+export async function invoicePrintUrl(db: Db, id: number, post: EinvPost = realPost) {
+  const cfg = await getEinvConfig(db);
+  const [inv] = await db.select().from(t.invoice).where(eq(t.invoice.id, id));
+  if (!inv) throw new BookingError('NOT_FOUND', '找不到這張發票');
+  if (!inv.invoiceNo || inv.status === 'pending' || inv.status === 'failed') throw new BookingError('INVALID', '這張發票還沒開立');
+  if (inv.env === 'mock') throw new BookingError('INVALID', '模擬模式開的不是真的發票，綠界沒有這張，看不到樣式。請改用「綠界測試環境」開一張。');
+  if (inv.env !== cfg.mode) throw new BookingError('INVALID', `這張是在「${MODE_NAME[inv.env as EinvMode] ?? inv.env}」開的，目前設定是「${MODE_NAME[cfg.mode]}」，請先把模式切回去再看。`);
+  const r = await call(db, cfg, '/B2CInvoice/InvoicePrint', { InvoiceNo: inv.invoiceNo, InvoiceDate: inv.invoiceDate.slice(0, 10), PrintStyle: 1, IsShowingDetail: 1 }, post);
+  if (r.RtnCode !== 1 || !r.InvoiceHtml) throw new BookingError('SERVER', `綠界沒有回傳發票頁：${r.RtnMsg || r.RtnCode}`);
+  if (!/^https:\/\//.test(r.InvoiceHtml)) throw new BookingError('SERVER', '綠界回傳的發票網址不正確');
+  return { url: r.InvoiceHtml };
+}
+
 export async function listInvoices(db: Db) {
   const rows = await db.select({ inv: t.invoice, po: t.preorder }).from(t.invoice).leftJoin(t.preorder, eq(t.preorder.id, t.invoice.preorderId)).orderBy(desc(t.invoice.id));
   const evs = await db.select({ id: t.event.id, name: t.event.name, item: t.event.invItemName }).from(t.event);
