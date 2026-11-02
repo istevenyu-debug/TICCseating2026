@@ -1903,6 +1903,37 @@ function RemitsEdit({ p }: { p: Pre }) {
   );
 }
 
+/** 已匯款名單（Excel）：依席別分頁；入帳金額取網銀對帳（同後五碼加總），沒上傳網銀明細就空白 */
+async function downloadPaid(st: State, rec: ReturnType<typeof reconcile>) {
+  const X = await import('xlsx');
+  const paid = st.preorders.filter((p) => p.status !== 'cancelled' && p.paidOkAt).sort(bySeq);
+  const plans = [...new Map(paid.flatMap((p) => p.items.map((i) => [ik(i), i.name] as const))).entries()];
+  const wb = X.utils.book_new();
+  const shared = (p: Pre) => (rec.state.get(p.id)?.group?.orders.length ?? 0) > 1;
+  for (const [k, name] of plans) {
+    const rows = paid.filter((p) => p.items.some((i) => ik(i) === k));
+    const data: (string | number)[][] = [['訂單號', '姓名', '認購量', '應匯金額', '入帳金額', '差額', '匯款帳號後五碼', '備註']];
+    let q = 0, due = 0, got = 0;
+    for (const p of rows) {
+      const qty = p.items.filter((i) => ik(i) === k).reduce((a, i) => a + i.qty, 0);
+      const g = rec.state.get(p.id)?.group;
+      const inn = g && g.deposits.length && !shared(p) ? g.got : '';
+      const other = p.items.filter((i) => ik(i) !== k);
+      const note = [other.length ? `同一筆另含 ${other.map((i) => `${i.name}×${i.qty}`).join('、')}（應匯／入帳為整筆）` : '',
+        g && shared(p) ? `後五碼與其他訂單相同，合計入帳 ${g.got}` : '', !st.bank.length ? '尚未上傳網銀明細' : g && !g.deposits.length ? '網銀尚未看到入帳' : ''].filter(Boolean).join('；');
+      data.push([p.no, p.name, qty, p.amount, inn, inn === '' ? '' : (inn as number) - p.amount, p.last5, note]);
+      q += qty; due += p.amount; if (inn !== '') got += inn as number;
+    }
+    data.push(['合計', `${rows.length} 筆`, q, due, got || '', '', '', '']);
+    const ws = X.utils.aoa_to_sheet(data);
+    ws['!cols'] = [{ wch: 8 }, { wch: 12 }, { wch: 7 }, { wch: 11 }, { wch: 11 }, { wch: 9 }, { wch: 22 }, { wch: 40 }];
+    X.utils.book_append_sheet(wb, ws, name.replace(/[\\/?*[\]:]/g, '').slice(0, 31) || k);
+  }
+  if (!plans.length) X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['目前沒有已勾「已匯款」的訂單']]), '已匯款');
+  const d = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
+  X.writeFile(wb, `已匯款名單-${d}.xlsx`);
+}
+
 function Preorders() {
   const { st, act, busy, setMsg, sure, confirm2, go } = useAdmin();
   const [filter, setFilter0] = useState('todo');
@@ -1945,6 +1976,7 @@ function Preorders() {
     <div className="pstack">
       <div className="card" style={{ paddingBottom: 8 }}>
         <h2 style={{ margin: 0 }}>四、訂單核帳 <span className="small muted">依送單順序。核對入帳、確認入群後打勾（只記錄，不會寄東西）</span></h2>
+        <button className="btn small" style={{ float: 'right' }} onClick={() => downloadPaid(st, rec)}>下載已匯款名單（Excel）</button>
         <div style={{ marginTop: 6 }}>待核帳 <b>{cnt('todo')}</b> 筆・金額不符 <b className={st.preorders.some(mismatch) ? 'err-text' : ''}>{st.preorders.filter(mismatch).length}</b> 筆・已核好待發 <b>{cnt('ready')}</b> 筆　
           {cnt('ready') > 0 && <button className="btn small pri" onClick={() => go('links')}>到五依序發連結 →</button>}</div>
       </div>
