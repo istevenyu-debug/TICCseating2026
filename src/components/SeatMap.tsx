@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { bundleClass, bundleIndex } from '@/lib/bundle';
 import type { BookingState } from '@/lib/booking';
 import { inkFor } from '@/lib/color';
@@ -31,6 +31,27 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
   const maxX = Math.max(52, ...seats.map((x) => x.x));
   const [cell, setCell] = useState(() => (view && typeof window !== 'undefined' ? Math.max(6, Math.min(22, Math.floor((Math.min(window.innerWidth, 1100) - 72) / maxX))) : 22));
   const zone = Object.fromEntries(zones.map((z) => [z.id, z]));
+  // 手機上座位圖比畫面寬：一進來先捲到中間（舞台正前方），並提示可左右滑動；縮放時維持在原本看的位置
+  const scroller = useRef<HTMLDivElement>(null);
+  const centerRatio = useRef(0.5);
+  const [wide, setWide] = useState(false);
+  const recenter = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const over = el.scrollWidth - el.clientWidth;
+    setWide(over > 4);
+    if (over > 0) el.scrollLeft = (el.scrollWidth * centerRatio.current) - el.clientWidth / 2;
+  };
+  useLayoutEffect(recenter, [cell, seats.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onScroll = () => { if (el.scrollWidth > 0) centerRatio.current = (el.scrollLeft + el.clientWidth / 2) / el.scrollWidth; };
+    const onResize = () => recenter();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onResize);
+    return () => { el.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onResize); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const { linkRight, groups } = bundleIndex(seats);
 
   const rows: { y: number; label: string }[] = [];
@@ -57,7 +78,9 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
           <button className="btn" aria-label="放大" onClick={() => setCell((c) => Math.min(34, c + 2))}>＋</button>
         </span>
       </div>
-      <div className="mapscroll">
+      {wide && <div className="small" style={{ textAlign: 'center', margin: '0 0 6px', color: 'var(--accent)', fontWeight: 700 }}>← 座位圖可左右滑動，看兩側座位 →</div>}
+      <div className="mapscroll" ref={scroller}>
+        <div style={{ width: 'max-content', minWidth: '100%', margin: '0 auto' }}>{/* 舞台跟座位一起置中 */}
         <div className="stage">舞台</div>
         <div className={`hall${cell < 13 ? ' tiny' : ''}`} style={{ ['--cell' as string]: `${cell}px` }}>
           {rows.flatMap((r) => ROW_LABEL_COLS.map((c) => (
@@ -88,6 +111,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
               </button>
             );
           })}
+        </div>
         </div>
       </div>
       <p className="small muted" style={{ margin: '10px 0 0' }}>
