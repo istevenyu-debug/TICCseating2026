@@ -38,7 +38,7 @@ function withCode(s: Omit<SeatDef, 'block' | 'code'>): SeatDef {
   return { ...s, block, code: `${rowPart}-${seatPart}-${block}` };
 }
 
-/** 排數代號：1–12 為一般排，0 為 VIP 排，-1 為輪椅席 */
+/** 排數代號：1–27 為一般排（13 以後是三樓），0 為 VIP 排，-1 為輪椅席 */
 export function rowKey(s: { rowNo: number | null; seatType: string }): number {
   return s.seatType === 'wheelchair' ? -1 : (s.rowNo ?? 0);
 }
@@ -84,6 +84,59 @@ export function buildSeats(): SeatDef[] {
   }
   return out.map(withCode);
 }
+
+/* ---------- 三樓（3F 入口）第 13–27 排 ---------- */
+
+/**
+ * 依〈大會堂座位示意圖〉（修訂 109.11.13）逐排數過：中間三區每排 12＋10＋12 席（共 510 席），
+ * 左右斜區第 14–27 排各 107 席，合計 724 席，與圖上「第 13 至 27 排 724」相符。
+ * 三樓自成一張圖（連結綁樓層，兩層不會同時出現），座標另算，第 1–12 排的資料完全不動：
+ *   x 1–11 左斜區 | 12 排號 | 13–24 左區 | 25 走道 | 26–35 中區 | 36 走道 | 37–48 右區 | 49 排號 | 50–61 右斜區
+ *   y = 排號 − 12（第 13 排 = 1）
+ * 輪椅席 H1–H10 在第 11、14 排之間，已包含在 2M 的 16 席輪椅席裡，保留不開放，這裡不另建。
+ */
+export type Floor = '2M' | '3F';
+export const FLOOR_NAME: Record<Floor, string> = { '2M': '2M（第 1–12 排）', '3F': '三樓（第 13–27 排）' };
+export const FLOOR3_FIRST_ROW = 13;
+export const FLOOR3_LAST_ROW = 27;
+export const floorOfRow = (rowNo: number | null): Floor => ((rowNo ?? 0) >= FLOOR3_FIRST_ROW ? '3F' : '2M');
+export const GRID3 = { cols: 61, rows: 15, rowLabelCols: [12, 49] } as const;
+
+/** 斜區（第 14–27 排）每排座位數：左右相同 */
+const WING3_COUNT: Record<number, number> = { 14: 2, 15: 3, 16: 5, 17: 6, 18: 6, 19: 7, 20: 7, 21: 8, 22: 10, 23: 11, 24: 10, 25: 11, 26: 10, 27: 11 };
+/** 右斜區第 22–25 排：這個座號之後和主體隔一格（圖上是分開的，不算相連） */
+const WING3_R_GAP: Record<number, number> = { 22: 50, 23: 52, 24: 52, 25: 54 };
+
+export function buildSeats3F(): SeatDef[] {
+  const out: Omit<SeatDef, 'block' | 'code'>[] = [];
+  const n = (rowNo: number, seat: number, section: SeatDef['section'], x: number) =>
+    out.push({ id: `${rowNo}-${seat}`, section, rowNo, seatNo: String(seat), seatType: 'normal', x, y: rowNo - 12 });
+  for (let r = FLOOR3_FIRST_ROW; r <= FLOOR3_LAST_ROW; r++) {
+    for (let i = 0; i < 12; i++) n(r, 33 - 2 * i, 'L', 13 + i); // 左區 33→11
+    CENTER.forEach((s, i) => n(r, s, 'C', 26 + i)); // 中區
+    for (let i = 0; i < 12; i++) n(r, 12 + 2 * i, 'R', 37 + i); // 右區 12→34
+    const k = WING3_COUNT[r] ?? 0;
+    for (let j = 0; j < k; j++) {
+      n(r, 35 + 2 * j, 'WL', 11 - j); // 左斜區：35 靠走道
+      const seat = 36 + 2 * j;
+      n(r, seat, 'WR', 50 + j + (WING3_R_GAP[r] !== undefined && seat > WING3_R_GAP[r] ? 1 : 0)); // 右斜區：36 靠走道
+    }
+  }
+  return out.map(withCode);
+}
+
+/** 座位圖左右的排號 */
+export function rowLabels(floor: Floor, vipInstalled: boolean) {
+  const rows: { y: number; label: string }[] = [];
+  if (floor === '3F') {
+    for (let r = FLOOR3_FIRST_ROW; r <= FLOOR3_LAST_ROW; r++) rows.push({ y: r - 12, label: String(r) });
+    return rows;
+  }
+  if (vipInstalled) rows.push({ y: 1, label: 'VIP' });
+  for (let r = 1; r <= 12; r++) rows.push({ y: r + 1, label: String(r) });
+  return rows;
+}
+export const rowLabelCols = (floor: Floor): readonly number[] => (floor === '3F' ? GRID3.rowLabelCols : GRID.rowLabelCols);
 
 export function seatLabel(s: { rowNo: number | null; seatNo: string; seatType: string }): string {
   if (s.seatType === 'wheelchair') return `輪椅席 ${s.seatNo}`;

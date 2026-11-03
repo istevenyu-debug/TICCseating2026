@@ -274,7 +274,7 @@ export default function BookingApp({ code }: { code: string }) {
     // 買了多種：還有其他沒劃的，提示並自動切換到下一種（cur 會自動選還可劃的那一種）
     const rest = (st?.paid?.rows ?? []).filter((x) => x.left > 0 && !(x.kind === 'combo' && x.id === held.comboId));
     const seatsText = held.seatIds.map((id, i) => `・${seatById[id]?.label ?? id}　出席貴賓 ${holderOf(id, i).name}`).join('\n');
-    setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n📧 確認信約 1 分鐘內寄到 ${form.email.trim()}。主辦方確認後，會再寄出劃位成功通知與入場 QR code。`
+    setMsg({ kind: 'ok', text: `劃位編號 ${r.data.orderNo}\n${seatsText}\n\n📧 確認信約 1 分鐘內寄到 ${form.email.trim()}。${st?.link.floor === '3F' ? '劃位已完成，入場 QR code 在本頁「我的劃位」，也會寄到您的 Email。' : '主辦方確認後，會再寄出劃位成功通知與入場 QR code。'}`
       + (rest.length ? `　還有「${rest.map((x) => `${x.name} ${x.left} ${x.unit}`).join('、')}」要劃，已幫您切換，請繼續在座位圖上選位。` : '') });
     setSel(new Set()); setCombo(0); setForm(null);
     await load();
@@ -335,7 +335,7 @@ export default function BookingApp({ code }: { code: string }) {
           ['選座位', '在座位圖上點選座位，再按「確定這些座位，下一步」。'],
           ['填出席貴賓', '確認聯絡資料；出席貴賓已幫您填好，要給別人的改名字，再按「下一步」。'],
           ['確認送出', '核對後按「資料正確，確認送出」。'],
-          ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知與 QR code。'],
+          st.link.floor === '3F' ? ['系統確認', '送出後立即完成，不用等待。'] : ['等主辦方確認', '主辦方核對後，會寄出劃位成功通知與 QR code。'],
           ['收到 QR code', '入場時出示 QR code 即可。'],
         ];
         return (
@@ -391,7 +391,7 @@ export default function BookingApp({ code }: { code: string }) {
         </div>
       )}
       <div className="grid2">
-        <SeatMap seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} focus={focus} onToggle={toggle} locked={!!focus || !!held || !open}
+        <SeatMap floor={st.link.floor} seats={st.seats} zones={st.zones} vipInstalled={st.event.vipInstalled} selected={sel} focus={focus} onToggle={toggle} locked={!!focus || !!held || !open}
           onBlocked={(id, why) => {
             const seat = seatById[id];
             setMsg({ kind: 'err', text: why === 'off'

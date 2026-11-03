@@ -39,6 +39,9 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
   const ev = await currentEvent(db);
   const keep = [...new Set(o.keepLinkIds ?? [])];
   return db.transaction(async (tx) => {
+    // 三樓正式刷卡單收了真錢：要先退票才能清
+    const liveCard = await tx.select({ id: t.cardOrder.id }).from(t.cardOrder).where(and(eq(t.cardOrder.eventId, ev.id), eq(t.cardOrder.env, 'prod'), inArray(t.cardOrder.status, ['paid', 'refunding'])));
+    if (liveCard.length && !keep.length) throw new BookingError('BUSY', `三樓還有 ${liveCard.length} 筆正式刷卡訂單，不能清除。請先到「三樓售票」退票。`);
     const linkCond = keep.length ? and(eq(t.inviteLink.eventId, ev.id), notInArray(t.inviteLink.id, keep)) : eq(t.inviteLink.eventId, ev.id);
     const links = (await tx.select({ id: t.inviteLink.id }).from(t.inviteLink).where(linkCond)).map((l) => l.id);
     const orders = links.length
@@ -88,6 +91,7 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
         published: ev.published ? { ...ev.published, open: false, at: new Date().toISOString() } : ev.published,
       }).where(eq(t.event.id, ev.id));
     }
+    if (!keep.length) await tx.delete(t.cardOrder).where(eq(t.cardOrder.eventId, ev.id));
     const result = { links: links.length, orders: orders.length, seats, preorders: pre.length, kept: keep.length, closed: !!o.close };
     await tx.insert(t.auditLog).values({ actor, action: 'reset_sales', target: `event:${ev.id}`, detail: JSON.stringify(result) });
     return result;

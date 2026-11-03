@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import type { AdminState } from '@/lib/admin';
 import { bundleClass, bundleIndex } from '@/lib/bundle';
+import { rowLabelCols, rowLabels, type Floor } from '@/lib/layout';
 
 type Seat = AdminState['seats'][number];
 export interface SeatLook { bg?: string; ink?: string; kind: 'free' | 'held' | 'pending' | 'sold' | 'blocked'; title: string; dim?: boolean; sel?: boolean }
@@ -14,11 +15,10 @@ interface Props {
   /** 點按或拖曳塗刷：放開滑鼠時一次回傳所有經過的座位 */
   onPaint?: (seatIds: string[]) => void;
   caption?: string;
+  floor?: Floor;
 }
 
-const ROW_LABEL_COLS = [8, 45];
-
-export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }: Props) {
+export default function AdminMap({ seats, vipInstalled, look, onPaint, caption, floor = '2M' }: Props) {
   const [cell, setCell] = useState(22);
   const { linkRight } = bundleIndex(seats);
   const painting = useRef<Set<string> | null>(null);
@@ -27,9 +27,7 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
   const [editing, setEditing] = useState(false);
   const canPaint = !!onPaint && editing;
 
-  const rows: { y: number; label: string }[] = [];
-  if (vipInstalled) rows.push({ y: 1, label: 'VIP' });
-  for (let r = 1; r <= 12; r++) rows.push({ y: r + 1, label: String(r) });
+  const rows = rowLabels(floor, vipInstalled);
 
   const finish = () => {
     const set = painting.current;
@@ -59,8 +57,8 @@ export default function AdminMap({ seats, vipInstalled, look, onPaint, caption }
       {onPaint && editing && <div className="note warn small" style={{ margin: '6px 0' }}>設定中：點座位會直接改動。改完請按「完成設定」。</div>}
       <div className="mapscroll" onPointerUp={finish} onPointerLeave={finish}>
         <div className="stage">舞台</div>
-        <div className="hall" style={{ ['--cell' as string]: `${cell}px` }}>
-          {rows.flatMap((r) => ROW_LABEL_COLS.map((c) => (
+        <div className={`hall${floor === '3F' ? ' f3' : ''}`} style={{ ['--cell' as string]: `${cell}px` }}>
+          {rows.flatMap((r) => rowLabelCols(floor).map((c) => (
             <div key={`${r.y}-${c}`} className="rl" style={{ gridColumn: c, gridRow: r.y }}>{r.label}</div>
           )))}
           {seats.filter((s) => s.installed).map((s) => {

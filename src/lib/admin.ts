@@ -11,7 +11,7 @@ import * as t from '@/db/schema';
 import {
   ACTIVE_ORDER, BookingError, freeSeatsOf, loadCombos, sweepExpired, usedComboSets,
 } from './booking';
-import { BLOCKS, rowKey, seatLabel, type Block } from './layout';
+import { BLOCKS, rowKey, seatLabel, type Block, type Floor } from './layout';
 import { entText, entitle } from './entitle';
 
 export const COLOR_PRESETS = [
@@ -64,9 +64,10 @@ export async function getAdminState(db: Db, now = new Date()) {
   await sweepExpired(db, ev.id, now);
   const [evNow] = await db.select().from(t.event).where(eq(t.event.id, ev.id));
 
-  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
+  // 這個函式回傳的全部是 2M 的資料（畫面、統計、發布都看這份）；三樓在 floor3State，兩邊不混
+  const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M'))).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
   const usages = await db.select().from(t.seatUsage).where(eq(t.seatUsage.eventId, ev.id)).orderBy(asc(t.seatUsage.id));
-  const combos = await loadCombos(db, ev.id);
+  const combos = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M');
   const sets = await usedComboSets(db, ev.id);
 
   const seatRows = await db.select({
@@ -75,7 +76,7 @@ export async function getAdminState(db: Db, now = new Date()) {
     zoneId: t.eventSeat.zoneId, usageId: t.eventSeat.usageId, status: t.eventSeat.status, orderId: t.eventSeat.orderId, bundle: t.eventSeat.bundle,
   }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
-    .where(eq(t.eventSeat.eventId, ev.id));
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '2M')));
   const seats = seatRows.map((s) => ({
     id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, block: s.block, code: s.code,
     row: rowKey(s), label: seatLabel(s), zoneId: s.zoneId, usageId: s.usageId, status: s.status, orderId: s.orderId, bundle: s.bundle,
@@ -83,11 +84,12 @@ export async function getAdminState(db: Db, now = new Date()) {
   }));
   const seatById = Object.fromEntries(seats.map((s) => [s.id, s]));
 
-  const orderRows = await db.select().from(t.orders).where(eq(t.orders.eventId, ev.id)).orderBy(desc(t.orders.id));
+  const links = await db.select().from(t.inviteLink).where(and(eq(t.inviteLink.eventId, ev.id), eq(t.inviteLink.floor, '2M'))).orderBy(desc(t.inviteLink.id));
+  const linkIds = new Set(links.map((l) => l.id));
+  const orderRows = (await db.select().from(t.orders).where(eq(t.orders.eventId, ev.id)).orderBy(desc(t.orders.id))).filter((o) => linkIds.has(o.linkId));
   const ids = orderRows.map((o) => o.id);
   const oseats = ids.length ? await db.select().from(t.orderSeat).where(inArray(t.orderSeat.orderId, ids)) : [];
   const pays = ids.length ? await db.select().from(t.payment).where(inArray(t.payment.orderId, ids)) : [];
-  const links = await db.select().from(t.inviteLink).where(eq(t.inviteLink.eventId, ev.id)).orderBy(desc(t.inviteLink.id));
   const linkById = Object.fromEntries(links.map((l) => [l.id, l]));
   const comboById = Object.fromEntries(combos.map((c) => [c.id, c]));
 
@@ -118,7 +120,7 @@ export async function getAdminState(db: Db, now = new Date()) {
 
   // 由訂單收款產生的連結：付款內容 vs 已劃內容
   const pos = await db.select({ linkId: t.preorder.linkId, no: t.preorder.no, items: t.preorder.items }).from(t.preorder)
-    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.linkId} is not null`));
+    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.linkId} is not null`, sql`${t.preorder.source} <> 'card'`));
   const paidByLink = new Map(pos.map((p) => {
     const os = orderRows.filter((o) => o.linkId === p.linkId && ACTIVE_ORDER.includes(o.status));
     const e = entitle(p.items, os.map((o) => ({
@@ -209,9 +211,10 @@ export async function updateEventSettings(db: Db, actor: string, v: Partial<{
 /** 把目前後台勾選的開放設定發布到購票頁 */
 export async function publish(db: Db, actor: string, now = new Date()) {
   const ev = await currentEvent(db);
+  // 發布只處理 2M；三樓有自己的開賣設定，不經過這裡
   const zones = await db.select({ id: t.priceZone.id, open: t.priceZone.open, name: t.priceZone.name, price: t.priceZone.price })
-    .from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
-  const combos = await loadCombos(db, ev.id);
+    .from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M')));
+  const combos = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M');
   const d = draftOf(ev, zones, combos);
   const bad = zones.filter((z) => d.zoneIds.includes(z.id) && (!z.name || !(z.price >= 0)));
   if (bad.length) throw new BookingError('INVALID', '有開放的票種還沒填名稱或票價，請先補齊再發布。');
@@ -239,13 +242,13 @@ export async function publish(db: Db, actor: string, now = new Date()) {
 
 /* ---------- 票種 ---------- */
 
-export async function createZone(db: Db, actor: string) {
+export async function createZone(db: Db, actor: string, floor: Floor = '2M') {
   const ev = await currentEvent(db);
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
   const used = new Set(zones.map((z) => z.color.toLowerCase()));
   const color = COLOR_PRESETS.find((c) => !used.has(c)) ?? COLOR_PRESETS[0];
   const [z] = await db.insert(t.priceZone).values({
-    eventId: ev.id, name: '', price: 0, color, sort: Math.max(0, ...zones.map((x) => x.sort)) + 1,
+    eventId: ev.id, name: '', price: 0, color, sort: Math.max(0, ...zones.map((x) => x.sort)) + 1, floor,
   }).returning();
   await audit(db, actor, 'zone_create', `zone:${z.id}`);
   return z;
@@ -284,6 +287,8 @@ export async function assignZoneSeats(db: Db, actor: string, zoneId: number, sea
   if (!seatIds.length) return { updated: 0, skipped: 0 };
   const [z] = await db.select().from(t.priceZone).where(and(eq(t.priceZone.id, zoneId), eq(t.priceZone.eventId, evId)));
   if (!z) throw new BookingError('NOT_FOUND', '找不到此票種');
+  const other = await db.select({ id: t.venueSeat.id }).from(t.venueSeat).where(and(inArray(t.venueSeat.id, seatIds), sql`${t.venueSeat.floor} <> ${z.floor}`));
+  if (other.length) throw new BookingError('INVALID', `「${z.name || '這個票種'}」不能用在另一層的座位。`);
   const done = await db.update(t.eventSeat).set({ zoneId })
     .where(and(eq(t.eventSeat.eventId, evId), inArray(t.eventSeat.seatId, seatIds), eq(t.eventSeat.status, 'free')))
     .returning({ seatId: t.eventSeat.seatId });
@@ -311,6 +316,7 @@ export async function bundleAuto(db: Db, actor: string, o: { rows: number[]; blo
   const blk = new Set(o.blocks.length ? o.blocks : BLOCKS);
   const skip = new Set(o.skip);
   const area = (await db.select().from(t.venueSeat)).filter((s) => o.rows.includes(rowKey(s)) && blk.has(s.block as Block));
+  if (new Set(area.map((s) => s.floor)).size > 1) throw new BookingError('INVALID', '自動分組不能跨樓層，請分開設定');
   const vs = area.filter((s) => !skip.has(s.id));
   if (!vs.length) throw new BookingError('INVALID', '沒有符合條件的座位');
   return db.transaction(async (tx) => {
@@ -400,7 +406,9 @@ function sameMap(a: Record<string, string>, b: Record<string, string>) {
   return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
 }
 async function currentBundleMap(db: Db | BTx, eventId: number) {
-  const rows = await db.select({ id: t.eventSeat.seatId, b: t.eventSeat.bundle }).from(t.eventSeat).where(eq(t.eventSeat.eventId, eventId));
+  // 分組存檔／復原只管 2M：三樓框好的 11 席不會被還原掉，也不會被算進來
+  const rows = await db.select({ id: t.eventSeat.seatId, b: t.eventSeat.bundle }).from(t.eventSeat)
+    .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).where(and(eq(t.eventSeat.eventId, eventId), eq(t.venueSeat.floor, '2M')));
   return Object.fromEntries(rows.filter((r) => r.b).map((r) => [r.id, r.b as string]));
 }
 async function writeSnapshot(db: Db | BTx, key: string, actor: string, eventId: number) {
@@ -425,7 +433,8 @@ export async function restoreBundleSnapshot(db: Db, actor: string, which: 'saved
   const snap = await getSnapshot(db, key);
   if (!snap) throw new BookingError('NOT_FOUND', which === 'saved' ? '還沒有儲存過分組' : '沒有可以復原的紀錄');
   return db.transaction(async (tx) => {
-    const es = await tx.select().from(t.eventSeat).where(eq(t.eventSeat.eventId, ev.id));
+    const es = (await tx.select({ s: t.eventSeat }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
+      .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '2M')))).map((r) => r.s);
     const changed = es.filter((s) => (s.bundle ?? null) !== (snap.map[s.seatId] ?? null));
     const busy = changed.filter((s) => s.status !== 'free');
     if (busy.length) throw new BookingError('BUSY', `有 ${busy.length} 席已有訂單或暫存，分組和存檔不同，不能還原。請先處理這些訂單。`);
@@ -472,6 +481,8 @@ export async function bundleManual(db: Db, actor: string, seatIds: string[]) {
   return db.transaction(async (tx) => {
     const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids)));
     if (es.length !== ids.length) throw new BookingError('INVALID', '有座位不存在');
+    const fl = await tx.select({ f: t.venueSeat.floor }).from(t.venueSeat).where(inArray(t.venueSeat.id, ids));
+    if (new Set(fl.map((x) => x.f)).size > 1) throw new BookingError('INVALID', '一組不能跨樓層');
     if (es.some((s) => s.status !== 'free')) throw new BookingError('BUSY', '選取的座位中有已訂或暫存的，不能改分組。');
     const old = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];
     const key = `${Date.now().toString(36)}-m-${ids[0]}`;
@@ -542,7 +553,7 @@ export async function setSeatUsage(db: Db, actor: string, usageId: number, seatI
 
 export async function createCombo(db: Db, actor: string) {
   const ev = await currentEvent(db);
-  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort));
+  const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M'))).orderBy(asc(t.priceZone.sort));
   const all = await db.select().from(t.combo).where(eq(t.combo.eventId, ev.id));
   const [c] = await db.insert(t.combo).values({ eventId: ev.id, name: '', price: 0, sort: Math.max(0, ...all.map((x) => x.sort)) + 1 }).returning();
   if (zones[0]) await db.insert(t.comboItem).values({ comboId: c.id, zoneId: zones[0].id, qty: 1 });
@@ -556,6 +567,10 @@ export async function updateCombo(db: Db, actor: string, id: number, v: Partial<
   const [c] = await db.select().from(t.combo).where(eq(t.combo.id, id));
   if (!c) throw new BookingError('NOT_FOUND', '找不到此購票方式');
   const { items, ...rest } = v;
+  if (items?.length) {
+    const zs = await db.select({ floor: t.priceZone.floor }).from(t.priceZone).where(inArray(t.priceZone.id, items.map((i) => i.zoneId)));
+    if (zs.some((z) => z.floor !== c.floor)) throw new BookingError('INVALID', '組合票只能用自己這一層的票種。');
+  }
   if (Object.keys(rest).length) await db.update(t.combo).set(rest).where(eq(t.combo.id, id));
   if (items && !c.isSingle) {
     const merged = new Map<number, number>();
@@ -586,7 +601,7 @@ export function linkUrl(code: string, base?: string) {
   return `${b}/t/${code}`;
 }
 
-export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date; note?: string }, base?: string, opt: { sms?: boolean } = {}) {
+export async function createInviteLink(db: Db, actor: string, v: { name: string; phone: string; quota: number; expiresAt: Date; note?: string; floor?: Floor }, base?: string, opt: { sms?: boolean } = {}) {
   const ev = await currentEvent(db);
   for (let attempt = 0; attempt < 5; attempt++) {
     const code = Array.from({ length: 8 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');

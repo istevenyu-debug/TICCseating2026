@@ -8,6 +8,7 @@ export interface ComboRule {
   isSingle: boolean;
   price: number; // 一組的套票價（單張購票不使用）
   limitSets: number; // 0 = 不限量
+  floor?: string; // 2M／3F：只能用在自己這一層
   items: ComboItem[];
 }
 

@@ -11,7 +11,7 @@
 import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
-import { seatLabel } from './layout';
+import { seatLabel, type Floor } from './layout';
 import { calcAmount, comboProblem, comboSets, type ComboRule } from './pricing';
 import { submitInput, type SubmitInput } from './validation';
 import { qrSecret, qrValue } from './qr';
@@ -54,7 +54,9 @@ function ownedBy(link: LinkRow) {
   return eq(t.orders.linkId, link.id);
 }
 
-export function saleStateFor(ev: EventRow, _link: LinkRow, now: Date): { state: ReturnType<typeof saleState>; startsAt: string | null } {
+export function saleStateFor(ev: EventRow, link: LinkRow, now: Date): { state: ReturnType<typeof saleState>; startsAt: string | null } {
+  // 三樓連結＝已刷卡付款：一定能劃，不受 2M 的開放設定影響
+  if (link.floor === '3F') return { state: 'open', startsAt: null };
   const base = saleState(ev, now);
   // 開賣、截止時間只當提醒：拿到專屬連結的人就能劃（是否發連結由主辦方決定）
   const startsAt = ev.saleStart && now < ev.saleStart ? ev.saleStart.toISOString() : null;
@@ -71,8 +73,24 @@ export function saleState(ev: typeof t.event.$inferSelect, now: Date): 'open' | 
 
 const SALE_MSG = { closed: '目前未開放訂購。', not_started: '尚未開始訂購。', ended: '訂購已截止。' } as const;
 
+/**
+ * 這條連結目前可用的票種與購票方式。2M 看「已發布」的設定；
+ * 三樓不經過發布（連結是刷卡付款後才有的），直接看三樓自己的開放勾選，兩邊互不影響。
+ */
+function openSets(ev: EventRow, link: LinkRow, zones: { id: number; open: boolean }[], combos: { id: number; active: boolean; isSingle: boolean; items: { zoneId: number }[] }[]) {
+  if (link.floor === '3F') {
+    const openCombos = new Set(combos.filter((c) => c.active).map((c) => c.id));
+    const openZones = new Set(zones.filter((z) => z.open).map((z) => z.id));
+    for (const c of combos) if (c.active && !c.isSingle) for (const i of c.items) openZones.add(i.zoneId);
+    return { openZones, openCombos };
+  }
+  const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
+  return { openZones: new Set(pub.zoneIds), openCombos: new Set(pub.comboIds) };
+}
+
 /** 這次最多可勾幾張：每筆訂單上限，再加上專屬連結的剩餘張數（0 = 不限） */
 function canBuyOf(ev: EventRow, link: LinkRow, used: number) {
+  if (link.floor === '3F') return 9999; // 三樓不限購：能劃幾席由已付款內容決定
   if (link.quota === 0) return ev.maxPerOrder;
   return Math.max(0, Math.min(ev.maxPerOrder, link.quota - used));
 }
@@ -100,7 +118,7 @@ export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule 
     ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
     : [];
   return combos.map((c) => ({
-    id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, description: c.description,
+    id: c.id, name: c.name, isSingle: c.isSingle, floor: c.floor, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, description: c.description,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
 }
@@ -164,7 +182,7 @@ export async function publicSeatMap(db: Db) {
   }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
     .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
-    .where(eq(t.eventSeat.eventId, ev.id));
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '2M'))); // 認購頁的圖只有 2M
   const seats = rows.filter((s) => s.seatType !== 'vip' || ev.vipInstalled).map((s) => ({
     id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, bundle: s.bundle,
     status: (s.status !== 'free' ? 'sold' : !s.sellable || !openZones.has(s.zoneId) ? 'blocked' : 'free') as ViewSeatStatus,
@@ -179,12 +197,9 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const { link, ev } = await loadLink(db, code, now);
   await sweepExpired(db, ev.id, now);
 
-  const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
-  const openZones = new Set(pub.zoneIds);
-  const openCombos = new Set(pub.comboIds);
-
-  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
-  const combosAll = await loadCombos(db, ev.id);
+  const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, link.floor))).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
+  const combosAll = (await loadCombos(db, ev.id)).filter((c) => c.floor === link.floor);
+  const { openZones, openCombos } = openSets(ev, link, zones, combosAll);
   const combos = combosAll.filter((c) => openCombos.has(c.id));
   // 開放的組合票裡的贈票區（票價 0）：就算沒在價格設定勾「開放」，也要能劃
   for (const c of combos) if (!c.isSingle) for (const i of c.items) if (zones.find((z) => z.id === i.zoneId)?.price === 0) openZones.add(i.zoneId);
@@ -201,7 +216,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
     .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
-    .where(eq(t.eventSeat.eventId, ev.id));
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, link.floor))); // 連結綁樓層：另一層的座位根本不會出現
 
   const seats = seatRows
     .filter((s) => s.seatType !== 'vip' || ev.vipInstalled)
@@ -260,7 +275,7 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
       maxPerOrder: ev.maxPerOrder, holdMinutes: ev.holdMinutes,
     },
     link: {
-      kind: link.kind, name: link.name, phoneTail: link.phone ? link.phone.slice(-3) : '',
+      kind: link.kind, floor: link.floor as Floor, name: link.name, phoneTail: link.phone ? link.phone.slice(-3) : '',
       quota: link.quota, used, expiresAt: link.expiresAt.toISOString(),
     },
     canBuy: canBuyOf(ev, link, used),
@@ -310,7 +325,6 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const [ev] = await tx.select().from(t.event).where(eq(t.event.id, link.eventId));
     const st = saleStateFor(ev, link, now).state;
     if (st !== 'open') throw new BookingError('SALE_CLOSED', SALE_MSG[st]);
-    const pub = ev.published!;
 
     // 同一位購票者只能有一筆暫存：先放掉舊的
     const old = await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'replaced', holdUntil: null })
@@ -323,11 +337,14 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     }
 
     const cb = (await loadCombos(tx, ev.id)).find((c) => c.id === comboId);
-    if (!cb || !pub.comboIds.includes(cb.id)) throw new BookingError('COMBO', '此方案目前未開放劃位。');
+    const zoneRows = await tx.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, link.floor)));
+    const allCombos = (await loadCombos(tx, ev.id)).filter((c) => c.floor === link.floor);
+    const open = openSets(ev, link, zoneRows, allCombos);
+    if (!cb || cb.floor !== link.floor || !open.openCombos.has(cb.id)) throw new BookingError('COMBO', '此方案目前未開放劃位。');
 
     const rows = await tx.select({
       seatId: t.eventSeat.seatId, seatType: t.venueSeat.seatType, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo,
-      zoneId: t.eventSeat.zoneId, zoneName: t.priceZone.name, price: t.priceZone.price, sellable: t.seatUsage.sellable,
+      zoneId: t.eventSeat.zoneId, zoneName: t.priceZone.name, price: t.priceZone.price, sellable: t.seatUsage.sellable, floor: t.venueSeat.floor,
     }).from(t.eventSeat)
       .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
       .innerJoin(t.priceZone, eq(t.priceZone.id, t.eventSeat.zoneId))
@@ -347,7 +364,7 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
 
     // 贈票區（票價 0）只要是這個組合票的內容就可以劃
     const giftOk = (zid: number, price: number) => price === 0 && !cb.isSingle && cb.items.some((i) => i.zoneId === zid);
-    const valid = rows.filter((r) => r.sellable && (pub.zoneIds.includes(r.zoneId) || giftOk(r.zoneId, r.price)) && (r.seatType !== 'vip' || ev.vipInstalled));
+    const valid = rows.filter((r) => r.sellable && r.floor === link.floor && (open.openZones.has(r.zoneId) || giftOk(r.zoneId, r.price)) && (r.seatType !== 'vip' || ev.vipInstalled));
     if (valid.length !== seatIds.length) {
       const ok = new Set(valid.map((r) => r.seatId));
       throw new BookingError('SEAT_UNAVAILABLE', '部分座位目前不開放劃位。', seatIds.filter((s) => !ok.has(s)));
@@ -432,7 +449,7 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
   const input: SubmitInput = parsed.data;
   const { link, ev } = await loadLink(db, code, now);
 
-  return db.transaction(async (tx) => {
+  const done = await db.transaction(async (tx) => {
     const [order] = await tx.select().from(t.orders)
       .where(and(eq(t.orders.id, input.orderId), ownedBy(link))).for('update');
     if (!order || order.status !== 'held') {
@@ -488,4 +505,11 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     }
     return { orderNo: order.orderNo!, amount: order.amount };
   });
+  // 三樓已刷卡付款：送出就算劃位成功，馬上給 QR code，不用等後台確認
+  if (link.floor === '3F') {
+    const { confirmPayment } = await import('./admin');
+    const { siteOrigin } = await import('./push');
+    await confirmPayment(db, '三樓刷卡', input.orderId, {}, now, await siteOrigin(db));
+  }
+  return done;
 }

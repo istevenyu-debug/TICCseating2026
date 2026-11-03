@@ -1,3 +1,5 @@
+import { adminQuery, refundCardOrder, saveCardKeys, saveCardSettings } from '@/lib/card';
+import { frameComboGroup, unframeComboGroup } from '@/lib/floor';
 import { z } from 'zod';
 import { handle, originOf, readJson } from '@/lib/api';
 import { requireAdmin } from '@/lib/adminApi';
@@ -120,6 +122,17 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('bundle.presets.apply'), index: z.number().int().min(0).optional() }),
   z.object({ action: z.literal('bundle.remove'), seatIds: z.array(z.string()).max(600) }),
   z.object({ action: z.literal('bundle.clear'), rows: z.array(z.number().int()).max(20), blocks: z.array(z.string()).max(5) }),
+  z.object({ action: z.literal('floor3.frame'), seatIds: z.array(z.string().max(16)).min(1).max(40) }),
+  z.object({ action: z.literal('floor3.unframe'), seatId: z.string().max(16) }),
+  z.object({ action: z.literal('floor3.settings'), values: z.object({
+    open: z.boolean(), saleStart: z.string().nullable(), saleEnd: z.string().nullable(), credit: z.boolean(),
+    refundOn: z.boolean(), refundDays: z.number().int().min(0).max(60), refundFeePct: z.number().min(0).max(10),
+  }).partial() }),
+  z.object({ action: z.literal('floor3.keys'), values: z.object({
+    mode: z.enum(['test', 'prod']), merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), checkCode: z.string().max(20),
+  }).partial() }),
+  z.object({ action: z.literal('floor3.query'), id }),
+  z.object({ action: z.literal('floor3.refund'), id, fee: z.number().int().min(0).optional(), late: z.boolean().optional() }),
 ]);
 
 /** 寄出待寄通知，並回報這筆訂單或連結剛產生的通知結果 */
@@ -154,6 +167,17 @@ export async function POST(req: Request) {
     switch (a.action) {
       case 'event.update': return A.updateEventSettings(db, who, a.values);
       case 'publish': return A.publish(db, who);
+      case 'floor3.frame': mustBeAdmin(); return frameComboGroup(db, who, a.seatIds);
+      case 'floor3.unframe': mustBeAdmin(); return unframeComboGroup(db, who, a.seatId);
+      case 'floor3.settings': mustBeAdmin(); return saveCardSettings(db, who, a.values);
+      case 'floor3.keys': mustBeAdmin(); return saveCardKeys(db, who, a.values);
+      case 'floor3.query': mustBeAdmin(); return adminQuery(db, who, a.id);
+      case 'floor3.refund': {
+        mustBeAdmin();
+        const r = await refundCardOrder(db, who, a.id, { fee: a.fee, late: a.late });
+        dispatchQueued(db).catch((e) => console.error('通知寄送失敗', e));
+        return r;
+      }
       case 'zone.create': return A.createZone(db, who);
       case 'zone.update': return A.updateZone(db, who, a.id, a.values);
       case 'zone.delete': return A.deleteZone(db, who, a.id);

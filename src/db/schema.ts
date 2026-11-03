@@ -26,6 +26,7 @@ export const venueSeat = pgTable('venue_seat', {
   x: integer('x').notNull(), // 實體座標：欄
   y: integer('y').notNull(), // 實體座標：列
   entrance: text('entrance').notNull().default('2M 入口'),
+  floor: text('floor').notNull().default('2M'), // 樓層：2M（第 1–12 排）／3F（第 13–27 排）
 });
 
 /** 場次 */
@@ -62,6 +63,7 @@ export const priceZone = pgTable('price_zone', {
   price: integer('price').notNull().default(0),
   open: boolean('open').notNull().default(true),
   sort: integer('sort').notNull().default(0),
+  floor: text('floor').notNull().default('2M'), // 票種屬於哪一層，不能跨層使用
 });
 
 /** 席位用途類別 */
@@ -101,6 +103,7 @@ export const combo = pgTable('combo', {
   sort: integer('sort').notNull().default(0),
   autoHolders: boolean('auto_holders').notNull().default(false), // 持票人自動編號：本名、本名02…；證末4碼+01、02…
   description: text('description').notNull().default(''), // 預購單上的「方案內容」說明；空白則自動產生
+  floor: text('floor').notNull().default('2M'), // 購票方式屬於哪一層，不能跨層使用
 });
 
 /** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */
@@ -123,6 +126,7 @@ export const inviteLink = pgTable('invite_link', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   status: text('status').notNull().default('active'), // active / disabled
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  floor: text('floor').notNull().default('2M'), // 連結綁樓層：只看得到、選得到這一層
 }, (t) => ({ code: uniqueIndex('invite_link_code_idx').on(t.code) }));
 
 /** 訂單。status：held / pending / paid / cancelled / expired */
@@ -327,3 +331,39 @@ export const bankTx = pgTable('bank_tx', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   createdBy: text('created_by').notNull().default(''),
 }, (t) => ({ key: uniqueIndex('bank_tx_key_idx').on(t.eventId, t.key) }));
+
+/**
+ * 三樓信用卡訂單：買方按「前往付款」時建立（pending），綠界回報成功才變 paid，並建立 preorder（source=card）與劃位連結。
+ * status：pending 付款中／paid 已付款／failed 付款失敗／expired 逾時未付／refunding 刷退中／refunded 已退票
+ */
+export const cardOrder = pgTable('card_order', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  tradeNo: text('trade_no').notNull(), // 傳給綠界的 MerchantTradeNo（永不重複）
+  token: text('token').notNull(), // 買方回到結果頁用的隨機碼
+  env: text('env').notNull(), // test 綠界測試環境／prod 正式
+  status: text('status').notNull().default('pending'),
+  items: jsonb('items').$type<PreorderItem[]>().notNull(),
+  amount: integer('amount').notNull(),
+  name: text('name').notNull(),
+  phone: text('phone').notNull(),
+  email: text('email').notNull(),
+  invType: text('inv_type').notNull().default('member'),
+  invCode: text('inv_code').notNull().default(''),
+  invTitle: text('inv_title').notNull().default(''),
+  preorderId: integer('preorder_id'),
+  linkId: integer('link_id'),
+  gwTradeNo: text('gw_trade_no').notNull().default(''), // 綠界交易編號
+  gwAuthNo: text('gw_auth_no').notNull().default(''), // 信用卡授權單號（gwsr），查關帳狀態用
+  paidVia: text('paid_via').notNull().default(''), // 哪一道保險先收到：return／result／query／admin
+  note: text('note').notNull().default(''),
+  flagged: boolean('flagged').notNull().default(false), // 需要人工處理（金額不符、超賣、刷退後作廢失敗）
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  reserveUntil: timestamp('reserve_until', { withTimezone: true }).notNull(), // 付款中先佔名額到這個時間
+  lastQueryAt: timestamp('last_query_at', { withTimezone: true }),
+  paidAt: timestamp('paid_at', { withTimezone: true }),
+  refundedAt: timestamp('refunded_at', { withTimezone: true }),
+  refundAmount: integer('refund_amount').notNull().default(0),
+  refundFee: integer('refund_fee').notNull().default(0),
+  refundBy: text('refund_by'),
+}, (t) => ({ tradeNo: uniqueIndex('card_order_trade_no_idx').on(t.tradeNo), token: uniqueIndex('card_order_token_idx').on(t.token), byStatus: index('card_order_status_idx').on(t.status) }));

@@ -1,5 +1,6 @@
 'use client';
 
+import Floor3Tab from './Floor3Tab';
 import { createContext, Fragment, useCallback, useContext, useEffect, useState } from 'react';
 import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
@@ -27,7 +28,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>> };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -49,12 +50,12 @@ function deliveryText(d: Delivery | undefined) {
 }
 type Seat = State['seats'][number];
 type Order = State['orders'][number];
-type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates' | 'einv' | 'vip';
+type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 'tickets' | 'notify' | 'gates' | 'einv' | 'vip' | 'floor3';
 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單核帳'],
   ['links', '五、劃位專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
-  ['einv', '十、電子發票'],
+  ['einv', '十、電子發票'], ['floor3', '三樓售票'],
   // 十一、招待：先收起來；要用時把下一行加回來
   // ['vip', '十一、招待'],
 ];
@@ -241,6 +242,7 @@ export default function AdminApp() {
       {tab === 'orders' && <Orders />}
       {tab === 'tickets' && <Tickets />}
       {tab === 'einv' && <Invoices />}
+      {tab === 'floor3' && st.floor3 && <Floor3Tab f={st.floor3} act={act} busy={busy} usages={st.usages} base={st.form.base} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
       {tab === 'vip' && <Vips />}
       {tab === 'notify' && <Notify />}
     </main>

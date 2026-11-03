@@ -17,8 +17,10 @@ import type { Db } from '@/db/client';
 /** 依外鍵順序（還原時先刪後面的、先建前面的） */
 export const TABLES = [
   'venue_seat', 'event', 'price_zone', 'seat_usage', 'event_seat', 'combo', 'combo_item', 'invite_link', 'orders', 'order_seat',
-  'payment', 'notification', 'preorder', 'bank_tx', 'gate', 'checkin', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
+  'payment', 'notification', 'preorder', 'card_order', 'bank_tx', 'gate', 'checkin', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
 ] as const;
+
+const FLOOR_TABLES = new Set<string>(['venue_seat', 'price_zone', 'combo', 'invite_link']);
 
 export interface BackupFile { format: 'ticc-backup'; version: number; at: string; tables: Record<string, Record<string, unknown>[]> }
 
@@ -43,7 +45,8 @@ export async function importAll(db: Db, b: BackupFile) {
   await db.transaction(async (tx) => {
     for (const tb of [...TABLES].reverse()) await tx.execute(sql.raw(`delete from "${tb}"`));
     for (const tb of TABLES) {
-      const rows = b.tables[tb] ?? [];
+      // 舊備份沒有 floor 欄位：一律是 2M（三樓座位會在下次啟動時自動補回）
+      const rows = (b.tables[tb] ?? []).map((r) => (FLOOR_TABLES.has(tb) && r.floor == null ? { ...r, floor: '2M' } : r));
       for (let i = 0; i < rows.length; i += 500) {
         const chunk = JSON.stringify(rows.slice(i, i + 500));
         await tx.execute(sql`insert into ${sql.raw(`"${tb}"`)} select * from jsonb_populate_recordset(null::${sql.raw(`"${tb}"`)}, ${chunk}::jsonb)`);

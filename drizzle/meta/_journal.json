@@ -134,6 +134,13 @@
       "when": 1793563462744,
       "tag": "0018_bank_tx",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793715787951,
+      "tag": "0019_floors_card",
+      "breakpoints": true
     }
   ]
 }

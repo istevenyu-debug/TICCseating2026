@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: '大會堂劃位',
-  description: '台北國際會議中心大會堂第 1–12 排線上劃位',
+  description: '台北國際會議中心大會堂線上劃位',
   robots: { index: false, follow: false },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };

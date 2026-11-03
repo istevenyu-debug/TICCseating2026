@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { bundleClass, bundleIndex } from '@/lib/bundle';
 import type { BookingState } from '@/lib/booking';
 import { inkFor } from '@/lib/color';
+import { rowLabelCols, rowLabels, type Floor } from '@/lib/layout';
 
 type Seat = BookingState['seats'][number];
 
@@ -22,11 +23,10 @@ interface Props {
   focus?: Set<string> | null;
   /** 只看、不能點（預購單用）：不顯示勾選相關說明 */
   view?: boolean;
+  floor?: Floor;
 }
 
-const ROW_LABEL_COLS = [8, 45];
-
-export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus, view }: Props) {
+export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle, onBlocked, locked, allowed, focus, view, floor = '2M' }: Props) {
   // 只看模式：一開始縮到整張圖放得進畫面（手機上看得到全場）
   const maxX = Math.max(52, ...seats.map((x) => x.x));
   const [cell, setCell] = useState(() => (view && typeof window !== 'undefined' ? Math.max(6, Math.min(22, Math.floor((Math.min(window.innerWidth, 1100) - 72) / maxX))) : 22));
@@ -54,9 +54,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const { linkRight, groups } = bundleIndex(seats);
 
-  const rows: { y: number; label: string }[] = [];
-  if (vipInstalled) rows.push({ y: 1, label: 'VIP' });
-  for (let r = 1; r <= 12; r++) rows.push({ y: r + 1, label: String(r) });
+  const rows = rowLabels(floor, vipInstalled);
 
   return (
     <div className="card">
@@ -82,8 +80,8 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
       <div className="mapscroll" ref={scroller}>
         <div style={{ width: 'max-content', minWidth: '100%', margin: '0 auto' }}>{/* 舞台跟座位一起置中 */}
         <div className="stage">舞台</div>
-        <div className={`hall${cell < 13 ? ' tiny' : ''}`} style={{ ['--cell' as string]: `${cell}px` }}>
-          {rows.flatMap((r) => ROW_LABEL_COLS.map((c) => (
+        <div className={`hall${floor === '3F' ? ' f3' : ''}${cell < 13 ? ' tiny' : ''}`} style={{ ['--cell' as string]: `${cell}px` }}>
+          {rows.flatMap((r) => rowLabelCols(floor).map((c) => (
             <div key={`${r.y}-${c}`} className="rl" style={{ gridColumn: c, gridRow: r.y }}>{r.label}</div>
           )))}
           {seats.map((s) => {

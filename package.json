@@ -2,7 +2,7 @@
   "name": "ticc-seating-2026",
   "version": "0.1.0",
   "private": true,
-  "description": "台北國際會議中心大會堂第 1–12 排劃位系統（主辦方自用）",
+  "description": "台北國際會議中心大會堂劃位系統（主辦方自用）",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

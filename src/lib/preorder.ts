@@ -28,10 +28,11 @@ async function currentEvent(db: Db) {
 export async function preorderMenuFull(db: Db) {
   const ev = await currentEvent(db);
   const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
-  const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
+  const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M'))); // 認購單只賣 2M
   const zoneName = (id: number) => zones.find((z) => z.id === id)?.name ?? '';
-  const combos = (await loadCombos(db, ev.id)).filter((c) => pub.comboIds.includes(c.id) && !c.isSingle && c.price > 0);
-  const singleOpen = (await loadCombos(db, ev.id)).some((c) => c.isSingle && pub.comboIds.includes(c.id));
+  const all2m = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M');
+  const combos = all2m.filter((c) => pub.comboIds.includes(c.id) && !c.isSingle && c.price > 0);
+  const singleOpen = all2m.some((c) => c.isSingle && pub.comboIds.includes(c.id));
   const items = [
     ...combos.map((c) => {
       // 白話：一組＝付哪幾張＋送哪幾張（送的票種＝票價 0）
@@ -176,9 +177,9 @@ function rateLimit(ip: string, now: number, max: number) {
 /** 名額：每個限量方案已登記多少（正取、候補分開算），用來判斷「收到／候補／已圓滿」 */
 export async function capacityOf(db: Db) {
   const ev = await currentEvent(db);
-  const combos = (await loadCombos(db, ev.id)).filter((c) => !c.isSingle && c.limitSets > 0);
+  const combos = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M' && !c.isSingle && c.limitSets > 0);
   const rows = await db.select({ items: t.preorder.items, waitlist: t.preorder.waitlist }).from(t.preorder)
-    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.status} <> 'cancelled'`));
+    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.status} <> 'cancelled'`, sql`${t.preorder.source} <> 'card'`));
   const { waitlistCap } = await getPreorderSettings(db);
   const sum = (id: number, w: boolean) => rows.filter((r) => r.waitlist === w).reduce((a, r) => a + r.items.filter((i) => i.kind === 'combo' && i.id === id).reduce((b, i) => b + i.qty, 0), 0);
   return Object.fromEntries(combos.map((c) => [c.id, { limit: c.limitSets, used: sum(c.id, false), wait: sum(c.id, true), waitCap: waitlistCap }])) as Record<number, { limit: number; used: number; wait: number; waitCap: number }>;
@@ -285,7 +286,8 @@ export const itemKey = (i: { kind: string; id: number }) => `${i.kind}:${i.id}`;
 
 export async function listPreorders(db: Db) {
   const ev = await currentEvent(db);
-  const rows = await db.select().from(t.preorder).where(eq(t.preorder.eventId, ev.id)).orderBy(desc(t.preorder.id));
+  // 三樓刷卡單（source=card）不進「四、訂單核帳」
+  const rows = await db.select().from(t.preorder).where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.source} <> 'card'`)).orderBy(desc(t.preorder.id));
   const cfg = await getLineCfg(db);
   // 送單順序：依送出時間（取消的不算）
   const seq = new Map([...rows].filter((r) => r.status !== 'cancelled').sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id - b.id).map((r, i) => [r.id, i + 1]));
