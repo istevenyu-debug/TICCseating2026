@@ -125,6 +125,7 @@ const action = z.discriminatedUnion('action', [
 /** 寄出待寄通知，並回報這筆訂單或連結剛產生的通知結果 */
 async function deliver(db: Db, by: { orderId?: number; linkId?: number; templates?: string[] }) {
   await dispatchQueued(db);
+  await dispatchQueued(db); // 若剛好碰上背景寄信，第一次只是等它跑完；再跑一次才會寄到剛產生的這封
   const rows = await db.select({ channel: t.notification.channel, status: t.notification.status, error: t.notification.error })
     .from(t.notification)
     .where(by.orderId ? eq(t.notification.orderId, by.orderId)

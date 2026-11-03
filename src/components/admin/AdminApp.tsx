@@ -41,10 +41,10 @@ function deliveryText(d: Delivery | undefined) {
   const push = d.find((x) => x.channel === 'push');
   const line = (x: { status: string; error: string | null } | undefined, name: string) => !x ? '' :
     x.status === 'sent' ? `✓ ${name}已寄出` : x.status === 'simulated' ? `✗ ${name}沒有寄出（${name === 'Email' ? '尚未設定 Gmail' : '尚未設定簡訊帳號'}）`
-      : x.status === 'failed' ? `✗ ${name}寄送失敗：${x.error ?? ''}` : `${name}寄送中`;
+      : x.status === 'failed' ? `✗ ${name}寄送失敗：${x.error ?? ''}` : x.error ? `✗ ${name}暫時寄不出（${x.error}），系統會再試` : `${name}寄送中（稍後自動寄出）`;
   const parts = [line(email, 'Email'), line(sms, '簡訊'), push?.status === 'sent' ? '✓ 手機通知已送達' : ''].filter(Boolean);
   // Email 沒寄出就以紅色提醒（簡訊未設定不算，可能本來就不用）
-  const bad = !!email && email.status !== 'sent';
+  const bad = !!email && (email.status === 'failed' || email.status === 'simulated' || !!email.error);
   return { text: `${parts.join('；')}。${bad ? '請到「八、通知設定」設定 Gmail 後，在通知紀錄按「重寄」。' : ''}（訊息也已顯示在對方的購票頁）`, bad };
 }
 type Seat = State['seats'][number];
