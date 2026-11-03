@@ -335,6 +335,32 @@ export async function voidInvoice(db: Db, invoiceId: number, actor: string, reas
 }
 
 /** 後台清單：發票＋訂單的真實資料 */
+type IssueItem = { ItemSeq: number; ItemName: string; ItemCount: number; ItemWord: string; ItemPrice: number; ItemAmount: number; ItemTaxType: string; ItemRemark?: string };
+/** 向綠界查詢：取回綠界端記錄的這張發票（品名、金額、買受人、上傳狀態），用來核對 */
+export async function invoiceLookup(db: Db, id: number, post: EinvPost = realPost) {
+  const cfg = await getEinvConfig(db);
+  const [inv] = await db.select().from(t.invoice).where(eq(t.invoice.id, id));
+  if (!inv) throw new BookingError('NOT_FOUND', '找不到這張發票');
+  if (!inv.invoiceNo) throw new BookingError('INVALID', '這張發票還沒開立');
+  if (inv.env === 'mock') throw new BookingError('INVALID', '模擬模式開的不是真的發票，綠界沒有這張。');
+  if (inv.env !== cfg.mode) throw new BookingError('INVALID', `這張是在「${MODE_NAME[inv.env as EinvMode] ?? inv.env}」開的，目前設定是「${MODE_NAME[cfg.mode]}」，請先把模式切回去再查。`);
+  let r = await call(db, cfg, '/B2CInvoice/GetIssue', inv.relateNumber ? { RelateNumber: inv.relateNumber } : { InvoiceNo: inv.invoiceNo, InvoiceDate: inv.invoiceDate.slice(0, 10) }, post) as EcpayReply & Record<string, unknown>;
+  if (r.RtnCode !== 1 && inv.relateNumber) r = await call(db, cfg, '/B2CInvoice/GetIssue', { InvoiceNo: inv.invoiceNo, InvoiceDate: inv.invoiceDate.slice(0, 10) }, post) as EcpayReply & Record<string, unknown>;
+  if (r.RtnCode !== 1) throw new BookingError('SERVER', `綠界查不到這張發票：${r.RtnMsg || r.RtnCode}`);
+  const str = (k: string) => String(r[k] ?? '');
+  const items = ((r.Items as IssueItem[] | undefined) ?? []).map((i) => ({ name: i.ItemName, qty: Number(i.ItemCount), unit: i.ItemWord, price: Number(i.ItemPrice), amount: Number(i.ItemAmount), remark: i.ItemRemark ?? '' }));
+  const ident = str('IIS_Identifier');
+  const tax: Record<string, string> = { '1': '應稅', '2': '零稅率', '3': '免稅', '4': '應稅（特種稅率）', '9': '混合' };
+  return {
+    invoiceNo: str('IIS_Number'), createdAt: str('IIS_Create_Date'), amount: Number(r.IIS_Sales_Amount ?? 0), items,
+    buyer: str('IIS_Customer_Name'), ubn: /^0*$/.test(ident) ? '' : ident, email: str('IIS_Customer_Email'), tax: tax[str('IIS_Tax_Type')] ?? str('IIS_Tax_Type'),
+    status: str('IIS_Invalid_Status') === '1' ? '已作廢' : str('IIS_Issue_Status') === '0' ? '已註銷' : '已開立',
+    uploaded: str('IIS_Upload_Status') === '1' ? `已上傳財政部（${str('IIS_Upload_Date')}）` : '尚未上傳財政部',
+    random: str('IIS_Random_Number'), remark: str('InvoiceRemark'),
+    match: Number(r.IIS_Sales_Amount ?? 0) === inv.amount,
+  };
+}
+
 /** 看發票：向綠界取得發票列印頁網址（1 小時內有效）。模擬模式沒有真的發票 */
 export async function invoicePrintUrl(db: Db, id: number, post: EinvPost = realPost) {
   const cfg = await getEinvConfig(db);

@@ -7,7 +7,7 @@ import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
 import { confirmPreorder, listPreorders, preorderMenu, submitPreorder } from '@/lib/preorder';
 import {
-  ECPAY_TEST, invoicePrintUrl, backfillInvoices, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
+  ECPAY_TEST, invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, ecpayDecrypt, ecpayEncrypt, editInvoiceBuyer, invoiceForLink, issueBatch, issueInvoice, listInvoices,
   publicEinvConfig, saveEinvConfig, voidInvoice, type EinvPost,
 } from '@/lib/einvoice';
 import { invProblem, ubnValid } from '@/lib/invoiceRules';
@@ -226,5 +226,23 @@ describe('看發票（綠界列印頁）', () => {
     expect(ecpay.calls.at(-1)).toMatchObject({ path: '/B2CInvoice/InvoicePrint', data: { InvoiceNo: 'AB12345678', InvoiceDate: '2026-11-15', PrintStyle: 1, IsShowingDetail: 1 } });
     await saveEinvConfig(db, 'admin', { mode: 'mock' }, '網管');
     await expect(invoicePrintUrl(db, inv.id, ecpay.post)).rejects.toThrow('切回去');
+  });
+});
+
+describe('向綠界查詢發票', () => {
+  it('用自訂編號查；回傳品名、金額、買受人、上傳狀態；金額比對', async () => {
+    await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'test', timing: 'auto' }, '網管');
+    const ecpay = fakeEcpay({
+      '/B2CInvoice/Issue': issued('AB12345678'),
+      '/B2CInvoice/GetIssue': () => ({ RtnCode: 1, RtnMsg: 'ok', IIS_Number: 'AB12345678', IIS_Create_Date: '2026-11-15 10:00:00', IIS_Sales_Amount: 12160, IIS_Identifier: '0000000000',
+        IIS_Customer_Name: '貴賓', IIS_Tax_Type: '1', IIS_Issue_Status: '1', IIS_Invalid_Status: '0', IIS_Upload_Status: '0', IIS_Random_Number: '6789',
+        Items: [{ ItemSeq: 1, ItemName: '祈福音樂會 入場券（雙人套票）', ItemCount: 2, ItemWord: '套', ItemPrice: 6080, ItemAmount: 12160, ItemTaxType: '1' }] }),
+    });
+    const { preorderId } = await confirmed({}, ecpay.post);
+    const inv = (await createForPreorder(db, preorderId, 'admin', ecpay.post))!;
+    const r = await invoiceLookup(db, inv.id, ecpay.post);
+    expect(r).toMatchObject({ invoiceNo: 'AB12345678', amount: 12160, buyer: '貴賓', ubn: '', tax: '應稅', status: '已開立', uploaded: '尚未上傳財政部', match: true });
+    expect(r.items[0]).toMatchObject({ name: '祈福音樂會 入場券（雙人套票）', qty: 2, unit: '套', price: 6080 });
+    expect(ecpay.calls.at(-1)!.data.RelateNumber).toMatch(/^P0001/);
   });
 });

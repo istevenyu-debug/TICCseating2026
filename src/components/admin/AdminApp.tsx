@@ -2199,11 +2199,13 @@ function EinvSettings() {
   );
 }
 
+type Look = { invoiceNo: string; createdAt: string; amount: number; items: { name: string; qty: number; unit: string; price: number; amount: number; remark: string }[]; buyer: string; ubn: string; email: string; tax: string; status: string; uploaded: string; random: string; remark: string; match: boolean };
 function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void }) {
   const { act, busy, sure, confirm2, setMsg } = useAdmin();
   const [open, setOpen] = useState(false);
   const [ed, setEd] = useState({ invType: x.invType, invCode: x.invCode, invTitle: x.invTitle });
   const [vr, setVr] = useState({ reason: '', reopen: true });
+  const [look, setLook] = useState<Look | null>(null);
   const canPick = x.status === 'pending' || x.status === 'failed';
   return (
     <>
@@ -2236,9 +2238,23 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
                 const w = window.open('', '_blank'); // 先開視窗，避免被瀏覽器擋下
                 const r = await act({ action: 'invoice.print', id: x.id }) as { url: string } | null;
                 if (r && w) w.location.href = r.url; else if (r) location.href = r.url; else w?.close();
-              }}>看發票</button>}</span></>}
+              }}>看發票</button>}
+              {x.env !== 'mock' && <button className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={async () => {
+                const r = await act({ action: 'invoice.lookup', id: x.id }) as Look | null; if (r) setLook(r);
+              }}>向綠界查詢</button>}</span></>}
             {x.status === 'void' && <><span className="muted">作廢</span><span>{x.invoiceNo}：{x.voidReason}</span></>}
           </div>
+          {look && (
+            <div className="note" style={{ marginTop: 8, background: 'var(--bg2, #f4f6fa)' }}>
+              <b>綠界端的資料</b>（{look.status}・{look.uploaded}）
+              <div className="small" style={{ marginTop: 4 }}>發票 <span className="mono">{look.invoiceNo}</span>・{look.createdAt}・隨機碼 {look.random}・{look.tax}</div>
+              <div className="small">買受人：{look.buyer || '—'}{look.ubn && `（統編 ${look.ubn}）`}{look.email && `・${look.email}`}</div>
+              <table className="small" style={{ marginTop: 4 }}><tbody>{look.items.map((i, n) => <tr key={n}><td>{i.name}</td><td>{i.qty} {i.unit}</td><td className="mono">{money(i.price)}</td><td className="mono">{money(i.amount)}</td><td className="muted">{i.remark}</td></tr>)}</tbody></table>
+              <div className="small" style={{ marginTop: 4 }}>總計 <b className="mono">{money(look.amount)}</b>　{look.match ? <b style={{ color: 'var(--ok)' }}>✓ 與本系統金額相符</b> : <b className="err-text">⚠ 與本系統金額 {money(x.amount)} 不同</b>}</div>
+              {look.remark && <div className="small muted">備註：{look.remark}</div>}
+              <button className="btn small" style={{ marginTop: 4 }} onClick={() => setLook(null)}>收起</button>
+            </div>
+          )}
           {canPick && (
             <div style={{ marginTop: 8 }}>
               <div className="fields">
