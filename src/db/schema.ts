@@ -104,6 +104,7 @@ export const combo = pgTable('combo', {
   autoHolders: boolean('auto_holders').notNull().default(false), // 持票人自動編號：本名、本名02…；證末4碼+01、02…
   description: text('description').notNull().default(''), // 預購單上的「方案內容」說明；空白則自動產生
   floor: text('floor').notNull().default('2M'), // 購票方式屬於哪一層，不能跨層使用
+  hidden: boolean('hidden').notNull().default(false), // 隱藏方案：公開認購頁與其他買方看不到，只有登入後台的人員能代填
 });
 
 /** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */

@@ -112,13 +112,13 @@ export async function usedComboSets(db: Exec, eventId: number): Promise<Record<n
 }
 
 /** 場次的購票方式（含組合內容） */
-export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean; description: string })[]> {
+export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean; description: string; hidden: boolean })[]> {
   const combos = await db.select().from(t.combo).where(eq(t.combo.eventId, eventId)).orderBy(asc(t.combo.sort), asc(t.combo.id));
   const items = combos.length
     ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
     : [];
   return combos.map((c) => ({
-    id: c.id, name: c.name, isSingle: c.isSingle, floor: c.floor, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, description: c.description,
+    id: c.id, name: c.name, isSingle: c.isSingle, floor: c.floor, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, hidden: c.hidden, description: c.description,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
 }
@@ -173,7 +173,7 @@ export async function publicSeatMap(db: Db) {
   const pub = ev.published ?? { open: false, zoneIds: [], comboIds: [], at: '' };
   const openZones = new Set(pub.zoneIds);
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id)).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
-  const combos = (await loadCombos(db, ev.id)).filter((c) => pub.comboIds.includes(c.id));
+  const combos = (await loadCombos(db, ev.id)).filter((c) => pub.comboIds.includes(c.id) && !c.hidden); // 隱藏方案不影響公開座位圖
   for (const c of combos) if (!c.isSingle) for (const i of c.items) openZones.add(i.zoneId);
   const rows = await db.select({
     id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, code: t.venueSeat.code,
@@ -200,7 +200,10 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
   const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, link.floor))).orderBy(asc(t.priceZone.sort), asc(t.priceZone.id));
   const combosAll = (await loadCombos(db, ev.id)).filter((c) => c.floor === link.floor);
   const { openZones, openCombos } = openSets(ev, link, zones, combosAll);
-  const combos = combosAll.filter((c) => openCombos.has(c.id));
+  // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
+  const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
+  // 隱藏方案：只有認購單上有這個方案的連結看得到
+  const combos = combosAll.filter((c) => openCombos.has(c.id) && (!c.hidden || po?.items.some((i) => i.kind === 'combo' && i.id === c.id)));
   // 開放的組合票裡的贈票區（票價 0）：就算沒在價格設定勾「開放」，也要能劃
   for (const c of combos) if (!c.isSingle) for (const i of c.items) if (zones.find((z) => z.id === i.zoneId)?.price === 0) openZones.add(i.zoneId);
   const sets = await usedComboSets(db, ev.id);
@@ -251,8 +254,6 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
 
   const sf = saleStateFor(ev, link, now);
   const secret = await qrSecret(db);
-  // 由訂單（收款）產生的連結：帶入訂購時填的資料與購買的購票方式
-  const [po] = await db.select().from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
   const poItems = po ? (po.released ? po.items.filter((i) => po.released!.includes(`${i.kind}:${i.id}`)) : po.items) : [];
   const comboItem = poItems.find((i) => i.kind === 'combo' && combos.some((c) => c.id === i.id));
   const ent = await linkEntitle(db, link.id);
@@ -341,6 +342,10 @@ export async function holdSeats(db: Db, code: string, seatIdsIn: string[], combo
     const allCombos = (await loadCombos(tx, ev.id)).filter((c) => c.floor === link.floor);
     const open = openSets(ev, link, zoneRows, allCombos);
     if (!cb || cb.floor !== link.floor || !open.openCombos.has(cb.id)) throw new BookingError('COMBO', '此方案目前未開放劃位。');
+    if (cb.hidden) { // 隱藏方案：只有認購單上有這個方案的連結能劃
+      const [own] = await tx.select({ items: t.preorder.items }).from(t.preorder).where(eq(t.preorder.linkId, link.id)).limit(1);
+      if (!own?.items.some((i) => i.kind === 'combo' && i.id === cb.id)) throw new BookingError('COMBO', '此方案目前未開放劃位。');
+    }
 
     const rows = await tx.select({
       seatId: t.eventSeat.seatId, seatType: t.venueSeat.seatType, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo,

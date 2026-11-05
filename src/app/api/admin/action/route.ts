@@ -45,7 +45,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('usage.assignSeats'), usageId: id, seatIds: z.array(z.string().max(16)).min(1).max(600) }),
   z.object({ action: z.literal('combo.create') }),
   z.object({ action: z.literal('combo.update'), id, values: z.object({
-    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(), description: z.string().trim().max(200),
+    name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(), hidden: z.boolean(), description: z.string().trim().max(200),
     items: z.array(z.object({ zoneId: id, qty: z.number().int().min(1).max(20) })).max(10),
   }).partial() }),
   z.object({ action: z.literal('combo.delete'), id }),

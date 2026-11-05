@@ -46,7 +46,8 @@ export async function importAll(db: Db, b: BackupFile) {
     for (const tb of [...TABLES].reverse()) await tx.execute(sql.raw(`delete from "${tb}"`));
     for (const tb of TABLES) {
       // 舊備份沒有 floor 欄位：一律是 2M（三樓座位會在下次啟動時自動補回）
-      const rows = (b.tables[tb] ?? []).map((r) => (FLOOR_TABLES.has(tb) && r.floor == null ? { ...r, floor: '2M' } : r));
+      const rows = (b.tables[tb] ?? []).map((r) => (FLOOR_TABLES.has(tb) && r.floor == null ? { ...r, floor: '2M' } : r))
+        .map((r) => (tb === 'combo' && r.hidden == null ? { ...r, hidden: false } : r)); // 舊備份沒有 hidden 欄位：一律不隱藏
       for (let i = 0; i < rows.length; i += 500) {
         const chunk = JSON.stringify(rows.slice(i, i + 500));
         await tx.execute(sql`insert into ${sql.raw(`"${tb}"`)} select * from jsonb_populate_recordset(null::${sql.raw(`"${tb}"`)}, ${chunk}::jsonb)`);

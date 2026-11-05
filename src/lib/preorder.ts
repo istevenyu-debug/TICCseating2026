@@ -40,10 +40,10 @@ export async function preorderMenuFull(db: Db) {
       const buy = c.items.filter((i) => !isGift(i.zoneId)).map((i) => `認購${zoneName(i.zoneId)} ${i.qty} 席`);
       const gift = c.items.filter((i) => isGift(i.zoneId)).map((i) => `致贈${zoneName(i.zoneId)} ${i.qty} 席${i.qty > 1 ? '（座位相連）' : ''}`);
       const auto = [...buy, ...gift].join('，');
-      return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: c.description.trim() || auto, unit: '份', zoneIds: c.items.map((i) => i.zoneId) };
+      return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: c.description.trim() || auto, unit: '份', zoneIds: c.items.map((i) => i.zoneId), hidden: c.hidden };
     }),
     ...(singleOpen ? zones.filter((z) => pub.zoneIds.includes(z.id) && z.price > 0).sort((a, b) => a.sort - b.sort)
-      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `認購${z.name} 1 席`, unit: '席', zoneIds: [z.id] })) : []),
+      .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `認購${z.name} 1 席`, unit: '席', zoneIds: [z.id], hidden: false })) : []),
   ];
   return {
     invoice: (await getEinvConfig(db)).enabled, // 有開電子發票時，預購單要選發票開立方式
@@ -56,16 +56,18 @@ export async function preorderMenuFull(db: Db) {
   };
 }
 
-/** 公開給預購頁：不含任何金額 */
-export async function preorderMenu(db: Db) {
+/** 公開給預購頁：不含任何金額。staff＝登入後台的人員代填：看得到隱藏方案，認購單關閉時也能填 */
+export async function preorderMenu(db: Db, opts: { staff?: boolean } = {}) {
+  const staff = !!opts.staff;
   const m = await preorderMenuFull(db);
+  const shown = staff ? m.items : m.items.filter((i) => !i.hidden);
   const { publicSeatMap } = await import('./booking');
   const cap = await capacityOf(db);
   const ps = await getPreorderSettings(db);
   const fi = await getFlowImage(db);
   const ext = fi ? (fi.type === 'image/png' ? 'png' : fi.type === 'image/webp' ? 'webp' : 'jpg') : '';
   // 圖檔網址帶版本與副檔名：Cloudflare 會在各地快取，不必每個人都從家裡電腦下載
-  return { ...m, intro: ps.intro, flowImage: fi ? `/buy/flow/${fi.ver}.${ext}` : null, items: m.items.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
+  return { ...m, staff, open: staff ? shown.length > 0 : m.open && shown.length > 0, intro: ps.intro, flowImage: fi ? `/buy/flow/${fi.ver}.${ext}` : null, items: shown.map(({ price: _p, ...x }) => { void _p; return { ...x, status: x.kind === 'combo' ? capState(cap[x.id]) : 'open' as const }; }), map: await publicSeatMap(db) };
 }
 
 /**
@@ -187,15 +189,16 @@ export async function capacityOf(db: Db) {
 const capState = (c: { limit: number; used: number; wait: number; waitCap: number } | undefined, qty = 1): 'open' | 'waitlist' | 'full' =>
   !c || c.used + qty <= c.limit ? 'open' : c.wait + qty <= c.waitCap ? 'waitlist' : 'full';
 
-export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Date(), einvPost?: EinvPost) {
+/** staff：登入後台的人員代填時傳入姓名；可選隱藏方案，認購單關閉時也能送出 */
+export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Date(), einvPost?: EinvPost, staff = '') {
   const p = submitBody.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
   const menu = await preorderMenuFull(db);
-  if (!menu.open) throw new BookingError('SALE_CLOSED', '目前未開放預購。');
+  if (!staff && (!menu.open || !menu.items.some((i) => !i.hidden))) throw new BookingError('SALE_CLOSED', '目前未開放預購。');
   const items: t.PreorderItem[] = [];
   for (const it of p.data.items.filter((x) => x.qty > 0)) {
     const m = menu.items.find((x) => x.kind === it.kind && x.id === it.id);
-    if (!m) throw new BookingError('INVALID', '認購方案已變更，請重新整理頁面。');
+    if (!m || (m.hidden && !staff)) throw new BookingError('INVALID', '認購方案已變更，請重新整理頁面。');
     items.push({ kind: it.kind, id: it.id, name: m.name, price: m.price, qty: it.qty });
   }
   if (!items.length) throw new BookingError('INVALID', '請至少選擇一項認購方案');
@@ -236,7 +239,7 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       throw new BookingError('DUPLICATE', `這支手機在 ${when} 已送出過認購登記（${dup.no}），不需要重送。若您是要「再多認購一筆」，請按「確定要再登記一筆」。`);
     }
   }
-  rateLimit(ip, now.getTime(), ps.rateLimit);
+  if (!staff) rateLimit(ip, now.getTime(), ps.rateLimit);
   // 手機條碼、愛心碼、統編：送出前先向綠界確認，確定錯的請訂購人改正
   if (menu.invoice) {
     const v = await verifyBuyer(db, inv.invType, inv.invCode, inv.invTitle, einvPost);
@@ -252,7 +255,9 @@ export async function submitPreorder(db: Db, raw: unknown, ip = '', now = new Da
       const [row] = await db.insert(t.preorder).values({
         eventId: ev.id, no, items, amount, name: p.data.name, phone: p.data.phone, email: p.data.email,
         paidAmount, last5, lineName: p.data.lineName, createdAt: now, viewToken, waitlist, ...inv,
+        note: staff ? `${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })} ${staff} 代填` : '',
       }).returning();
+      if (staff) await db.insert(t.auditLog).values({ actor: staff, action: 'preorder_staff_entry', target: `preorder:${row.id}`, detail: JSON.stringify({ no, items: itemsText(items) }) });
       await db.insert(t.notification).values({
         channel: 'email', template: 'preorder_received', recipient: row.email,
         content: receivedText(ev, row.name, no, items, waitlist ? await waitPos(db, row.id) : null, false, await payUrl(db, viewToken), !last5),

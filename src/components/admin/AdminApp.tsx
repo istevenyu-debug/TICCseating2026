@@ -55,9 +55,7 @@ type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單核帳'],
   ['links', '五、劃位專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
-  ['einv', '十、電子發票'], ['floor3', '三樓售票'],
-  // 十一、招待：先收起來；要用時把下一行加回來
-  // ['vip', '十一、招待'],
+  ['einv', '十、電子發票'], ['vip', '十一、招待'], ['floor3', '三樓售票'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -629,6 +627,10 @@ function Price() {
                 <label className="switch small">
                   <input type="checkbox" checked={c.autoHolders} disabled={busy} onChange={(e) => save({ autoHolders: e.target.checked })} />
                   持票人自動帶入：第 1 張為購票人本名，之後為「姓名02、03…」，購票人可以逐張改成別人的名字（不填身分證）
+                </label>
+                <label className="switch small">
+                  <input type="checkbox" checked={c.hidden} disabled={busy} onChange={(e) => save({ hidden: e.target.checked })} />
+                  隱藏方案：公開認購頁看不到，只有登入後台的人員能代填（到「四、訂單核帳」按「代填認購單」）。請先勾好再發布。
                 </label>
                 <p className="small muted" style={{ margin: 0 }}>
                   {comboDesc(c, zoneName)}，共 {comboQty(c)} 張・原價合計 {money(list)}{c.price && list ? `・約 ${(c.price / list * 10).toFixed(1)} 折` : ''}{c.limitSets ? `・已售 ${c.usedSets} 組` : ''}
@@ -1979,6 +1981,7 @@ function Preorders() {
       <div className="card" style={{ paddingBottom: 8 }}>
         <h2 style={{ margin: 0 }}>四、訂單核帳 <span className="small muted">依送單順序。核對入帳、確認入群後打勾（只記錄，不會寄東西）</span></h2>
         <button className="btn small" style={{ float: 'right' }} onClick={() => downloadPaid(st, rec)}>下載已匯款名單（Excel）</button>
+        <a className="btn small" style={{ float: 'right', marginRight: 6 }} href="/buy" target="_blank" rel="noopener noreferrer">代填認購單</a>
         <div style={{ marginTop: 6 }}>待核帳 <b>{cnt('todo')}</b> 筆・金額不符 <b className={st.preorders.some(mismatch) ? 'err-text' : ''}>{st.preorders.filter(mismatch).length}</b> 筆・已核好待發 <b>{cnt('ready')}</b> 筆　
           {cnt('ready') > 0 && <button className="btn small pri" onClick={() => go('links')}>到五依序發連結 →</button>}</div>
       </div>

@@ -9,6 +9,7 @@ type Seat = BookingState['seats'][number];
 
 type Menu = {
   open: boolean;
+  staff?: boolean; // 登入後台的人員代填
   mailFrom: string;
   pushLink: boolean;
   line: { groups: { name: string; url: string }[]; map: Record<string, number> };
@@ -16,7 +17,7 @@ type Menu = {
   event: { name: string; showAt: string; bankName: string; bankAccount: string; accountName: string };
   intro: string;
   flowImage: string | null;
-  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[]; status: 'open' | 'waitlist' | 'full' }[];
+  items: { kind: 'combo' | 'zone'; id: number; name: string; desc: string; unit: string; zoneIds: number[]; status: 'open' | 'waitlist' | 'full'; hidden?: boolean }[];
   map: { vipInstalled: boolean; seats: Seat[]; zones: { id: number; name: string; color: string; gift: boolean }[] } | null;
 };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
@@ -145,7 +146,7 @@ export default function PreorderApp() {
   // 讀回草稿（只做一次）
   useEffect(() => {
     if (!menu || restored !== null) return;
-    const d = loadDraft();
+    const d = menu.staff ? null : loadDraft(); // 人員代填不讀上一位的草稿，避免帶到別人的資料
     if (d && (Object.values(d.qty).some((n) => n > 0) || d.f.name)) {
       setQty(d.qty); setF((x) => ({ ...x, ...d.f, agree: false })); setExtra(d.extra ?? []); setLineOpened(d.lineOpened ?? []); setLineJoined(d.lineJoined ?? []);
       setInv(d.inv ?? { type: 'member', code: '', title: '' }); setPaidTouched(!!d.paidTouched); setRestored(true);
@@ -154,10 +155,10 @@ export default function PreorderApp() {
   // 自動存草稿
   useEffect(() => {
     if (!restored && restored !== false) return;
-    if (done) return;
+    if (done || menu?.staff) return;
     const { agree: _a, ...rest } = f; void _a;
     saveDraft({ qty, f: rest, extra, lineOpened, lineJoined, inv, paidTouched });
-  }, [qty, f, extra, lineOpened, lineJoined, inv, paidTouched, restored, done]);
+  }, [qty, f, extra, lineOpened, lineJoined, inv, paidTouched, restored, done, menu?.staff]);
   // 等待收款期間：回到這頁或每分鐘自動更新一次
   useEffect(() => {
     if (!mine.some((m) => m.status === 'submitted')) return;
@@ -212,7 +213,7 @@ export default function PreorderApp() {
     setBusy(false);
     if (!r.ok && (r.code === 'AMOUNT_MISMATCH' || r.code === 'DUPLICATE')) { setWarnCode(r.code); setMismatch(r.message); return; } // 留在確認畫面，讓他選
     if (!r.ok) { setReview(false); setOkFlags({}); setErr(r.message); return; }
-    addSaved({ token: r.data.token, no: r.data.no });
+    if (!menu!.staff) addSaved({ token: r.data.token, no: r.data.no });
     clearDraft();
     setDone(r.data); window.scrollTo({ top: 0 });
   }
@@ -220,6 +221,7 @@ export default function PreorderApp() {
   const head = (
     <div className="card">
       <h1>{menu.event.name}</h1>
+      {menu.staff && <p className="note warn">人員代填模式：只有登入後台的人員看得到隱藏方案。姓名、手機填買方，Email 填公司信箱；個資同意請先取得買方同意。</p>}
       <div className="muted">{fmtDate(menu.event.showAt)}・台北國際會議中心 大會堂</div>
       <Intro text={menu.intro} />
       {menu.flowImage && (
@@ -324,7 +326,7 @@ export default function PreorderApp() {
             {menu.items.map((i) => (
               <div key={key(i)} className="selitem" style={{ alignItems: 'center', padding: '8px 0' }}>
                 <span style={{ cursor: 'pointer' }} onClick={() => setHl(hl === key(i) ? null : key(i))}>
-                  <b>{i.name}</b>{hl === key(i) && <span className="small" style={{ color: 'var(--accent)' }}>（座位圖已亮起）</span>}<br />
+                  <b>{i.name}</b>{i.hidden && <span className="small muted">（隱藏方案）</span>}{hl === key(i) && <span className="small" style={{ color: 'var(--accent)' }}>（座位圖已亮起）</span>}<br />
                   <span className="small">方案內容：{i.desc}</span><br />
                   <span className="small muted">座位參考：</span>
                   {[...new Set(i.zoneIds)].map((z) => menu.map?.zones.find((x) => x.id === z)).filter(Boolean).map((z) => (
