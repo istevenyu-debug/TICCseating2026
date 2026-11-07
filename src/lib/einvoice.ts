@@ -251,7 +251,7 @@ export async function issueInvoice(db: Db, invoiceId: number, actor: string, for
   const relateNumber = `${po.no}${Date.now().toString(36).toUpperCase()}`;
   const data = {
     RelateNumber: relateNumber, CustomerID: '', CustomerIdentifier: company ? po.invCode : '',
-    CustomerName: company ? po.invTitle.slice(0, 60) : '貴賓', // 個人發票一律「貴賓」；系統內保留真實資料
+    CustomerName: (company ? po.invTitle : po.name).trim().slice(0, 60) || '貴賓', // 三聯：公司抬頭；個人與捐贈：認購單姓名（空白才用「貴賓」）
     CustomerAddr: '', CustomerPhone: '', CustomerEmail: po.email, ClearanceMark: '', Print: '0',
     Donation: po.invType === 'donate' ? '1' : '0', LoveCode: po.invType === 'donate' ? po.invCode : '',
     CarrierType: po.invType === 'mobile' ? '3' : po.invType === 'cert' ? '2' : po.invType === 'donate' ? '' : '1',

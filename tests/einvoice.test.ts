@@ -110,7 +110,7 @@ describe('一筆訂單（收款）開一張發票', () => {
     expect(inv).toMatchObject({ status: 'issued', invoiceNo: 'AB12345678', env: 'test' });
     const d = ecpay.calls.find((c) => c.path === '/B2CInvoice/Issue')!.data;
     expect(d).toMatchObject({
-      MerchantID: '2000132', CustomerName: '貴賓', CustomerEmail: 'lin@example.com', CustomerIdentifier: '', CarrierType: '3', CarrierNum: '/ABC1234',
+      MerchantID: '2000132', CustomerName: '林大同', CustomerEmail: 'lin@example.com', CustomerIdentifier: '', CarrierType: '3', CarrierNum: '/ABC1234',
       Print: '0', Donation: '0', TaxType: '1', InvType: '07', vat: '1', SalesAmount: 12160, InvoiceRemark: '訂單 P0001',
     });
     expect(d.Items).toEqual([{ ItemSeq: 1, ItemName: '祈福音樂會 入場券（雙人套票）', ItemCount: 2, ItemWord: '套', ItemPrice: 6080, ItemTaxType: '1', ItemAmount: 12160, ItemRemark: '' }]);
