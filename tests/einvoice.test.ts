@@ -172,6 +172,19 @@ describe('一筆訂單（收款）開一張發票', () => {
     const all = await listInvoices(db);
     expect(all.map((x) => x.status)).toEqual(['pending', 'void']);
 
+    // 會計直接在綠界後台作廢：系統按作廢時綠界回錯誤，查到已作廢就同步，且可重開
+    const done = await issueBatch(db, [all.find((x) => x.status === 'pending')!.id], 'admin', false, ecpay.post);
+    const ecpay2 = fakeEcpay({
+      '/B2CInvoice/Invalid': () => ({ RtnCode: 1600003, RtnMsg: '發票已作廢' }),
+      '/B2CInvoice/GetIssue': () => ({ RtnCode: 1, RtnMsg: 'ok', IIS_Number: 'EF00000002', IIS_Invalid_Status: '1', IIS_Issue_Status: '1', IIS_Sales_Amount: 12160 }),
+    });
+    const v2 = await voidInvoice(db, done[0].id, 'admin', '買受人更正', true, ecpay2.post);
+    expect(v2).toMatchObject({ status: 'void', voidReason: '買受人更正（綠界後台已作廢）', reopened: true });
+    const ecpay3 = fakeEcpay({ '/B2CInvoice/Invalid': () => ({ RtnCode: 9, RtnMsg: '查無' }), '/B2CInvoice/GetIssue': () => ({ RtnCode: 1, IIS_Invalid_Status: '0', IIS_Issue_Status: '1' }) });
+    const p2 = (await listInvoices(db)).find((x) => x.status === 'pending')!;
+    const done2 = await issueBatch(db, [p2.id], 'admin', false, ecpay.post);
+    await expect(voidInvoice(db, done2[0].id, 'admin', 'x', false, ecpay3.post)).rejects.toThrow('作廢失敗');
+
     await db.update(t.invoice).set({ status: 'issued', env: 'prod' }).where(eq(t.invoice.id, inv!.id));
     await expect(resetSales(db, 'admin', {})).rejects.toThrow('正式電子發票');
   });

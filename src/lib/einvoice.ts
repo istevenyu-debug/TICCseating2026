@@ -320,10 +320,16 @@ export async function voidInvoice(db: Db, invoiceId: number, actor: string, reas
   const cfg = await getEinvConfig(db);
   if (inv.env !== cfg.mode) throw new BookingError('EINVOICE', `這張發票是在「${MODE_NAME[inv.env as EinvMode] ?? inv.env}」模式開立的，請先切回該模式再作廢。`);
   const r = await call(db, cfg, '/B2CInvoice/Invalid', { InvoiceNo: inv.invoiceNo, InvoiceDate: inv.invoiceDate.slice(0, 10), Reason: reason.trim().slice(0, 20) }, post);
-  if (r.RtnCode !== 1) throw new BookingError('EINVOICE', `發票 ${inv.invoiceNo} 作廢失敗（綠界：${r.RtnMsg}）`);
-  const [v] = await db.update(t.invoice).set({ status: 'void', voidedAt: new Date(), voidReason: reason.trim() }).where(eq(t.invoice.id, invoiceId)).returning();
-  await db.insert(t.auditLog).values({ actor, action: 'invoice_void', target: `invoice:${invoiceId}`, detail: `${inv.invoiceNo}：${reason.trim()}` });
-  let reopened = false; let why = '';
+  let why = reason.trim();
+  if (r.RtnCode !== 1) {
+    // 已在綠界後台直接作廢：查綠界確認後，系統這邊也改為作廢，才能重開
+    const look = await invoiceLookup(db, invoiceId, post).catch(() => null);
+    if (look?.status !== '已作廢') throw new BookingError('EINVOICE', `發票 ${inv.invoiceNo} 作廢失敗（綠界：${r.RtnMsg}）`);
+    why = `${why}（綠界後台已作廢）`;
+  }
+  const [v] = await db.update(t.invoice).set({ status: 'void', voidedAt: new Date(), voidReason: why }).where(eq(t.invoice.id, invoiceId)).returning();
+  await db.insert(t.auditLog).values({ actor, action: 'invoice_void', target: `invoice:${invoiceId}`, detail: `${inv.invoiceNo}：${why}` });
+  let reopened = false; why = '';
   if (reopen && inv.preorderId) {
     reopened = !!(await createForPreorder(db, inv.preorderId, actor, post));
     if (!reopened) {
