@@ -112,13 +112,13 @@ export async function usedComboSets(db: Exec, eventId: number): Promise<Record<n
 }
 
 /** 場次的購票方式（含組合內容） */
-export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean; description: string; hidden: boolean })[]> {
+export async function loadCombos(db: Exec, eventId: number): Promise<(ComboRule & { active: boolean; sort: number; autoHolders: boolean; description: string; hidden: boolean; gifts: { giftId: number; qty: number }[] })[]> {
   const combos = await db.select().from(t.combo).where(eq(t.combo.eventId, eventId)).orderBy(asc(t.combo.sort), asc(t.combo.id));
   const items = combos.length
     ? await db.select().from(t.comboItem).where(inArray(t.comboItem.comboId, combos.map((c) => c.id)))
     : [];
   return combos.map((c) => ({
-    id: c.id, name: c.name, isSingle: c.isSingle, floor: c.floor, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, hidden: c.hidden, description: c.description,
+    id: c.id, name: c.name, isSingle: c.isSingle, floor: c.floor, price: c.price, limitSets: c.limitSets, active: c.active, sort: c.sort, autoHolders: c.autoHolders, hidden: c.hidden, gifts: c.gifts ?? [], description: c.description,
     items: items.filter((i) => i.comboId === c.id).map((i) => ({ zoneId: i.zoneId, qty: i.qty })),
   }));
 }

@@ -101,7 +101,25 @@ describe('一筆訂單（收款）開一張發票', () => {
     await expect(saveEinvConfig(db, 'admin', { mode: 'prod' }, '王董')).rejects.toThrow('特店編號');
   });
 
-  it('綠界測試環境＋即開：送出前驗手機條碼；收訖就開立；個人發票名稱送「貴賓」；劃位成功信附發票號碼', async () => {
+  it('贈品：預設不寫進發票；勾選後寫在品項備註', async () => {
+    await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'test', timing: 'review' }, '網管');
+    const g = await A.createGift(db, 'admin'); await A.updateGift(db, 'admin', g.id, { name: '書', unit: '本' });
+    await A.updateCombo(db, 'admin', combo2, { gifts: [{ giftId: g.id, qty: 12 }] });
+    const remark = async (show: boolean, phone: string) => {
+      await A.setGiftShow(db, 'admin', { invoice: show });
+      const ecpay = fakeEcpay({ '/B2CInvoice/Issue': issued(show ? 'AB00000002' : 'AB00000001') });
+      await submitPreorder(db, order({ phone }), '', new Date(), ecpay.post);
+      const p = (await listPreorders(db)).find((x) => x.phone.replace(/\D/g, '') === phone)!;
+      await confirmPreorder(db, 'admin', p.id);
+      const inv = await createForPreorder(db, p.id, 'admin', ecpay.post);
+      await issueBatch(db, [inv!.id], 'admin', false, ecpay.post);
+      return (ecpay.calls.find((c) => c.path === '/B2CInvoice/Issue')!.data.Items as { ItemRemark: string }[])[0].ItemRemark;
+    };
+    expect(await remark(false, '0911000001')).toBe('');
+    expect(await remark(true, '0911000002')).toBe('每套贈 書 12 本');
+  });
+
+  it('綠界測試環境＋即開：送出前驗手機條碼；收訖就開立；個人發票名稱送認購單姓名；劃位成功信附發票號碼', async () => {
     await saveEinvConfig(db, 'admin', { enabled: '1', mode: 'test', timing: 'auto' }, '網管');
     const ecpay = fakeEcpay({ '/B2CInvoice/Issue': issued('AB12345678') });
     const { preorderId, code, linkId } = await confirmed({ invType: 'mobile', invCode: '/abc1234' }, ecpay.post);

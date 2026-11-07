@@ -8,6 +8,7 @@ import { randomInt } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
+import { giftNeed } from './gift';
 import {
   ACTIVE_ORDER, BookingError, freeSeatsOf, loadCombos, sweepExpired, usedComboSets,
 } from './booking';
@@ -167,6 +168,8 @@ export async function getAdminState(db: Db, now = new Date()) {
       maxPerOrder: evNow.maxPerOrder, holdMinutes: evNow.holdMinutes, payHours: evNow.payHours, payFirst: evNow.payFirst, preorderOpen: evNow.preorderOpen,
       bankName: evNow.bankName, bankAccount: evNow.bankAccount, accountName: evNow.accountName,
     },
+    giftShow: evNow.giftShow ?? {},
+    gifts: await giftState(db, ev.id, combos),
     published: pub, dirty,
     zones: zones.map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price, open: z.open, seatCount: inst.filter((s) => s.zoneId === z.id).length })),
     usages: usages.map((u) => ({ id: u.id, code: u.code, name: u.name, sellable: u.sellable })),
@@ -179,6 +182,16 @@ export async function getAdminState(db: Db, now = new Date()) {
     paidByLink: Object.fromEntries(paidByLink),
     stats,
   };
+}
+
+/** 贈品清單＋備貨統計（已登記＝未取消的認購單；已匯款＝已勾已匯款） */
+async function giftState(db: Db, eventId: number, combos: { id: number; gifts: { giftId: number; qty: number }[] }[]) {
+  const list = await db.select().from(t.giftItem).where(eq(t.giftItem.eventId, eventId)).orderBy(asc(t.giftItem.sort), asc(t.giftItem.id));
+  if (!list.length) return [];
+  const pos = await db.select({ items: t.preorder.items, status: t.preorder.status, paidOkAt: t.preorder.paidOkAt }).from(t.preorder).where(eq(t.preorder.eventId, eventId));
+  const all = giftNeed(pos.filter((p) => p.status !== 'cancelled').flatMap((p) => p.items), combos);
+  const paid = giftNeed(pos.filter((p) => p.status !== 'cancelled' && p.paidOkAt).flatMap((p) => p.items), combos);
+  return list.map((g) => ({ id: g.id, name: g.name, unit: g.unit, registered: all.get(g.id) ?? 0, paid: paid.get(g.id) ?? 0 }));
 }
 
 export type AdminState = Awaited<ReturnType<typeof getAdminState>>;
@@ -562,11 +575,16 @@ export async function createCombo(db: Db, actor: string) {
 }
 
 export async function updateCombo(db: Db, actor: string, id: number, v: Partial<{
-  name: string; price: number; limitSets: number; active: boolean; autoHolders: boolean; hidden: boolean; description: string; items: { zoneId: number; qty: number }[];
+  name: string; price: number; limitSets: number; active: boolean; autoHolders: boolean; hidden: boolean; description: string; items: { zoneId: number; qty: number }[]; gifts: { giftId: number; qty: number }[];
 }>) {
   const [c] = await db.select().from(t.combo).where(eq(t.combo.id, id));
   if (!c) throw new BookingError('NOT_FOUND', '找不到此購票方式');
-  const { items, ...rest } = v;
+  const { items, gifts, ...rest } = v;
+  if (gifts) {
+    const ok = new Set((await db.select({ id: t.giftItem.id }).from(t.giftItem).where(eq(t.giftItem.eventId, c.eventId))).map((g) => g.id));
+    if (gifts.some((g) => !ok.has(g.giftId))) throw new BookingError('INVALID', '贈品不存在，請重新整理頁面。');
+    (rest as Record<string, unknown>).gifts = gifts.filter((g) => g.qty > 0);
+  }
   if (items?.length) {
     const zs = await db.select({ floor: t.priceZone.floor }).from(t.priceZone).where(inArray(t.priceZone.id, items.map((i) => i.zoneId)));
     if (zs.some((z) => z.floor !== c.floor)) throw new BookingError('INVALID', '組合票只能用自己這一層的票種。');
@@ -579,6 +597,33 @@ export async function updateCombo(db: Db, actor: string, id: number, v: Partial<
     if (merged.size) await db.insert(t.comboItem).values([...merged].map(([zoneId, qty]) => ({ comboId: id, zoneId, qty })));
   }
   await audit(db, actor, 'combo_update', `combo:${id}`, v);
+}
+
+/* ---------- 贈品項目 ---------- */
+export async function createGift(db: Db, actor: string) {
+  const ev = await currentEvent(db);
+  const [g] = await db.insert(t.giftItem).values({ eventId: ev.id, name: '', unit: '個' }).returning();
+  await audit(db, actor, 'gift_create', `gift:${g.id}`);
+  return g;
+}
+export async function updateGift(db: Db, actor: string, id: number, v: Partial<{ name: string; unit: string }>) {
+  const ev = await currentEvent(db);
+  const [g] = await db.update(t.giftItem).set(v).where(and(eq(t.giftItem.id, id), eq(t.giftItem.eventId, ev.id))).returning();
+  if (!g) throw new BookingError('NOT_FOUND', '找不到此贈品');
+  await audit(db, actor, 'gift_update', `gift:${id}`, v);
+}
+export async function deleteGift(db: Db, actor: string, id: number) {
+  const ev = await currentEvent(db);
+  const used = (await loadCombos(db, ev.id)).filter((c) => c.gifts.some((g) => g.giftId === id && g.qty > 0));
+  if (used.length) throw new BookingError('BUSY', `還有方案送這項贈品（${used.map((c) => c.name || '未命名').join('、')}），請先把數量改成 0。`);
+  await db.delete(t.giftItem).where(and(eq(t.giftItem.id, id), eq(t.giftItem.eventId, ev.id)));
+  await audit(db, actor, 'gift_delete', `gift:${id}`);
+}
+export async function setGiftShow(db: Db, actor: string, v: { buy?: boolean; invoice?: boolean }) {
+  const ev = await currentEvent(db);
+  const next = { ...(ev.giftShow ?? {}), ...v };
+  await db.update(t.event).set({ giftShow: next }).where(eq(t.event.id, ev.id));
+  await audit(db, actor, 'gift_show', `event:${ev.id}`, next);
 }
 
 export async function deleteCombo(db: Db, actor: string, id: number) {

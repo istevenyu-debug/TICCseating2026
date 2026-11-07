@@ -20,6 +20,7 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { invDesc } from './invoiceRules';
 import { invItemName, invLabel } from './invName';
+import { giftLine } from './gift';
 
 export const ECPAY_TEST = { merchantId: '2000132', hashKey: 'ejCk326UnaZWKisg', hashIV: 'q9jcZX8Ib9LM8wYk' };
 const BASE = { test: 'https://einvoice-stage.ecpay.com.tw', prod: 'https://einvoice.ecpay.com.tw' };
@@ -237,12 +238,15 @@ export async function issueInvoice(db: Db, invoiceId: number, actor: string, for
   const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
   const comboItems = await db.select().from(t.comboItem);
   const label = invLabel(ev.name, ev.invItemName);
+  const giftCat = ev.giftShow?.invoice ? await db.select().from(t.giftItem).where(eq(t.giftItem.eventId, ev.id)) : [];
+  const comboRows = ev.giftShow?.invoice ? await db.select({ id: t.combo.id, gifts: t.combo.gifts }).from(t.combo).where(eq(t.combo.eventId, ev.id)) : [];
   const items = po.items.map((it, k) => {
+    const present = it.kind === 'combo' ? giftLine(comboRows.find((c) => c.id === it.id)?.gifts, giftCat) : ''; // 預設不寫進發票（驚喜）
     const gift = it.kind === 'combo'
       ? comboItems.filter((c) => c.comboId === it.id && (zones.find((z) => z.id === c.zoneId)?.price ?? 1) === 0).reduce((a, c) => a + c.qty, 0) : 0;
     return {
       ItemSeq: k + 1, ItemName: invItemName(label, it.kind, it.name).slice(0, 500), ItemCount: it.qty, ItemWord: it.kind === 'combo' ? '套' : '張',
-      ItemPrice: it.price, ItemTaxType: ev.invTaxType, ItemAmount: it.price * it.qty, ItemRemark: gift ? `每套含贈票 ${gift} 張` : '',
+      ItemPrice: it.price, ItemTaxType: ev.invTaxType, ItemAmount: it.price * it.qty, ItemRemark: [gift ? `每套含贈票 ${gift} 張` : '', present ? `每套贈 ${present}` : ''].filter(Boolean).join('；').slice(0, 40),
     };
   });
   if (items.reduce((a, i) => a + i.ItemAmount, 0) !== inv.amount) throw new BookingError('CHECK', `${inv.orderNo} 品項合計與發票金額不符，請聯絡網管`);

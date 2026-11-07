@@ -50,6 +50,7 @@ export const event = pgTable('event', {
   publicSaleStart: timestamp('public_sale_start', { withTimezone: true }), // 公開連結開始時間；未設定時同 saleStart
   publicPerPhone: integer('public_per_phone').notNull().default(0), // 公開連結每支手機上限，0 = 不限
   invTaxType: text('inv_tax_type').notNull().default('1'), // 發票課稅別：1 應稅、3 免稅
+  giftShow: jsonb('gift_show').$type<{ buy?: boolean; invoice?: boolean }>().notNull().default({}), // 贈品給買方看的位置；預設都不顯示（驚喜）
   invItemName: text('inv_item_name').notNull().default('入場券'), // 發票品名（前面會加演出名稱）
   vipNotifyDays: integer('vip_notify_days').notNull().default(3), // 招待：演出前幾天寄出劃位資料
 });
@@ -104,7 +105,8 @@ export const combo = pgTable('combo', {
   autoHolders: boolean('auto_holders').notNull().default(false), // 持票人自動編號：本名、本名02…；證末4碼+01、02…
   description: text('description').notNull().default(''), // 預購單上的「方案內容」說明；空白則自動產生
   floor: text('floor').notNull().default('2M'), // 購票方式屬於哪一層，不能跨層使用
-  hidden: boolean('hidden').notNull().default(false), // 隱藏方案：公開認購頁與其他買方看不到，只有登入後台的人員能代填
+  hidden: boolean('hidden').notNull().default(false),
+  gifts: jsonb('gifts').$type<{ giftId: number; qty: number }[]>().notNull().default([]), // 每份送的贈品（不是座位） // 隱藏方案：公開認購頁與其他買方看不到，只有登入後台的人員能代填
 });
 
 /** 組合票內容：哪個票種、幾張。例：買一A送二B = (A,1) + (B,2) */
@@ -113,6 +115,15 @@ export const comboItem = pgTable('combo_item', {
   zoneId: integer('zone_id').notNull().references(() => priceZone.id),
   qty: integer('qty').notNull(),
 }, (t) => ({ pk: primaryKey({ columns: [t.comboId, t.zoneId] }) }));
+
+/** 贈品項目（每場活動自己的清單；之後接庫存就在這裡加欄位） */
+export const giftItem = pgTable('gift_item', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  name: text('name').notNull().default(''),
+  unit: text('unit').notNull().default('個'),
+  sort: integer('sort').notNull().default(0),
+});
 
 /** 專屬購票連結 */
 export const inviteLink = pgTable('invite_link', {

@@ -47,7 +47,12 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('combo.update'), id, values: z.object({
     name: z.string().trim().max(40), price: money, limitSets: z.number().int().min(0).max(10000), active: z.boolean(), autoHolders: z.boolean(), hidden: z.boolean(), description: z.string().trim().max(200),
     items: z.array(z.object({ zoneId: id, qty: z.number().int().min(1).max(20) })).max(10),
+    gifts: z.array(z.object({ giftId: id, qty: z.number().int().min(0).max(999) })).max(20),
   }).partial() }),
+  z.object({ action: z.literal('gift.create') }),
+  z.object({ action: z.literal('gift.update'), id, values: z.object({ name: z.string().trim().max(30), unit: z.string().trim().min(1, '請填單位').max(6) }).partial() }),
+  z.object({ action: z.literal('gift.delete'), id }),
+  z.object({ action: z.literal('gift.show'), values: z.object({ buy: z.boolean(), invoice: z.boolean() }).partial() }),
   z.object({ action: z.literal('combo.delete'), id }),
   z.object({ action: z.literal('link.create'), name: z.string().trim().min(1, '請填寫姓名').max(40),
     phone: z.string().optional().default('').transform(normalizePhone).pipe(z.string().regex(/^(09\d{8})?$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678（不寄簡訊可留空）')),
@@ -187,6 +192,10 @@ export async function POST(req: Request) {
       case 'combo.create': return A.createCombo(db, who);
       case 'combo.update': return A.updateCombo(db, who, a.id, a.values);
       case 'combo.delete': return A.deleteCombo(db, who, a.id);
+      case 'gift.create': return A.createGift(db, who);
+      case 'gift.update': return A.updateGift(db, who, a.id, a.values);
+      case 'gift.delete': return A.deleteGift(db, who, a.id);
+      case 'gift.show': return A.setGiftShow(db, who, a.values);
       case 'link.create': { const l = await A.createInviteLink(db, who, { name: a.name, phone: a.phone, quota: a.quota, expiresAt: endOfDay(a.expiresAt), note: a.note }, originOf(req)); return { ...l, delivery: await deliver(db, { linkId: l.id }) }; }
       case 'link.update': {
         const { expiresAt, ...rest } = a.values;

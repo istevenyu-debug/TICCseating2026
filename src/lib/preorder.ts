@@ -10,6 +10,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError, loadCombos, linkEntitle } from './booking';
 import { comboDesc } from './pricing';
+import { giftLine } from './gift';
 import { createInviteLink, linkUrl } from './admin';
 import { normalizePhone } from './validation';
 import { formatRemits, parseRemits } from './reconcile';
@@ -32,6 +33,7 @@ export async function preorderMenuFull(db: Db) {
   const zoneName = (id: number) => zones.find((z) => z.id === id)?.name ?? '';
   const all2m = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M');
   const combos = all2m.filter((c) => pub.comboIds.includes(c.id) && !c.isSingle && c.price > 0);
+  const giftCat = ev.giftShow?.buy ? await db.select().from(t.giftItem).where(eq(t.giftItem.eventId, ev.id)) : [];
   const singleOpen = all2m.some((c) => c.isSingle && pub.comboIds.includes(c.id));
   const items = [
     ...combos.map((c) => {
@@ -40,7 +42,8 @@ export async function preorderMenuFull(db: Db) {
       const buy = c.items.filter((i) => !isGift(i.zoneId)).map((i) => `認購${zoneName(i.zoneId)} ${i.qty} 席`);
       const gift = c.items.filter((i) => isGift(i.zoneId)).map((i) => `致贈${zoneName(i.zoneId)} ${i.qty} 席${i.qty > 1 ? '（座位相連）' : ''}`);
       const auto = [...buy, ...gift].join('，');
-      return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: c.description.trim() || auto, unit: '份', zoneIds: c.items.map((i) => i.zoneId), hidden: c.hidden };
+      const present = ev.giftShow?.buy ? giftLine(c.gifts, giftCat) : ''; // 預設不顯示贈品（驚喜）
+      return { kind: 'combo' as const, id: c.id, name: c.name, price: c.price, desc: (c.description.trim() || auto) + (present ? `（贈 ${present}）` : ''), unit: '份', zoneIds: c.items.map((i) => i.zoneId), hidden: c.hidden };
     }),
     ...(singleOpen ? zones.filter((z) => pub.zoneIds.includes(z.id) && z.price > 0).sort((a, b) => a.sort - b.sort)
       .map((z) => ({ kind: 'zone' as const, id: z.id, name: `${z.name} 單張`, price: z.price, desc: `認購${z.name} 1 席`, unit: '席', zoneIds: [z.id], hidden: false })) : []),

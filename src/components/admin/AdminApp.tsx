@@ -588,6 +588,29 @@ function Price() {
       {/* 三、組合票 */}
       <div className="card">
         <h2>三、組合票 <span className="small muted">由票種與張數組成，可跨票種；套票價格自行填寫</span></h2>
+        <details className="ced" style={{ marginBottom: 10 }} open={st.gifts.length > 0}>
+          <summary><b>贈品項目</b> <span className="small muted">書、披肩等實物（不是座位）。先在這裡建立，再到各方案填每份送幾個</span></summary>
+          {st.gifts.length > 0 && (
+            <div className="tbl" style={{ marginTop: 6 }}><table className="small"><thead><tr><th>贈品</th><th>單位</th><th>已登記需備</th><th>已匯款需備</th><th></th></tr></thead><tbody>
+              {st.gifts.map((g) => (
+                <tr key={g.id}>
+                  <td><input key={`gn${g.id}-${g.name}`} defaultValue={g.name} placeholder="例：書" className={g.name ? '' : 'need'} style={{ width: 110 }}
+                    onBlur={(e) => e.target.value.trim() !== g.name && act({ action: 'gift.update', id: g.id, values: { name: e.target.value.trim() } })} /></td>
+                  <td><input key={`gu${g.id}-${g.unit}`} defaultValue={g.unit} style={{ width: 50 }}
+                    onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== g.unit && act({ action: 'gift.update', id: g.id, values: { unit: e.target.value.trim() } })} /></td>
+                  <td>{g.registered} {g.unit}</td><td><b>{g.paid}</b> {g.unit}</td>
+                  <td><button className="btn small danger" disabled={busy} onClick={() => confirm2(`gdel${g.id}`, () => act({ action: 'gift.delete', id: g.id }, '已刪除贈品'))}>{sure === `gdel${g.id}` ? '再按一次確認' : '刪除'}</button></td>
+                </tr>
+              ))}
+            </tbody></table></div>
+          )}
+          <button className="btn small" style={{ marginTop: 6 }} disabled={busy} onClick={() => act({ action: 'gift.create' }, '已新增贈品，請填名稱與單位')}>＋ 新增贈品</button>
+          <div style={{ marginTop: 8 }}>
+            <div className="small"><b>給買方看的位置</b>（不勾＝驚喜，買方看不到；後台統計一律顯示）</div>
+            <label className="switch small"><input type="checkbox" checked={!!st.giftShow.buy} disabled={busy} onChange={(e) => act({ action: 'gift.show', values: { buy: e.target.checked } })} />認購頁的方案說明</label>
+            <label className="switch small"><input type="checkbox" checked={!!st.giftShow.invoice} disabled={busy} onChange={(e) => act({ action: 'gift.show', values: { invoice: e.target.checked } })} />電子發票品項備註（已開立的不會改）</label>
+          </div>
+        </details>
         <div className="combogrid">
           {st.combos.filter((c) => !c.isSingle).map((c) => {
             const list = c.items.reduce((a, i) => a + (zoneById[i.zoneId]?.price ?? 0) * i.qty, 0);
@@ -632,6 +655,24 @@ function Price() {
                   <input type="checkbox" checked={c.hidden} disabled={busy} onChange={(e) => save({ hidden: e.target.checked })} />
                   隱藏方案：公開認購頁看不到，只有登入後台的人員能代填（到「四、訂單核帳」按「代填認購單」）。請先勾好再發布。
                 </label>
+                {st.gifts.length > 0 && (
+                  <div className="row small" style={{ flexWrap: 'wrap', gap: 8 }}>
+                    <span>每份贈品：</span>
+                    {st.gifts.map((g) => {
+                      const q = c.gifts.find((x) => x.giftId === g.id)?.qty ?? 0;
+                      return (
+                        <label key={g.id}>{g.name || '（未命名）'}
+                          <input key={`cg${c.id}-${g.id}-${q}`} type="number" min={0} max={999} defaultValue={q} style={{ width: 56, marginLeft: 4 }}
+                            onBlur={(e) => {
+                              const n = Math.max(0, Math.min(999, Math.floor(Number(e.target.value) || 0)));
+                              if (n === q) return;
+                              save({ gifts: [...c.gifts.filter((x) => x.giftId !== g.id), ...(n ? [{ giftId: g.id, qty: n }] : [])] });
+                            }} /> {g.unit}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
                 <p className="small muted" style={{ margin: 0 }}>
                   {comboDesc(c, zoneName)}，共 {comboQty(c)} 張・原價合計 {money(list)}{c.price && list ? `・約 ${(c.price / list * 10).toFixed(1)} 折` : ''}{c.limitSets ? `・已售 ${c.usedSets} 組` : ''}
                 </p>
