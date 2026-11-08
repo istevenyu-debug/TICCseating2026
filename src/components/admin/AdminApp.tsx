@@ -1988,6 +1988,8 @@ function Leaderboard({ st }: { st: State }) {
   const [title, setTitle] = useState('感恩席風雲榜');
   const [sub, setSub] = useState('感恩有您，依認購組數排列');
   const [url, setUrl] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [tip, setTip] = useState('');
   const rows = leaderboard(st.preorders, ids, paidOnly);
   const total = rows.reduce((a, r) => a + r.sets, 0);
   const draw = () => {
@@ -2023,14 +2025,24 @@ function Leaderboard({ st }: { st: State }) {
     g.fillText(`共 ${rows.length} 位・${total} 組`, W / 2, fy + 10);
     g.font = `400 28px ${font}`; g.fillStyle = '#c9ad6b';
     g.fillText(`統計至 ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`, W / 2, fy + 70);
-    setUrl(cv.toDataURL('image/png'));
+    setUrl(cv.toDataURL('image/png')); setTip('');
+    cv.toBlob((b) => setFile(b ? new File([b], `${title || '風雲榜'}.png`, { type: 'image/png' }) : null), 'image/png'); // 先備好檔案，分享時不用再等
   };
-  const share = async () => {
-    const blob = await (await fetch(url)).blob();
-    const file = new File([blob], `${title}.png`, { type: 'image/png' });
+  const download = () => {
+    const href = file ? URL.createObjectURL(file) : url;
+    const a = document.createElement('a'); a.href = href; a.download = `${title || '風雲榜'}.png`; document.body.appendChild(a); a.click(); a.remove();
+    if (file) setTimeout(() => URL.revokeObjectURL(href), 5000);
+  };
+  const share = () => {
     const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
-    if (nav.canShare?.({ files: [file] })) { try { await nav.share({ files: [file], title }); } catch { /* 取消分享 */ } }
-    else { const a = document.createElement('a'); a.href = url; a.download = `${title}.png`; a.click(); }
+    if (!file || !nav.share || !nav.canShare?.({ files: [file] })) {
+      download(); setTip('這個瀏覽器不能直接分享，已改為下載。也可以長按上面的圖片儲存，再從 LINE 傳。'); return;
+    }
+    // 必須在按下的當下直接叫出分享選單（中間不能等待），iPhone 才不會擋掉
+    nav.share({ files: [file] }).then(() => setTip('')).catch((e: Error) => {
+      if (e?.name === 'AbortError') setTip('已取消分享，沒有傳給任何人。');
+      else { setTip('分享選單打不開（在 LINE 裡開後台時常見）。請改用 Safari 或 Chrome 開後台，或長按上面的圖片儲存後再從 LINE 傳。'); }
+    });
   };
   return (
     <div className="note" style={{ marginTop: 8 }}>
@@ -2043,14 +2055,17 @@ function Leaderboard({ st }: { st: State }) {
       </div>
       <label className="switch small"><input type="checkbox" checked={paidOnly} onChange={(e) => { setUrl(''); setPaidOnly(e.target.checked); }} />只算已勾「已匯款」</label>
       <div className="fields" style={{ marginTop: 6 }}>
-        <label className="f">標題<input value={title} maxLength={20} onChange={(e) => { setUrl(''); setTitle(e.target.value); }} /></label>
+        <label className="f">標題<input value={title} maxLength={20} onChange={(e) => { setUrl(''); setFile(null); setTitle(e.target.value); }} /></label>
         <label className="f">副標<input value={sub} maxLength={30} onChange={(e) => { setUrl(''); setSub(e.target.value); }} /></label>
       </div>
       <div className="small" style={{ marginTop: 6 }}>共 {rows.length} 位、{total} 組{rows.length ? `：${rows.slice(0, 5).map((r) => `${r.name} ${r.sets}組`).join('、')}${rows.length > 5 ? '…' : ''}` : ''}</div>
       <div className="row" style={{ marginTop: 6 }}>
         <button className="btn pri small" disabled={!ids.length} onClick={draw}>產生圖片</button>
-        {url && <button className="btn small" onClick={share}>分享／下載</button>}
+        {url && <button className="btn small" disabled={!file} onClick={share}>分享到 LINE 等</button>}
+        {url && <button className="btn small" onClick={download}>下載圖片</button>}
       </div>
+      {url && <div className="small muted" style={{ marginTop: 4 }}>按「分享」會跳出手機的分享選單，選 LINE 再選聊天室才會傳出；系統不會自動傳給任何人。也可以長按圖片儲存。</div>}
+      {tip && <div className="note warn small" style={{ marginTop: 6 }}>{tip}</div>}
       {url && <img src={url} alt={title} style={{ width: '100%', maxWidth: 420, marginTop: 8, borderRadius: 6 }} />}
     </div>
   );
