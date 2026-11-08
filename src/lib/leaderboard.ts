@@ -2,8 +2,11 @@
 export type LbOrder = { name: string; status: string; paidOkAt: string | null; seq: number | null; items: { kind: string; id: number; qty: number }[] };
 export type LbRow = { rank: number; name: string; sets: number; orders: number };
 
+/** 依姓名筆劃排序（台灣慣用：先比第一個字的筆劃，再比下一個字） */
+const byStroke = new Intl.Collator('zh-Hant-TW-u-co-stroke');
+
 /** comboIds：要計入的方案；paidOnly：只算已勾「已匯款」。同名（去空白）合併。
- *  排序：組數多的在前；組數相同，筆數少的在前；再相同，先登記的在前。組數與筆數都相同才同名次 */
+ *  排序：組數多的在前；組數相同，依姓名筆劃由少到多。組數相同即同名次 */
 export function leaderboard(orders: LbOrder[], comboIds: number[], paidOnly = true): LbRow[] {
   const want = new Set(comboIds);
   const m = new Map<string, { name: string; sets: number; orders: number; first: number }>();
@@ -17,10 +20,10 @@ export function leaderboard(orders: LbOrder[], comboIds: number[], paidOnly = tr
     cur.sets += sets; cur.orders += 1; cur.first = Math.min(cur.first, o.seq ?? 1e9);
     m.set(key, cur);
   }
-  const list = [...m.values()].sort((a, b) => b.sets - a.sets || a.orders - b.orders || a.first - b.first);
+  const list = [...m.values()].sort((a, b) => b.sets - a.sets || byStroke.compare(a.name, b.name) || a.first - b.first);
   let rank = 0;
   return list.map((x, i) => {
-    if (i === 0 || x.sets !== list[i - 1].sets || x.orders !== list[i - 1].orders) rank = i + 1;
+    if (i === 0 || x.sets !== list[i - 1].sets) rank = i + 1;
     return { rank, name: x.name, sets: x.sets, orders: x.orders };
   });
 }

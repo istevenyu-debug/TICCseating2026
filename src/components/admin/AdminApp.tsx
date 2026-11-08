@@ -1986,7 +1986,7 @@ function Leaderboard({ st }: { st: State }) {
   const [ids, setIds] = useState<number[]>(() => combos.filter((c) => c.name.includes('感恩')).map((c) => c.id));
   const [paidOnly, setPaidOnly] = useState(true);
   const [title, setTitle] = useState('感恩席風雲榜');
-  const [sub, setSub] = useState('感恩有您，依認購組數排列');
+  const [sub, setSub] = useState('感恩有您，依認購組數排列，同組數依姓名筆劃');
   const [url, setUrl] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [tip, setTip] = useState('');
