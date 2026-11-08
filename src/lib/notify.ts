@@ -263,8 +263,14 @@ export function linkMail(text: string, fromName = ''): MailExtra {
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const maskBase = (n: string) => (n.length <= 1 ? n : n.length === 2 ? `${n[0]}○` : `${n[0]}${'○'.repeat(n.length - 2)}${n[n.length - 1]}`);
-/** 王大明 → 王○明；自動編號的「王大明02」→「王○明02」 */
-const maskName = (n: string) => { const m = n.match(/^(.*?)(\d+)$/); return m && m[1] ? maskBase(m[1]) + m[2] : maskBase(n); };
+/** 英文全名（只有英文字母，至少兩個字）：留名字＋姓的首字，John Smith → John S.；其餘照中文規則 */
+const maskOne = (n: string) => {
+  const w = n.trim().split(/\s+/);
+  if (w.length >= 2 && /^[A-Za-z][A-Za-z .'-]*$/.test(n.trim())) return `${w[0]} ${w[w.length - 1][0].toUpperCase()}.`;
+  return maskBase(n);
+};
+/** 王大明 → 王○明；John Smith → John S.；自動編號的「王大明02」→「王○明02」 */
+export const maskName = (n: string) => { const m = n.match(/^(.*?)(\d+)$/); return m && m[1] ? maskOne(m[1]) + m[2] : maskOne(n); };
 
 /** 劃位成功 Email：每張票一個 QR code（內嵌圖片，與入場券、購票頁的序號相同） */
 export async function ticketMail(db: Db, orderId: number, text: string, fromName = ''): Promise<MailExtra> {
