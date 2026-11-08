@@ -709,7 +709,10 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
 }
 
 /** 取消訂單（暫存中或待確認到帳）：釋放座位，待確認的訂單會通知消費者 */
-export async function cancelOrder(db: Db, actor: string, id: number) {
+/** 取消劃位：原因必填（記在操作紀錄；待確認的會寫進寄給買方的通知） */
+export async function cancelOrder(db: Db, actor: string, id: number, reason = '') {
+  const why = reason.trim();
+  if (why.length < 2) throw new BookingError('INVALID', '請填寫取消原因');
   const ev = await currentEvent(db);
   await db.transaction(async (tx) => {
     const [o] = await tx.select().from(t.orders).where(and(eq(t.orders.id, id), eq(t.orders.eventId, ev.id))).for('update');
@@ -718,14 +721,14 @@ export async function cancelOrder(db: Db, actor: string, id: number) {
     await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'admin_cancel', holdUntil: null }).where(eq(t.orders.id, id));
     await freeSeatsOf(tx, [id]);
     if (o.status === 'pending') {
-      const content = `【${ev.name}】劃位 ${o.orderNo} 已由主辦方取消，座位已釋放，可用原連結重新劃位。如有疑問請聯繫主辦方。`;
+      const content = `【${ev.name}】劃位 ${o.orderNo} 已由主辦方取消（${why}），座位已釋放，可用原連結重新劃位。如有疑問請聯繫主辦方。`;
       await tx.insert(t.notification).values([
         { orderId: id, linkId: o.linkId, channel: 'sms', template: 'order_cancelled', recipient: o.buyerPhone ?? '', content },
         { orderId: id, linkId: o.linkId, channel: 'email', template: 'order_cancelled', recipient: o.buyerEmail ?? '', content },
         { orderId: id, linkId: o.linkId, channel: 'push', template: 'order_cancelled', recipient: '訂購人手機', content },
       ]);
     }
-    await tx.insert(t.auditLog).values({ actor, action: 'cancel_order', target: `order:${id}` });
+    await tx.insert(t.auditLog).values({ actor, action: 'cancel_order', target: `order:${id}`, detail: JSON.stringify({ reason: why, status: o.status }) });
   });
 }
 

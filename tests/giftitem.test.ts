@@ -45,7 +45,7 @@ describe('贈品', () => {
     await checkPreorder(db, 'admin', pos[0].id, { paid: true });
     let g = (await A.getAdminState(db)).gifts.find((x) => x.id === book)!;
     expect(g).toMatchObject({ registered: 36, paid: 24 });
-    await cancelPreorder(db, 'admin', pos[1].id);
+    await cancelPreorder(db, 'admin', pos[1].id, '測試取消');
     g = (await A.getAdminState(db)).gifts.find((x) => x.id === book)!;
     expect(g).toMatchObject({ registered: 24, paid: 24 });
   });

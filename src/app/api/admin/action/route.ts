@@ -62,7 +62,7 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('order.seen'), id }),
   z.object({ action: z.literal('order.confirm'), id }),
-  z.object({ action: z.literal('order.cancel'), id }),
+  z.object({ action: z.literal('order.cancel'), id, reason: z.string({ required_error: '請填寫取消原因' }).trim().min(2, '請填寫取消原因').max(100) }),
   z.object({ action: z.literal('order.delete'), id }),
   z.object({ action: z.literal('notify.save'), values: z.object({
     'email.host': z.string().max(200), 'email.port': z.string().max(6), 'email.user': z.string().max(200), 'email.pass': z.string().max(200),
@@ -89,7 +89,7 @@ const action = z.discriminatedUnion('action', [
     enabled: z.enum(['0', '1']), mode: z.enum(['mock', 'test', 'prod']), timing: z.enum(['auto', 'review']), taxType: z.enum(['1', '3']),
     merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), itemName: z.string().trim().max(40),
   }).partial() }),
-  z.object({ action: z.literal('preorder.cancel'), id, reason: z.string().trim().max(100).optional() }),
+  z.object({ action: z.literal('preorder.cancel'), id, reason: z.string({ required_error: '請填寫取消原因' }).trim().min(2, '請填寫取消原因').max(100) }),
   z.object({ action: z.literal('preorder.seen'), id }),
   z.object({ action: z.literal('preorder.pushLink'), on: z.boolean() }),
   z.object({ action: z.literal('preorder.email'), id, email: z.string().max(120), resend: z.boolean().optional() }),
@@ -231,7 +231,7 @@ export async function POST(req: Request) {
       case 'invoice.backfill': mustBeAdmin(); return backfillInvoices(db, who);
       case 'invoice.void': mustBeAdmin(); return voidInvoice(db, a.id, who, a.reason, !!a.reopen);
       case 'einvoice.save': mustBeAdmin(); return saveEinvConfig(db, who, a.values, a.reason ?? '');
-      case 'order.cancel': { await A.cancelOrder(db, who, a.id); return { delivery: await deliver(db, { orderId: a.id }) }; }
+      case 'order.cancel': { await A.cancelOrder(db, who, a.id, a.reason); return { delivery: await deliver(db, { orderId: a.id }) }; }
       case 'order.delete': return A.deleteOrder(db, who, a.id);
       case 'notify.save': return saveNotifyConfig(db, who, a.values);
       case 'notify.test': return sendTest(db, a.channel, a.to);

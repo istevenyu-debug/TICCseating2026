@@ -574,6 +574,8 @@ export async function updatePreorderEmail(db: Db, actor: string, id: number, ema
 }
 
 export async function cancelPreorder(db: Db, actor: string, id: number, reason = '') {
+  reason = reason.trim();
+  if (reason.length < 2) throw new BookingError('INVALID', '請填寫取消原因');
   const ev = await currentEvent(db);
   const [po] = await db.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id)));
   if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');

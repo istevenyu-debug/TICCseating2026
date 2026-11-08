@@ -263,7 +263,7 @@ describe('同一支手機重複登記', () => {
     const again = await submitPreorder(db, body({ confirmDup: true }));
     expect(again.no).not.toBe(first.no);
     const [p1, p2] = await listPreorders(db);
-    await cancelPreorder(db, 'admin', p1.id); await cancelPreorder(db, 'admin', p2.id);
+    await cancelPreorder(db, 'admin', p1.id, '測試取消'); await cancelPreorder(db, 'admin', p2.id, '測試取消');
     await expect(submitPreorder(db, body({ confirmDup: false }))).resolves.toMatchObject({ no: expect.any(String) });
   });
 });

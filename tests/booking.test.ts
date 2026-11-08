@@ -243,7 +243,7 @@ describe('後台', () => {
 
   it('取消與刪除訂單會釋放座位', async () => {
     const h = await holdSeats(db, 'AAA111', ['2-5'], SINGLE(), T0);
-    await A.cancelOrder(db, who, h.orderId);
+    await A.cancelOrder(db, who, h.orderId, '測試取消');
     expect((await getBookingState(db, 'BBB222', T0)).seats.find((x) => x.id === '2-5')!.status).toBe('free');
     const h2 = await holdSeats(db, 'AAA111', ['2-7'], SINGLE(), min(1));
     await submitOrder(db, 'AAA111', submitBody(h2.orderId, ['2-7'], h2.amount), min(2));

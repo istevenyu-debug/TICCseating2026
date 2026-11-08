@@ -140,7 +140,7 @@ describe('誤按取消：恢復', () => {
     const [p] = await listPreorders(db);
     const { cancelPreorder, restorePreorder } = await import('@/lib/preorder');
     await expect(restorePreorder(db, 'boss', p.id, true)).rejects.toThrow('沒有取消');
-    await cancelPreorder(db, 'boss', p.id);
+    await cancelPreorder(db, 'boss', p.id, '測試取消');
     await restorePreorder(db, 'boss', p.id, true);
     const [q] = await listPreorders(db);
     expect(q.status).toBe('submitted');

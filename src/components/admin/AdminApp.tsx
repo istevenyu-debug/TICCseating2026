@@ -947,10 +947,10 @@ function ConfirmModal({ o, onClose, onDone }: { o: Order; onClose: () => void; o
               const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery } | null;
               if (r) { const d = deliveryText(r.delivery); onDone(`已確認 ${o.buyerName} 的劃位${d.bad ? `（${d.text}）` : '，已寄出 QR code'}。`); }
             })}>{!ok ? '請先勾上面兩項' : sure === `cf${o.id}` ? '再按一次：確認劃位，寄出 QR code' : '確認劃位，寄出 QR code'}</button>
-            <button className="btn danger" style={{ width: '100%', marginTop: 8 }} disabled={busy} onClick={() => confirm2(`rj${o.id}`, async () => {
-              const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null;
+            <ReasonCancel full label="退回讓他重選" go="確定退回並通知他" hint="原因會寫在寄給買方的通知裡。" onGo={async (reason) => {
+              const r = await act({ action: 'order.cancel', id: o.id, reason }) as { delivery?: Delivery } | null;
               if (r) onDone(`已退回 ${o.buyerName} 的劃位，座位已釋放，他可以用同一個連結重選。`);
-            })}>{sure === `rj${o.id}` ? '再按一次：退回讓他重選' : '退回讓他重選'}</button>
+            }} />
           </div>
         </div>
       </div>
@@ -984,7 +984,7 @@ function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
 
       {o.status === 'held' && <>
         <div className="note" style={{ marginTop: 12 }}>對方正在填寫持票人資料，<b>尚未送出</b>。座位已先保留，剩 {mmss(Date.parse(o.holdUntil ?? '') - now)}，逾時自動釋放。</div>
-        <button className="btn danger" style={{ marginTop: 10 }} disabled={busy} onClick={() => confirm2(`cancel${o.id}`, () => act({ action: 'order.cancel', id: o.id }, '已取消暫存，座位已釋放'))}>{sure === `cancel${o.id}` ? '再按一次確認取消' : '取消暫存（釋放座位）'}</button>
+        <ReasonCancel label="取消暫存（釋放座位）" go="確定取消暫存" hint="不會通知買方；原因記在操作紀錄。" onGo={(reason) => act({ action: 'order.cancel', id: o.id, reason }, '已取消暫存，座位已釋放')} />
       </>}
 
       {o.status === 'pending' && onOpen && <button className="btn pri" style={{ width: '100%', marginTop: 12 }} onClick={onOpen}>打開核定畫面（座位圖＋核對）</button>}
@@ -997,7 +997,7 @@ function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
             const r = await act({ action: 'order.confirm', id: o.id }) as { delivery?: Delivery } | null;
             if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已確認，劃位成功。${d.text}` }); }
           }}>確認劃位，寄出劃位成功與 QR code</button>
-          <button className="btn danger" disabled={busy} onClick={() => confirm2(`cancel${o.id}`, async () => { const r = await act({ action: 'order.cancel', id: o.id }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消劃位，座位已釋放。${d.text}` }); } })}>{sure === `cancel${o.id}` ? '再按一次確認' : '取消劃位'}</button>
+          <ReasonCancel label="取消劃位" go="確定取消並通知他" hint="原因會寫在寄給買方的通知裡。" onGo={async (reason) => { const r = await act({ action: 'order.cancel', id: o.id, reason }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消劃位，座位已釋放。${d.text}` }); } }} />
         </div>
       </>}
 
@@ -2091,8 +2091,8 @@ function Preorders() {
                         <button className="btn" disabled={busy} onClick={() => confirm2(`rn${p.id}`, async () => { const r = await act({ action: 'preorder.restore', id: p.id, notify: false }) as { warn: string } | null; if (r) setMsg({ kind: r.warn ? 'warn' : 'ok', text: `已恢復 ${p.no}（沒寄信）${r.warn ? `。注意：${r.warn}` : ''}` }); })}>
                           {sure === `rn${p.id}` ? '再按一次：恢復，不寄信' : '恢復登記（不寄信）'}</button>
                       </>}
-                      {p.status === 'submitted' && <button className="btn danger" disabled={busy} onClick={() => confirm2(`pc${p.id}`, async () => { if (await act({ action: 'preorder.cancel', id: p.id }, `已取消 ${p.no}${p.source === 'form' ? '' : '，並寄信通知'}`)) setOpenId(null); })}>
-                        {sure === `pc${p.id}` ? '再按一次確認取消' : '取消'}</button>}
+                      {p.status === 'submitted' && <ReasonCancel label="取消" go={p.source === 'form' ? '確定取消' : '確定取消並寄信'} hint={p.source === 'form' ? '原因記在備註。' : '會立刻寄「認購取消」信給買方，原因寫在信裡，寄出無法收回。'}
+                        onGo={async (reason) => { if (await act({ action: 'preorder.cancel', id: p.id, reason }, `已取消 ${p.no}${p.source === 'form' ? '' : '，並寄信通知'}`)) setOpenId(null); }} />}
                     </div>
                   </td></tr>
                 )}
@@ -2393,6 +2393,24 @@ function Invoices() {
 type VipRow = State['vips']['list'][number];
 const VIP_MODE: Record<string, string> = { scheduled: '演出前自動寄', now: '立即寄出', none: '不寄（紙本親手交）' };
 const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
+
+/** 取消類按鈕：先按出原因欄，原因必填（至少 2 個字）才能按確認 */
+function ReasonCancel({ label, go, hint, full, onGo }: { label: string; go: string; hint?: string; full?: boolean; onGo: (reason: string) => Promise<unknown> | void }) {
+  const { busy } = useAdmin();
+  const [open, setOpen] = useState(false);
+  const [r, setR] = useState('');
+  if (!open) return <button className="btn danger" style={full ? { width: '100%', marginTop: 8 } : undefined} disabled={busy} onClick={() => setOpen(true)}>{label}</button>;
+  return (
+    <div className="note warn" style={{ marginTop: 8, width: '100%', maxWidth: 'min(100%, calc(100vw - 72px))', boxSizing: 'border-box', whiteSpace: 'normal' }}>
+      <label className="f">取消原因（必填）<input value={r} autoFocus maxLength={100} placeholder="例：買方要求取消" style={{ width: '100%', boxSizing: 'border-box' }} onChange={(e) => setR(e.target.value)} /></label>
+      {hint && <div className="small" style={{ marginTop: 2 }}>{hint}</div>}
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="btn danger" disabled={busy || r.trim().length < 2} onClick={async () => { await onGo(r.trim()); setOpen(false); setR(''); }}>{go}</button>
+        <button className="btn" onClick={() => { setOpen(false); setR(''); }}>不取消</button>
+      </div>
+    </div>
+  );
+}
 
 /** 推薦人：預設空白，點用過的名字帶入（Email 空白時一併帶入上次的 Email）；沒有推薦人點「無」 */
 function RefPick({ v, set, refs }: { v: { referrer: string; email: string }; set: (p: { referrer?: string; email?: string }) => void; refs: { name: string; email: string }[] }) {
