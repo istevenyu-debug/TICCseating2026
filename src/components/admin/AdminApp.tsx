@@ -1986,7 +1986,7 @@ function Leaderboard({ st }: { st: State }) {
   const [ids, setIds] = useState<number[]>(() => combos.filter((c) => c.name.includes('感恩')).map((c) => c.id));
   const [paidOnly, setPaidOnly] = useState(true);
   const [title, setTitle] = useState('感恩席風雲榜');
-  const [sub, setSub] = useState('感恩護持，依認購組數排列');
+  const [sub, setSub] = useState('感恩有您，依認購組數排列');
   const [url, setUrl] = useState('');
   const rows = leaderboard(st.preorders, ids, paidOnly);
   const total = rows.reduce((a, r) => a + r.sets, 0);
@@ -2020,7 +2020,7 @@ function Leaderboard({ st }: { st: State }) {
     const fy = top + Math.max(rows.length, 1) * rowH + 70;
     g.fillStyle = 'rgba(216,178,90,.5)'; g.fillRect(140, fy - 50, W - 280, 2);
     g.textAlign = 'center'; g.fillStyle = '#f3dfa2'; g.font = `500 36px ${font}`;
-    g.fillText(`共 ${rows.length} 位護持・${total} 組`, W / 2, fy + 10);
+    g.fillText(`共 ${rows.length} 位・${total} 組`, W / 2, fy + 10);
     g.font = `400 28px ${font}`; g.fillStyle = '#c9ad6b';
     g.fillText(`統計至 ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`, W / 2, fy + 70);
     setUrl(cv.toDataURL('image/png'));
