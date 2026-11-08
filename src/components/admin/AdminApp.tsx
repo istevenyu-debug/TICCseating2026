@@ -2025,13 +2025,19 @@ function Leaderboard({ st }: { st: State }) {
     g.fillText(`共 ${rows.length} 位・${total} 組`, W / 2, fy + 10);
     g.font = `400 28px ${font}`; g.fillStyle = '#c9ad6b';
     g.fillText(`統計至 ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`, W / 2, fy + 70);
-    setUrl(cv.toDataURL('image/png')); setTip('');
-    cv.toBlob((b) => setFile(b ? new File([b], `${title || '風雲榜'}.png`, { type: 'image/png' }) : null), 'image/png'); // 先備好檔案，分享時不用再等
+    setTip('');
+    // 手機記憶體有限：不存大字串，畫完轉成檔案後立刻釋放畫布
+    cv.toBlob((b) => {
+      cv.width = 0; cv.height = 0;
+      if (!b) { setTip('產生圖片失敗，請再按一次。'); return; }
+      const f = new File([b], `${title || '風雲榜'}.png`, { type: 'image/png' });
+      setFile(f);
+      setUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(f); });
+    }, 'image/png');
   };
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
   const download = () => {
-    const href = file ? URL.createObjectURL(file) : url;
-    const a = document.createElement('a'); a.href = href; a.download = `${title || '風雲榜'}.png`; document.body.appendChild(a); a.click(); a.remove();
-    if (file) setTimeout(() => URL.revokeObjectURL(href), 5000);
+    const a = document.createElement('a'); a.href = url; a.download = `${title || '風雲榜'}.png`; document.body.appendChild(a); a.click(); a.remove();
   };
   const share = () => {
     const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };

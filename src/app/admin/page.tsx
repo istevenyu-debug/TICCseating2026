@@ -6,7 +6,12 @@ import AdminApp from '@/components/admin/AdminApp';
 import LoginForm from '@/components/admin/LoginForm';
 
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: '劃位後台' };
+export const metadata: Metadata = {
+  title: '劃位後台',
+  manifest: '/admin/manifest.webmanifest',
+  icons: { apple: '/admin-icon.png', icon: '/admin-icon.png' },
+  appleWebApp: { capable: false, title: '劃位後台' }, // iPhone 從桌面開仍用 Safari，下載與分享才穩定
+};
 
 export default async function AdminPage() {
   const db = await getDb();
