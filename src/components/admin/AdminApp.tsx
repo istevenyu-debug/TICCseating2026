@@ -14,6 +14,7 @@ import { createPortal } from 'react-dom';
 import AdminMap, { type SeatLook } from './AdminMap';
 import { INV_TYPES } from '@/lib/invoiceRules';
 import { appsScript } from '@/lib/formScript';
+import { leaderboard } from '@/lib/leaderboard';
 
 type NotifyPublic = {
   email: { host: string; port: number; user: string; fromName: string; passSet: boolean; ready: boolean };
@@ -1979,8 +1980,85 @@ async function downloadPaid(st: State, rec: ReturnType<typeof reconcile>) {
   X.writeFile(wb, `已匯款名單-${d}.xlsx`);
 }
 
+/** 風雲榜：依認購組數排名，畫成 LINE 用的直式圖片（只讀，不改資料） */
+function Leaderboard({ st }: { st: State }) {
+  const combos = st.combos.filter((c) => !c.isSingle);
+  const [ids, setIds] = useState<number[]>(() => combos.filter((c) => c.name.includes('感恩')).map((c) => c.id));
+  const [paidOnly, setPaidOnly] = useState(true);
+  const [title, setTitle] = useState('感恩席風雲榜');
+  const [sub, setSub] = useState('感恩護持，依認購組數排列');
+  const [url, setUrl] = useState('');
+  const rows = leaderboard(st.preorders, ids, paidOnly);
+  const total = rows.reduce((a, r) => a + r.sets, 0);
+  const draw = () => {
+    const W = 1080, top = 360, rowH = 92, foot = 220;
+    const H = top + Math.max(rows.length, 1) * rowH + foot;
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const g = cv.getContext('2d')!;
+    const font = '"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif';
+    const bg = g.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#5b0f14'); bg.addColorStop(1, '#2a0609');
+    g.fillStyle = bg; g.fillRect(0, 0, W, H);
+    g.strokeStyle = '#d8b25a'; g.lineWidth = 6; g.strokeRect(28, 28, W - 56, H - 56);
+    g.lineWidth = 2; g.strokeRect(44, 44, W - 88, H - 88);
+    g.textAlign = 'center'; g.fillStyle = '#f3dfa2';
+    g.font = `500 34px ${font}`; g.fillText(st.event.name, W / 2, 130);
+    g.font = `700 76px ${font}`; g.fillText(title, W / 2, 225);
+    g.font = `400 32px ${font}`; g.fillStyle = '#e9cf8c'; g.fillText(sub, W / 2, 290);
+    g.fillStyle = 'rgba(216,178,90,.5)'; g.fillRect(140, 320, W - 280, 2);
+    const medal = ['#f5d36b', '#d9dde3', '#d89a5b'];
+    rows.forEach((r, i) => {
+      const y = top + i * rowH + 62;
+      if (i % 2 === 0) { g.fillStyle = 'rgba(255,255,255,.05)'; g.fillRect(90, y - 58, W - 180, rowH - 8); }
+      g.textAlign = 'center'; g.fillStyle = r.rank <= 3 ? medal[r.rank - 1] : '#e9cf8c';
+      g.font = `700 ${r.rank <= 3 ? 46 : 38}px ${font}`; g.fillText(String(r.rank), 170, y);
+      g.textAlign = 'left'; g.fillStyle = '#fff6e0'; g.font = `500 44px ${font}`;
+      let nm = r.name; while (g.measureText(nm).width > 560 && nm.length > 1) nm = nm.slice(0, -1);
+      g.fillText(nm === r.name ? nm : `${nm}…`, 250, y);
+      g.textAlign = 'right'; g.fillStyle = '#f3dfa2'; g.font = `700 44px ${font}`; g.fillText(`${r.sets} 組`, W - 130, y);
+    });
+    if (!rows.length) { g.textAlign = 'center'; g.fillStyle = '#e9cf8c'; g.font = `400 36px ${font}`; g.fillText('目前沒有資料', W / 2, top + 60); }
+    const fy = top + Math.max(rows.length, 1) * rowH + 70;
+    g.fillStyle = 'rgba(216,178,90,.5)'; g.fillRect(140, fy - 50, W - 280, 2);
+    g.textAlign = 'center'; g.fillStyle = '#f3dfa2'; g.font = `500 36px ${font}`;
+    g.fillText(`共 ${rows.length} 位護持・${total} 組`, W / 2, fy + 10);
+    g.font = `400 28px ${font}`; g.fillStyle = '#c9ad6b';
+    g.fillText(`統計至 ${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}`, W / 2, fy + 70);
+    setUrl(cv.toDataURL('image/png'));
+  };
+  const share = async () => {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], `${title}.png`, { type: 'image/png' });
+    const nav = navigator as Navigator & { canShare?: (d: { files: File[] }) => boolean };
+    if (nav.canShare?.({ files: [file] })) { try { await nav.share({ files: [file], title }); } catch { /* 取消分享 */ } }
+    else { const a = document.createElement('a'); a.href = url; a.download = `${title}.png`; a.click(); }
+  };
+  return (
+    <div className="note" style={{ marginTop: 8 }}>
+      <b>風雲榜（LINE 圖片）</b> <span className="small muted">只讀取資料，不會改任何訂單。顯示全名，公告前請老大確認。</span>
+      <div className="row small" style={{ flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+        <span>計入方案：</span>
+        {combos.map((c) => (
+          <label key={c.id}><input type="checkbox" checked={ids.includes(c.id)} onChange={(e) => { setUrl(''); setIds(e.target.checked ? [...ids, c.id] : ids.filter((x) => x !== c.id)); }} />{c.name || '未命名'}</label>
+        ))}
+      </div>
+      <label className="switch small"><input type="checkbox" checked={paidOnly} onChange={(e) => { setUrl(''); setPaidOnly(e.target.checked); }} />只算已勾「已匯款」</label>
+      <div className="fields" style={{ marginTop: 6 }}>
+        <label className="f">標題<input value={title} maxLength={20} onChange={(e) => { setUrl(''); setTitle(e.target.value); }} /></label>
+        <label className="f">副標<input value={sub} maxLength={30} onChange={(e) => { setUrl(''); setSub(e.target.value); }} /></label>
+      </div>
+      <div className="small" style={{ marginTop: 6 }}>共 {rows.length} 位、{total} 組{rows.length ? `：${rows.slice(0, 5).map((r) => `${r.name} ${r.sets}組`).join('、')}${rows.length > 5 ? '…' : ''}` : ''}</div>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button className="btn pri small" disabled={!ids.length} onClick={draw}>產生圖片</button>
+        {url && <button className="btn small" onClick={share}>分享／下載</button>}
+      </div>
+      {url && <img src={url} alt={title} style={{ width: '100%', maxWidth: 420, marginTop: 8, borderRadius: 6 }} />}
+    </div>
+  );
+}
+
 function Preorders() {
   const { st, act, busy, setMsg, sure, confirm2, go } = useAdmin();
+  const [lb, setLb] = useState(false);
   const [filter, setFilter0] = useState('todo');
   // 剛勾好的先留在原位（不馬上消失、下一筆不會補上來），換分頁或按「收起」才收
   const [stick, setStick] = useState<number[]>([]);
@@ -2022,7 +2100,9 @@ function Preorders() {
       <div className="card" style={{ paddingBottom: 8 }}>
         <h2 style={{ margin: 0 }}>四、訂單核帳 <span className="small muted">依送單順序。核對入帳、確認入群後打勾（只記錄，不會寄東西）</span></h2>
         <button className="btn small" style={{ float: 'right' }} onClick={() => downloadPaid(st, rec)}>下載已匯款名單（Excel）</button>
+        <button className="btn small" style={{ float: 'right', marginRight: 6 }} onClick={() => setLb((x) => !x)}>{lb ? '收起風雲榜' : '風雲榜（LINE 圖片）'}</button>
         <a className="btn small" style={{ float: 'right', marginRight: 6 }} href="/buy" target="_blank" rel="noopener noreferrer">代填認購單</a>
+        {lb && <div style={{ clear: 'both' }}><Leaderboard st={st} /></div>}
         <div style={{ marginTop: 6 }}>待核帳 <b>{cnt('todo')}</b> 筆・金額不符 <b className={st.preorders.some(mismatch) ? 'err-text' : ''}>{st.preorders.filter(mismatch).length}</b> 筆・已核好待發 <b>{cnt('ready')}</b> 筆　
           {cnt('ready') > 0 && <button className="btn small pri" onClick={() => go('links')}>到五依序發連結 →</button>}</div>
       </div>

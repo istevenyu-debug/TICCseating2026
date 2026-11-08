@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-11-08c 版（取消必填原因）';
+export const APP_VERSION = '2026-11-08d 版（風雲榜）';
