@@ -49,7 +49,8 @@ export async function importAll(db: Db, b: BackupFile) {
       const rows = (b.tables[tb] ?? []).map((r) => (FLOOR_TABLES.has(tb) && r.floor == null ? { ...r, floor: '2M' } : r))
         .map((r) => (tb === 'combo' && r.hidden == null ? { ...r, hidden: false } : r)) // 舊備份沒有 hidden 欄位：一律不隱藏
         .map((r) => (tb === 'combo' && r.gifts == null ? { ...r, gifts: [] } : r)) // 舊備份沒有贈品：空的
-        .map((r) => (tb === 'event' && r.gift_show == null ? { ...r, gift_show: {} } : r));
+        .map((r) => (tb === 'event' && r.gift_show == null ? { ...r, gift_show: {} } : r))
+        .map((r) => (tb === 'invite_link' && r.referrer == null ? { ...r, referrer: '' } : r)); // 舊備份沒有推薦人
       for (let i = 0; i < rows.length; i += 500) {
         const chunk = JSON.stringify(rows.slice(i, i + 500));
         await tx.execute(sql`insert into ${sql.raw(`"${tb}"`)} select * from jsonb_populate_recordset(null::${sql.raw(`"${tb}"`)}, ${chunk}::jsonb)`);

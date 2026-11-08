@@ -83,3 +83,12 @@ describe('贈品', () => {
   });
 });
 
+
+it('舊備份沒有推薦人欄位也能還原', async () => {
+  await A.createInviteLink(db, 'admin', { name: '甲', phone: '0911111111', quota: 2, expiresAt: new Date('2026-12-20T23:59:59+08:00') });
+  const b = JSON.parse(JSON.stringify(await exportAll(db)));
+  for (const r of b.tables.invite_link ?? []) delete r.referrer;
+  expect(b.tables.invite_link.length).toBeGreaterThan(0);
+  await importAll(db, b);
+  expect((await db.select().from(t.inviteLink)).every((l) => l.referrer === '')).toBe(true);
+});

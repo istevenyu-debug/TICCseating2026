@@ -6,7 +6,7 @@ import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState } from '@/lib/booking';
 import { dispatchQueued, type Senders } from '@/lib/notify';
-import { cancelVip, createVip, listVips, setVipDays, setVipMode, updateVipSeats, vipSendAt } from '@/lib/vip';
+import { cancelVip, createVip, listVips, setVipDays, setVipMode, updateVip, updateVipSeats, vipSendAt } from '@/lib/vip';
 
 let db: Db;
 const SHOW = new Date('2026-12-20T19:30:00+08:00');
@@ -91,5 +91,50 @@ describe('招待（VIP）', () => {
     await cancelVip(db, '網管', r.orderId);
     expect(await status(['1-5', '1-7', '1-9'])).toEqual(['free', 'free', 'free']);
     expect((await listVips(db)).list[0].status).toBe('cancelled');
+  });
+});
+
+describe('招待：推薦人與改資料', () => {
+  it('推薦人存下來；用過的推薦人去重、最近的在前、附上次 Email；「無」不列入', async () => {
+    await createVip(db, '網管', { name: '甲', phone: '', email: 'a@x.example', seatIds: ['1-1'], mode: 'none', referrer: '王小明' });
+    await createVip(db, '網管', { name: '乙', phone: '', email: 'b@x.example', seatIds: ['1-3'], mode: 'none', referrer: '陳大華' });
+    await createVip(db, '網管', { name: '丙', phone: '', email: 'c@x.example', seatIds: ['1-5'], mode: 'none', referrer: '王小明' });
+    await createVip(db, '網管', { name: '丁', phone: '', email: '', seatIds: ['1-7'], mode: 'none', referrer: '無' });
+    const v = await listVips(db);
+    expect(v.referrers).toEqual([{ name: '王小明', email: 'c@x.example' }, { name: '陳大華', email: 'b@x.example' }]);
+    expect(v.list.map((x) => x.referrer)).toEqual(['王小明', '陳大華', '王小明', '無']);
+  });
+
+  it('沒留 Email 的「不寄」：補 Email 後改「立即寄」就寄得出去', async () => {
+    const r = await createVip(db, '網管', { name: '王董', phone: '', email: '', seatIds: ['1-1'], mode: 'none', referrer: '無' }, 'https://x.example');
+    await expect(setVipMode(db, '網管', r.orderId, 'now')).rejects.toThrow('請填 Email 或手機');
+    await updateVip(db, '網管', r.orderId, { name: '王董', phone: '', email: 'wang@x.example', referrer: '王小明', note: '第三位' });
+    await setVipMode(db, '網管', r.orderId, 'now', 'https://x.example');
+    const f = fake();
+    await dispatchQueued(db, f.s, () => new Date());
+    expect(f.sent.map((x) => x.to)).toEqual(['wang@x.example']);
+    const x = (await listVips(db)).list[0];
+    expect(x).toMatchObject({ email: 'wang@x.example', referrer: '王小明', note: '第三位' });
+  });
+
+  it('改姓名：持票人自動名字跟著改，排程中的信換成新姓名；座位、QR 不變', async () => {
+    const r = await createVip(db, '網管', { name: '王董', phone: '', email: 'w@x.example', seatIds: ['1-1', '1-3'], mode: 'scheduled', referrer: '無' }, 'https://x.example');
+    const before = await db.select().from(t.orderSeat).where(eq(t.orderSeat.orderId, r.orderId));
+    await db.update(t.orderSeat).set({ holderName: '李四' }).where(eq(t.orderSeat.seatId, before.find((s) => s.holderName === '王董02')!.seatId));
+    await updateVip(db, '網管', r.orderId, { name: '王大董', phone: '', email: 'w@x.example', referrer: '無', note: '' });
+    const after = await db.select().from(t.orderSeat).where(eq(t.orderSeat.orderId, r.orderId));
+    expect(after.map((s) => s.holderName).sort()).toEqual(['李四', '王大董']);
+    expect(after.map((s) => s.seatId).sort()).toEqual(before.map((s) => s.seatId).sort());
+    const q = await db.select().from(t.notification).where(eq(t.notification.orderId, r.orderId));
+    expect(q).toHaveLength(1);
+    expect(q[0].content).toContain('王大董 您好');
+    const log = await db.select().from(t.auditLog).where(eq(t.auditLog.action, 'vip_update'));
+    expect(log[0].detail).toContain('王董');
+  });
+
+  it('已取消的招待不能改資料', async () => {
+    const r = await createVip(db, '網管', { name: '王董', phone: '', email: '', seatIds: ['1-1'], mode: 'none', referrer: '無' });
+    await cancelVip(db, '網管', r.orderId);
+    await expect(updateVip(db, '網管', r.orderId, { name: 'x', phone: '', email: '', referrer: '無', note: '' })).rejects.toThrow('已取消');
   });
 });

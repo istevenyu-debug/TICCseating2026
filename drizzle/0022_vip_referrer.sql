@@ -1,0 +1,1 @@
+ALTER TABLE "invite_link" ADD COLUMN "referrer" text DEFAULT '' NOT NULL;

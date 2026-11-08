@@ -2394,12 +2394,30 @@ type VipRow = State['vips']['list'][number];
 const VIP_MODE: Record<string, string> = { scheduled: '演出前自動寄', now: '立即寄出', none: '不寄（紙本親手交）' };
 const fmtDay = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '');
 
+/** 推薦人：預設空白，點用過的名字帶入（Email 空白時一併帶入上次的 Email）；沒有推薦人點「無」 */
+function RefPick({ v, set, refs }: { v: { referrer: string; email: string }; set: (p: { referrer?: string; email?: string }) => void; refs: { name: string; email: string }[] }) {
+  return (
+    <div style={{ marginTop: 6 }}>
+      <label className="f">推薦人（必填）<input value={v.referrer} placeholder="輸入，或點下方名字" onChange={(e) => set({ referrer: e.target.value })} /></label>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+        {refs.slice(0, 12).map((r) => (
+          <button key={r.name} type="button" className={`btn small${v.referrer === r.name ? ' pri' : ''}`}
+            onClick={() => set({ referrer: r.name, ...(!v.email.trim() && r.email ? { email: r.email } : {}) })}>{r.name}</button>
+        ))}
+        <button type="button" className={`btn small${v.referrer === '無' ? ' pri' : ''}`} onClick={() => set({ referrer: '無' })}>無</button>
+      </div>
+      {refs.length > 0 && <div className="small muted" style={{ marginTop: 2 }}>點名字帶入；Email 空白時會一起帶入他上次用的 Email，請確認。</div>}
+    </div>
+  );
+}
+
 function Vips() {
   const { st, act, busy, setMsg, sure, confirm2, zoneById } = useAdmin();
   const v = st.vips;
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<VipRow | null>(null);
-  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '' });
+  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '' });
+  const [info, setInfo] = useState<{ id: number; name: string; phone: string; email: string; referrer: string; note: string } | null>(null);
   const [days, setDays] = useState(String(v.days));
   if (st.user.role !== 'admin') return <div className="note err">招待由主管或網管安排，這個帳號沒有權限。</div>;
 
@@ -2423,11 +2441,12 @@ function Vips() {
   async function create() {
     if (!f.name.trim()) { setMsg({ kind: 'err', text: '請填寫姓名' }); return; }
     if (!sel.size) { setMsg({ kind: 'err', text: '請在座位圖上選取座位' }); return; }
+    if (!f.referrer.trim()) { setMsg({ kind: 'err', text: '請選推薦人；沒有請點「無」' }); return; }
     const r = await act({ action: 'vip.create', ...f, seatIds: [...sel] }) as { orderNo: string; sendAt: string | null; brokeBundles: number; delivery?: Delivery } | null;
     if (!r) return;
     const when = f.mode === 'none' ? '不寄出，請到「七、紙本入場券」列印' : f.mode === 'now' || !r.sendAt ? `已寄出。${deliveryText(r.delivery).text}` : `將於 ${fmtDay(r.sendAt)} 自動寄出`;
     setMsg({ kind: 'ok', text: `已保留 ${sel.size} 席給 ${f.name}（${r.orderNo}），${when}${r.brokeBundles ? `；有 ${r.brokeBundles} 組連座已改回單人` : ''}` });
-    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '' });
+    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '', referrer: '' }); // 推薦人不自動沿用，避免順手按出
   }
 
   return (
@@ -2460,6 +2479,7 @@ function Vips() {
                 <span>{m === 'scheduled' ? <>演出前 {v.days} 天自動寄出{v.defaultSendAt ? `（${fmtDay(v.defaultSendAt)}）` : '（已過，會立即寄出）'}</> : VIP_MODE[m]}</span>
               </label>
             ))}
+            <RefPick v={f} set={(p) => setF({ ...f, ...p })} refs={v.referrers} />
             <label className="f" style={{ marginTop: 6 }}>備註（選填，只有後台看得到）<input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
             <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !sel.size} onClick={create}>保留 {sel.size} 席給這位貴賓</button>
             <p className="small muted" style={{ margin: '6px 0 0' }}>招待不收費、不開發票，不算進售票收入。寄出前都可以改座位、改寄送方式或取消。</p>
@@ -2473,6 +2493,26 @@ function Vips() {
               <div className="row" style={{ justifyContent: 'space-between' }}><b>{x.name}</b><span className="mono small">{x.orderNo}</span></div>
               <div className="small">{x.seats.map((s) => s.label).join('、')}</div>
               <div className="small muted">{x.phone}{x.phone && x.email ? '・' : ''}{x.email}</div>
+              <div className="small">推薦人：{x.referrer || <span className="muted">（未填）</span>}{x.note ? <span className="muted">・{x.note}</span> : null}</div>
+              {info?.id === x.id && (
+                <div style={{ marginTop: 6 }}>
+                  <label className="f">姓名<input value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></label>
+                  <div className="fields" style={{ marginTop: 6 }}>
+                    <label className="f">手機<input value={info.phone} inputMode="tel" onChange={(e) => setInfo({ ...info, phone: e.target.value })} /></label>
+                    <label className="f">Email<input value={info.email} type="email" onChange={(e) => setInfo({ ...info, email: e.target.value })} /></label>
+                  </div>
+                  <RefPick v={info} set={(p) => setInfo({ ...info, ...p })} refs={v.referrers} />
+                  <label className="f" style={{ marginTop: 6 }}>備註<input value={info.note} onChange={(e) => setInfo({ ...info, note: e.target.value })} /></label>
+                  <div className="row" style={{ marginTop: 6 }}>
+                    <button className="btn pri small" disabled={busy} onClick={async () => {
+                      if (!info.referrer.trim()) { setMsg({ kind: 'err', text: '請選推薦人；沒有請點「無」' }); return; }
+                      const { id: vid, ...rest } = info;
+                      if (await act({ action: 'vip.update', id: vid, ...rest }, x.sentAt ? `已更新 ${info.name}。之前寄出的信不會改，要重寄請把寄送方式改成「立即寄」` : `已更新 ${info.name}`)) setInfo(null);
+                    }}>儲存</button>
+                    <button className="btn small" onClick={() => setInfo(null)}>取消</button>
+                  </div>
+                </div>
+              )}
               <div className="small" style={{ marginTop: 4 }}>
                 {x.sentAt ? <span className="ok-text">✓ 已寄出（{fmtDay(x.sentAt)}）</span>
                   : x.sendAt === 'now' ? <span>寄送中</span>
@@ -2488,6 +2528,7 @@ function Vips() {
                 }}>
                   {(['scheduled', 'now', 'none'] as const).map((m) => <option key={m} value={m}>{VIP_MODE[m]}</option>)}
                 </select>
+                <button className="btn small" onClick={() => setInfo({ id: x.id, name: x.name, phone: x.phone, email: x.email, referrer: x.referrer, note: x.note })}>改資料</button>
                 <button className="btn small" onClick={() => { setEditing(x); setSel(new Set(x.seats.map((s) => s.id))); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>改座位</button>
                 <button className="btn small danger" disabled={busy} onClick={() => confirm2(`vipc${x.id}`, () => act({ action: 'vip.cancel', id: x.id }, `已取消 ${x.name} 的招待，座位已釋放`))}>
                   {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消招待'}</button>

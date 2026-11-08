@@ -16,7 +16,7 @@ import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
 import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
-import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats } from '@/lib/vip';
+import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 export const dynamic = 'force-dynamic';
@@ -72,7 +72,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('notify.resend'), id }),
   z.object({ action: z.literal('preorder.confirm'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30).optional() }),
   z.object({ action: z.literal('vip.create'), name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
-    seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional() }),
+    seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional(),
+    referrer: z.string({ required_error: '請選推薦人；沒有請點「無」' }).trim().min(1, '請選推薦人；沒有請點「無」').max(40) }),
+  z.object({ action: z.literal('vip.update'), id, name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
+    referrer: z.string({ required_error: '請選推薦人；沒有請點「無」' }).trim().min(1, '請選推薦人；沒有請點「無」').max(40), note: z.string().max(200) }),
   z.object({ action: z.literal('vip.seats'), id, seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60) }),
   z.object({ action: z.literal('vip.mode'), id, mode: z.enum(['scheduled', 'now', 'none']) }),
   z.object({ action: z.literal('vip.cancel'), id }),
@@ -210,6 +213,13 @@ export async function POST(req: Request) {
         if (a.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email)) throw new BookingError('INVALID', 'Email 格式不正確');
         const r = await createVip(db, who, { ...a, phone }, originOf(req));
         return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: r.orderId }) : undefined };
+      }
+      case 'vip.update': {
+        mustBeAdmin();
+        const phone = a.phone.trim() ? normalizePhone(a.phone) : '';
+        if (phone && !/^09\d{8}$/.test(phone)) throw new BookingError('INVALID', '手機應為 09 開頭的 10 位數字');
+        if (a.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email)) throw new BookingError('INVALID', 'Email 格式不正確');
+        return updateVip(db, who, a.id, { ...a, phone }, originOf(req));
       }
       case 'vip.seats': mustBeAdmin(); return updateVipSeats(db, who, a.id, a.seatIds, originOf(req));
       case 'vip.mode': { mustBeAdmin(); const r = await setVipMode(db, who, a.id, a.mode, originOf(req)); return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: a.id }) : undefined }; }

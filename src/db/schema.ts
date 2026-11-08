@@ -134,6 +134,7 @@ export const inviteLink = pgTable('invite_link', {
   phone: text('phone').notNull(),
   quota: integer('quota').notNull(), // 專屬連結可購張數，0 = 不限
   note: text('note').notNull().default(''), // 來帳備註（例：末五碼、金額），主辦方對帳用
+  referrer: text('referrer').notNull().default(''), // 招待的推薦人（「無」＝沒有推薦人）
   kind: text('kind').notNull().default('personal'), // personal 專屬連結 / public 公開連結
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   status: text('status').notNull().default('active'), // active / disabled
