@@ -16,6 +16,7 @@ import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
 import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
+import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
@@ -80,6 +81,15 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('vip.mode'), id, mode: z.enum(['scheduled', 'now', 'none']) }),
   z.object({ action: z.literal('vip.cancel'), id }),
   z.object({ action: z.literal('vip.days'), days: z.number().int().min(0).max(60) }),
+  z.object({ action: z.literal('join.settings'), values: z.object({ open: z.boolean(), contact: z.string().max(60) }).partial() }),
+  z.object({ action: z.literal('join.venue.add'), names: z.array(z.string().max(60)).min(1).max(500) }),
+  z.object({ action: z.literal('join.venue.update'), id, values: z.object({ name: z.string().max(60), active: z.boolean() }).partial() }),
+  z.object({ action: z.literal('join.venue.merge'), id, into: id }),
+  z.object({ action: z.literal('join.venue.delete'), id }),
+  z.object({ action: z.literal('join.reg.venue'), id, venueId: id.optional(), newName: z.string().max(60).optional() }),
+  z.object({ action: z.literal('join.reg.decide'), id, status: z.enum(['approved', 'rejected', 'pending']), reason: z.string().max(100).optional() }),
+  z.object({ action: z.literal('join.reg.edit'), id, values: z.record(z.unknown()) }),
+  z.object({ action: z.literal('join.reg.delete'), id }),
   z.object({ action: z.literal('invoice.issue'), ids: z.array(id).min(1).max(500), force: z.boolean().optional() }),
   z.object({ action: z.literal('invoice.edit'), id, invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']), invCode: z.string().max(20), invTitle: z.string().max(60) }),
   z.object({ action: z.literal('invoice.recheck'), id }),
@@ -225,6 +235,15 @@ export async function POST(req: Request) {
       case 'vip.mode': { mustBeAdmin(); const r = await setVipMode(db, who, a.id, a.mode, originOf(req)); return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: a.id }) : undefined }; }
       case 'vip.cancel': mustBeAdmin(); return cancelVip(db, who, a.id);
       case 'vip.days': mustBeAdmin(); return setVipDays(db, who, a.days);
+      case 'join.settings': mustBeAdmin(); return setJoinSettings(db, who, a.values);
+      case 'join.venue.add': return addVenues(db, who, a.names);
+      case 'join.venue.update': return updateVenue(db, who, a.id, a.values);
+      case 'join.venue.merge': return mergeVenue(db, who, a.id, a.into);
+      case 'join.venue.delete': return deleteVenue(db, who, a.id);
+      case 'join.reg.venue': return setRegVenue(db, who, a.id, { venueId: a.venueId, newName: a.newName });
+      case 'join.reg.decide': return decideReg(db, who, a.id, a.status, a.reason ?? '');
+      case 'join.reg.edit': return editReg(db, who, a.id, a.values);
+      case 'join.reg.delete': return deleteReg(db, who, a.id);
       case 'invoice.issue': mustBeAdmin(); return issueBatch(db, a.ids, who, !!a.force);
       case 'invoice.edit': mustBeAdmin(); return editInvoiceBuyer(db, a.id, who, a);
       case 'invoice.recheck': mustBeAdmin(); return recheckInvoice(db, a.id, who);

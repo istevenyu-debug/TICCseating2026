@@ -262,3 +262,11 @@ ol.flow li.on { font-weight: 700; }
 /* 送出中轉圈 */
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin .9s linear infinite; }
+
+/* 揪團登記：大字、少欄位（長者也好填） */
+.join { max-width: 560px; font-size: 16px; }
+.join h2 { font-size: 18px; }
+.join input, .join select { font-size: 16px; padding: 10px; }
+.join label.f { font-size: 14px; }
+.join .check input { width: 20px; height: 20px; }
+select.need { border-color: var(--red); }

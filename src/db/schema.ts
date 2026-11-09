@@ -380,3 +380,45 @@ export const cardOrder = pgTable('card_order', {
   refundFee: integer('refund_fee').notNull().default(0),
   refundBy: text('refund_by'),
 }, (t) => ({ tradeNo: uniqueIndex('card_order_trade_no_idx').on(t.tradeNo), token: uniqueIndex('card_order_token_idx').on(t.token), byStatus: index('card_order_status_idx').on(t.status) }));
+
+/* ---------- 揪團贈票（銀區買十送一）：團練場、揪團登記 ---------- */
+
+/** 團練場清單（後台維護；登記表從這裡選）。code 給第二階段的團練場回報連結用 */
+export const joinVenue = pgTable('join_venue', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  code: text('code').notNull(),
+  active: boolean('active').notNull().default(true), // false：登記表不顯示（已登記的不受影響）
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ code: uniqueIndex('join_venue_code_idx').on(t.code) }));
+
+/** 揪團登記：一份登記＝一位負責人（底下可有多位揪團人） */
+export const joinReg = pgTable('join_reg', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  venueId: integer('venue_id').references(() => joinVenue.id, { onDelete: 'set null' }),
+  venueText: text('venue_text').notNull().default(''), // 選「其他」時自己填的團練場名稱
+  headName: text('head_name').notNull(),
+  headPhone: text('head_phone').notNull(),
+  status: text('status').notNull().default('pending'), // pending 待審核 / approved 已核准 / rejected 已退回
+  reason: text('reason').notNull().default(''), // 退回原因
+  note: text('note').notNull().default(''), // 後台備註
+  ip: text('ip').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }),
+  decidedBy: text('decided_by'),
+}, (t) => ({ byStatus: index('join_reg_status_idx').on(t.status) }));
+
+/** 揪團人（屬於某一份登記）。code 給第二階段的揪團人專頁用 */
+export const joinLeader = pgTable('join_leader', {
+  id: serial('id').primaryKey(),
+  regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  phone: text('phone').notNull(),
+  email: text('email').notNull().default(''),
+  noEmail: boolean('no_email').notNull().default(false), // 沒有 Email：後台改用 LINE 傳連結
+  sameAsHead: boolean('same_as_head').notNull().default(false),
+  code: text('code').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ code: uniqueIndex('join_leader_code_idx').on(t.code), byPhone: index('join_leader_phone_idx').on(t.phone) }));
