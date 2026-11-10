@@ -1,209 +1,441 @@
 'use client';
 
-import { useState } from 'react';
-import type { joinAdminState } from '@/lib/join';
+import { useMemo, useState } from 'react';
+import type { joinAdminState } from '@/lib/joinQueue';
+import AdminMap, { type SeatLook } from './AdminMap';
 
 type J = Awaited<ReturnType<typeof joinAdminState>>;
 type Reg = J['regs'][number];
+type Slot = J['slots'][number];
 type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
 interface Props {
   j: J; act: Act; busy: boolean; base: string; sure: string | null; confirm2: (key: string, fn: () => void) => void;
   setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void;
 }
-type EditLeader = { id?: number; name: string; phone: string; email: string; noEmail: boolean };
-type Edit = { headName: string; headPhone: string; note: string; leaders: EditLeader[] };
+type Sec = 'set' | 'reg' | 'venue' | 'era' | 'report' | 'seats' | 'queue' | 'list';
 
 const tw = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
 const ph = (s: string) => s.replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3');
 const STATUS: Record<string, string> = { pending: '待審核', approved: '已核准', rejected: '已退回' };
 const COLOR: Record<string, string> = { pending: 'var(--warn)', approved: 'var(--ok)', rejected: 'var(--muted)' };
+const SLOT: Record<string, string> = { wait: '排隊中', turn: '劃位中', done: '已選位', skip: '暫停排隊', void: '已取消' };
+const byVenueSeat = (a: Slot, b: Slot) => a.venue.localeCompare(b.venue, 'zh-Hant') || (a.rowNo ?? 0) - (b.rowNo ?? 0) || Number(a.seatNo) - Number(b.seatNo);
 
-/** 後台「十二、揪團贈票」第一階段：登記開關、團練場清單、審核揪團登記 */
+/** 後台「十二、揪團贈票」：設定、登記審核、團練場、年代名單、回報、三樓座位、劃位排隊、送年代名單 */
 export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: Props) {
-  const [view, setView] = useState<'pending' | 'approved' | 'rejected'>('pending');
-  const [bulk, setBulk] = useState('');
-  const [contact, setContact] = useState(j.settings.contact);
-  const [pick, setPick] = useState<Record<number, string>>({});
-  const [edit, setEdit] = useState<{ id: number; v: Edit } | null>(null);
-  const [q, setQ] = useState('');
-  const link = `${base}/join`;
+  const [sec, setSec] = useState<Sec>('set');
   const n = (s: string) => j.regs.filter((r) => r.status === s).length;
-  const approvedLeaders = j.regs.filter((r) => r.status === 'approved').reduce((k, r) => k + r.leaders.length, 0);
-  const shown = j.regs.filter((r) => r.status === view).filter((r) => !q.trim() || JSON.stringify([r.venueName, r.venueText, r.headName, r.headPhone, r.leaders]).includes(q.trim()));
-
+  const unsentLinks = j.regs.filter((r) => r.status === 'approved' && !r.linksSentAt).length;
+  const queue = j.slots.filter((x) => x.status === 'wait' || x.status === 'turn').sort((a, b) => a.pos - b.pos);
+  const done = j.slots.filter((x) => x.status === 'done');
   const copy = async (text: string) => {
     try { await navigator.clipboard.writeText(text); setMsg({ kind: 'ok', text: '已複製' }); } catch { window.prompt('請長按複製', text); }
   };
+  const secs: [Sec, string][] = [['set', '設定'], ['reg', `登記審核${n('pending') ? `（${n('pending')}）` : ''}`], ['venue', '團練場'], ['era', '年代名單'],
+    ['report', '回報'], ['seats', '三樓座位'], ['queue', `劃位排隊${j.current ? '・進行中' : ''}`], ['list', '送年代名單']];
+
+  return (
+    <div>
+      <div className="card">
+        <h2>十二、揪團贈票（銀區三樓・買十送一）</h2>
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <div className="stat"><b>{n('approved')}</b><span>團練場（已核准）</span></div>
+          <div className="stat"><b>{j.reports.length}</b><span>回報訂單</span></div>
+          <div className="stat"><b>{j.reports.reduce((a, x) => a + x.qty, 0)}</b><span>回報張數</span></div>
+          <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.slots.filter((x) => x.status !== 'void').length}</b><span>劃位序</span></div>
+          <div className="stat"><b>{done.length}</b><span>已選位</span></div>
+          <div className="stat"><b>{j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length}</b><span>贈席空位</span></div>
+        </div>
+        <div className="row" style={{ marginTop: 12, flexWrap: 'wrap', gap: 6 }}>
+          {secs.map(([k, label]) => <button key={k} className={`btn small${sec === k ? ' pri' : ''}`} onClick={() => setSec(k)}>{label}</button>)}
+        </div>
+      </div>
+      {sec === 'set' && <Settings j={j} act={act} busy={busy} base={base} copy={copy} />}
+      {sec === 'reg' && <Regs j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} copy={copy} unsent={unsentLinks} />}
+      {sec === 'venue' && <Venues j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
+      {sec === 'era' && <Era j={j} act={act} busy={busy} setMsg={setMsg} />}
+      {sec === 'report' && <Reports j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} />}
+      {sec === 'seats' && <Seats j={j} act={act} />}
+      {sec === 'queue' && <Queue j={j} act={act} busy={busy} queue={queue} setMsg={setMsg} />}
+      {sec === 'list' && <List j={j} act={act} busy={busy} done={done} setMsg={setMsg} />}
+    </div>
+  );
+}
+
+/* ---------- 設定 ---------- */
+function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean; base: string; copy: (s: string) => void }) {
+  const s = j.settings;
+  const [f, setF] = useState({ contact: s.contact, perSeat: String(s.perSeat), turnMin: String(s.turnMin), pickMin: String(s.pickMin), pushBack: String(s.pushBack), notifyAhead: String(s.notifyAhead), hourFrom: s.hourFrom, hourTo: s.hourTo });
+  const set = (values: Record<string, unknown>, ok: string) => act({ action: 'join.settings', values }, ok);
+  const link = `${base}/join`;
+  const num = (k: keyof typeof f) => Number(f[k]);
+  return (
+    <>
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>1. 登記</h3>
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <span className="mono" style={{ wordBreak: 'break-all' }}>{link}</span>
+          <button className="btn small" onClick={() => copy(link)}>複製</button>
+          <a className="btn small" href="/join" target="_blank" rel="noreferrer">開啟</a>
+        </div>
+        <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={s.open} disabled={busy} onChange={(e) => set({ open: e.target.checked }, e.target.checked ? '已開放登記' : '已關閉登記')} />
+          <span><b>開放登記</b>{s.open ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
+        <label className="f" style={{ marginTop: 8, maxWidth: 420 }}>送出後顯示「資料有誤請聯絡＿＿」
+          <input value={f.contact} maxLength={60} placeholder="例：群票服務" onChange={(e) => setF({ ...f, contact: e.target.value })} /></label>
+      </div>
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>2. 回報</h3>
+        <label className="check"><input type="checkbox" checked={s.reportOpen} disabled={busy} onChange={(e) => set({ reportOpen: e.target.checked }, e.target.checked ? '已開放回報' : '已關閉回報')} />
+          <span><b>開放回報</b>{s.reportOpen ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
+        <p className="small muted">開放前請先上傳年代名單：志工送出時會立刻核對。</p>
+        <label className="f" style={{ maxWidth: 200 }}>每幾張一個劃位序<input inputMode="numeric" value={f.perSeat} onChange={(e) => setF({ ...f, perSeat: e.target.value })} /></label>
+      </div>
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>3. 劃位排隊</h3>
+        <label className="check"><input type="checkbox" checked={s.pickOpen} disabled={busy} onChange={(e) => (!e.target.checked || window.confirm('開始劃位排隊？第 1 號會立刻收到「輪到您了」的 Email。')) && set({ pickOpen: e.target.checked }, e.target.checked ? '已開始劃位排隊' : '已停止劃位排隊')} />
+          <span><b>開始劃位排隊</b>{s.pickOpen ? <span style={{ color: 'var(--ok)' }}>（進行中）</span> : <span className="muted">（未開始）</span>}</span></label>
+        <label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={s.paused} disabled={busy} onChange={(e) => set({ paused: e.target.checked }, e.target.checked ? '已暫停' : '已繼續')} />
+          <span><b>暫停</b>（不開始新的一輪；正在選的不計時）</span></label>
+        <div className="fields" style={{ marginTop: 10, gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))' }}>
+          <label className="f">輪到後等幾分鐘<input inputMode="decimal" value={f.turnMin} onChange={(e) => setF({ ...f, turnMin: e.target.value })} /></label>
+          <label className="f">打開後選位分鐘<input inputMode="numeric" value={f.pickMin} onChange={(e) => setF({ ...f, pickMin: e.target.value })} /></label>
+          <label className="f">叫不到延後幾號<input inputMode="numeric" value={f.pushBack} onChange={(e) => setF({ ...f, pushBack: e.target.value })} /></label>
+          <label className="f">前幾號先通知<input inputMode="numeric" value={f.notifyAhead} onChange={(e) => setF({ ...f, notifyAhead: e.target.value })} /></label>
+          <label className="f">時段開始<input value={f.hourFrom} placeholder="09:00" onChange={(e) => setF({ ...f, hourFrom: e.target.value })} /></label>
+          <label className="f">時段結束<input value={f.hourTo} placeholder="21:00" onChange={(e) => setF({ ...f, hourTo: e.target.value })} /></label>
+        </div>
+        <p className="small muted">叫不到：第 1 次延後幾號、第 2 次排到最後、第 3 次暫停排隊（負責人按「我回來了」重新排到最後）。時段留白＝不限。</p>
+      </div>
+      <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim() }, '已儲存設定')}>儲存設定</button>
+    </>
+  );
+}
+
+/* ---------- 登記審核 ---------- */
+function Regs({ j, act, busy, sure, confirm2, setMsg, copy, unsent }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg']; copy: (s: string) => void; unsent: number }) {
+  const [view, setView] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [pick, setPick] = useState<Record<number, string>>({});
+  const [edit, setEdit] = useState<{ id: number; headName: string; headPhone: string; email: string; note: string } | null>(null);
+  const [q, setQ] = useState('');
+  const n = (s: string) => j.regs.filter((r) => r.status === s).length;
+  const shown = j.regs.filter((r) => r.status === view).filter((r) => !q.trim() || [r.venueName, r.venueText, r.headName, r.headPhone, r.email].join(' ').includes(q.trim()));
   const reject = (r: Reg) => {
     const why = window.prompt(`退回第 ${r.id} 號（${r.headName}）的原因（必填，只留在後台，不會寄給對方）`, '');
     if (why === null) return;
     if (why.trim().length < 2) { setMsg({ kind: 'err', text: '請填寫退回原因' }); return; }
     act({ action: 'join.reg.decide', id: r.id, status: 'rejected', reason: why }, '已退回');
   };
-  const startEdit = (r: Reg) => setEdit({ id: r.id, v: { headName: r.headName, headPhone: r.headPhone, note: r.note, leaders: r.leaders.map((l) => ({ id: l.id, name: l.name, phone: l.phone, email: l.email, noEmail: l.noEmail })) } });
-  const setEL = (i: number, v: Partial<EditLeader>) => edit && setEdit({ ...edit, v: { ...edit.v, leaders: edit.v.leaders.map((l, k) => (k === i ? { ...l, ...v } : l)) } });
-  const saveEdit = async () => {
-    if (!edit) return;
-    const r = await act({ action: 'join.reg.edit', id: edit.id, values: edit.v }, '已儲存');
-    if (r) setEdit(null);
+  const send = async (ids?: number[]) => {
+    const r = await act({ action: 'join.links.send', ids }) as { sent: number; noEmail: number } | undefined;
+    if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結用 LINE 傳` : ''}` });
   };
-
   return (
-    <div>
-      <div className="card">
-        <h2>十二、揪團贈票（第一階段：揪團登記）</h2>
-        <p className="small muted" style={{ marginTop: 0 }}>銀區（三樓）買十送一。這一階段只收登記與審核，<b>不寄任何信</b>；揪團人連結、團練場回報連結在第二階段上線後才會寄出。</p>
-        <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
-          <div className="stat"><b>{j.venues.length}</b><span>團練場</span></div>
-          <div className="stat"><b style={{ color: 'var(--warn)' }}>{n('pending')}</b><span>待審核</span></div>
-          <div className="stat"><b style={{ color: 'var(--ok)' }}>{n('approved')}</b><span>已核准登記</span></div>
-          <div className="stat"><b>{approvedLeaders}</b><span>已核准揪團人</span></div>
-        </div>
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>登記審核</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>一個團練場只能核准一位負責人。核准後按「寄出連結」：負責人收到回報連結（轉給志工）與劃位連結（本人用）。</p>
+      {unsent > 0 && <button className="btn pri small" disabled={busy} onClick={() => confirm2('join-send-all', () => send())} style={{ marginBottom: 10 }}>
+        {sure === 'join-send-all' ? `再按一次：寄給 ${unsent} 位` : `寄出所有未寄的連結（${unsent} 位）`}</button>}
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        {(['pending', 'approved', 'rejected'] as const).map((s) => <button key={s} className={`btn small${view === s ? ' pri' : ''}`} onClick={() => setView(s)}>{STATUS[s]}（{n(s)}）</button>)}
+        <input style={{ maxWidth: 200 }} placeholder="搜尋姓名、手機、團練場" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>登記連結</h3>
-        <div className="row" style={{ flexWrap: 'wrap' }}>
-          <span className="mono" style={{ wordBreak: 'break-all' }}>{link}</span>
-          <button className="btn small" onClick={() => copy(link)}>複製</button>
-          <a className="btn small" href="/join" target="_blank" rel="noreferrer">開啟</a>
-        </div>
-        <label className="check" style={{ marginTop: 10 }}>
-          <input type="checkbox" checked={j.settings.open} disabled={busy}
-            onChange={(e) => act({ action: 'join.settings', values: { open: e.target.checked } }, e.target.checked ? '已開放登記' : '已關閉登記')} />
-          <span><b>開放登記</b>{j.settings.open ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中：登記頁只顯示「尚未開放」）</span>}</span>
-        </label>
-        <label className="f" style={{ marginTop: 10, maxWidth: 420 }}>送出後顯示「資料有誤請聯絡＿＿」
-          <div className="row" style={{ flexWrap: 'nowrap' }}>
-            <input value={contact} maxLength={60} placeholder="例：群票服務 LINE 群" onChange={(e) => setContact(e.target.value)} />
-            <button className="btn small" style={{ whiteSpace: 'nowrap' }} disabled={busy || contact === j.settings.contact} onClick={() => act({ action: 'join.settings', values: { contact } }, '已儲存')}>儲存</button>
+      {!shown.length && <p className="muted small">沒有{STATUS[view]}的登記。</p>}
+      {shown.map((r) => (
+        <div key={r.id} className="note" style={{ marginTop: 10 }}>
+          <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <b>#{r.id}　{r.venueName || <span style={{ color: 'var(--warn)' }}>其他：{r.venueText}</span>}</b>
+            <span className="small"><span style={{ color: COLOR[r.status] }}>{STATUS[r.status]}</span>・送出 {tw(r.createdAt)}{r.decidedAt && `・${r.decidedBy} ${tw(r.decidedAt)}`}</span>
           </div>
-        </label>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>登記審核</h3>
-        <div className="row" style={{ flexWrap: 'wrap' }}>
-          {(['pending', 'approved', 'rejected'] as const).map((s) => (
-            <button key={s} className={`btn small${view === s ? ' pri' : ''}`} onClick={() => setView(s)}>{STATUS[s]}（{n(s)}）</button>
-          ))}
-          <input style={{ maxWidth: 200 }} placeholder="搜尋姓名、手機、團練場" value={q} onChange={(e) => setQ(e.target.value)} />
-        </div>
-        {!shown.length && <p className="muted small">沒有{STATUS[view]}的登記。</p>}
-        {shown.map((r) => (
-          <div key={r.id} className="note" style={{ marginTop: 10 }}>
-            <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
-              <b>#{r.id}　{r.venueName || <span style={{ color: 'var(--warn)' }}>其他：{r.venueText}</span>}</b>
-              <span className="small"><span style={{ color: COLOR[r.status] }}>{STATUS[r.status]}</span>・送出 {tw(r.createdAt)}{r.decidedAt && `・${r.decidedBy} ${tw(r.decidedAt)}`}</span>
+          {!r.venueId && r.status !== 'rejected' && (
+            <div className="row small" style={{ marginTop: 6, flexWrap: 'wrap' }}>
+              <span>指定團練場：</span>
+              <select style={{ width: 'auto' }} value={pick[r.id] ?? ''} onChange={(e) => setPick({ ...pick, [r.id]: e.target.value })}>
+                <option value="">選清單上的…</option>
+                {j.venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+              <button className="btn small" disabled={busy || !pick[r.id]} onClick={() => act({ action: 'join.reg.venue', id: r.id, venueId: Number(pick[r.id]) }, '已指定')}>指定</button>
+              <button className="btn small" disabled={busy} onClick={() => { const nm = window.prompt('新增成清單上的團練場（可修改名稱，例：台北木柵）', r.venueText); if (nm?.trim()) act({ action: 'join.reg.venue', id: r.id, newName: nm }, '已新增並指定'); }}>新增「{r.venueText}」到清單</button>
             </div>
-            {!r.venueId && r.status !== 'rejected' && (
-              <div className="row small" style={{ marginTop: 6, flexWrap: 'wrap' }}>
-                <span>指定團練場：</span>
-                <select style={{ width: 'auto' }} value={pick[r.id] ?? ''} onChange={(e) => setPick({ ...pick, [r.id]: e.target.value })}>
-                  <option value="">選清單上的…</option>
-                  {j.venues.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                </select>
-                <button className="btn small" disabled={busy || !pick[r.id]} onClick={() => act({ action: 'join.reg.venue', id: r.id, venueId: Number(pick[r.id]) }, '已指定')}>指定</button>
-                <button className="btn small" disabled={busy} onClick={() => {
-                  const nm = window.prompt('新增成清單上的團練場（可修改名稱，例：台北木柵）', r.venueText);
-                  if (nm?.trim()) act({ action: 'join.reg.venue', id: r.id, newName: nm }, '已新增並指定');
-                }}>新增「{r.venueText}」到清單</button>
+          )}
+          {edit?.id === r.id ? (
+            <div style={{ marginTop: 8 }}>
+              <div className="fields">
+                <label className="f">負責人姓名<input value={edit.headName} onChange={(e) => setEdit({ ...edit, headName: e.target.value })} /></label>
+                <label className="f">手機<input value={edit.headPhone} inputMode="tel" onChange={(e) => setEdit({ ...edit, headPhone: e.target.value })} /></label>
+                <label className="f">Email<input value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></label>
+                <label className="f">後台備註<input value={edit.note} maxLength={200} onChange={(e) => setEdit({ ...edit, note: e.target.value })} /></label>
               </div>
-            )}
-
-            {edit?.id === r.id ? (
-              <div style={{ marginTop: 8 }}>
-                <div className="fields">
-                  <label className="f">負責人姓名<input value={edit.v.headName} onChange={(e) => setEdit({ ...edit, v: { ...edit.v, headName: e.target.value } })} /></label>
-                  <label className="f">負責人手機<input value={edit.v.headPhone} inputMode="tel" onChange={(e) => setEdit({ ...edit, v: { ...edit.v, headPhone: e.target.value } })} /></label>
-                </div>
-                {edit.v.leaders.map((l, i) => (
-                  <div key={i} className="fields" style={{ marginTop: 8, gridTemplateColumns: '1fr 1fr 1.5fr auto', alignItems: 'end' }}>
-                    <label className="f">揪團人 {i + 1}<input value={l.name} onChange={(e) => setEL(i, { name: e.target.value })} /></label>
-                    <label className="f">手機<input value={l.phone} inputMode="tel" onChange={(e) => setEL(i, { phone: e.target.value })} /></label>
-                    <label className="f">Email
-                      <input value={l.email} disabled={l.noEmail} onChange={(e) => setEL(i, { email: e.target.value })} />
-                      <span className="check small"><input type="checkbox" checked={l.noEmail} onChange={(e) => setEL(i, { noEmail: e.target.checked })} />沒有 Email</span>
-                    </label>
-                    <button className="btn small" disabled={edit.v.leaders.length < 2} onClick={() => setEdit({ ...edit, v: { ...edit.v, leaders: edit.v.leaders.filter((_, k) => k !== i) } })}>移除</button>
-                  </div>
-                ))}
-                <button className="btn small" style={{ marginTop: 8 }} onClick={() => setEdit({ ...edit, v: { ...edit.v, leaders: [...edit.v.leaders, { name: '', phone: '', email: '', noEmail: false }] } })}>＋ 新增揪團人</button>
-                <label className="f" style={{ marginTop: 8 }}>後台備註（買方看不到）<input value={edit.v.note} maxLength={200} onChange={(e) => setEdit({ ...edit, v: { ...edit.v, note: e.target.value } })} /></label>
-                <div className="row" style={{ marginTop: 8 }}>
-                  <button className="btn pri small" disabled={busy} onClick={saveEdit}>儲存</button>
-                  <button className="btn small" onClick={() => setEdit(null)}>取消</button>
-                </div>
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="btn pri small" disabled={busy} onClick={async () => { const { id, ...values } = edit; if (await act({ action: 'join.reg.edit', id, values }, '已儲存')) setEdit(null); }}>儲存</button>
+                <button className="btn small" onClick={() => setEdit(null)}>取消</button>
               </div>
-            ) : (
-              <>
-                <div className="small" style={{ marginTop: 6 }}>負責人：<b>{r.headName}</b>　<a href={`tel:${r.headPhone}`} className="mono">{ph(r.headPhone)}</a></div>
-                {r.leaders.map((l, i) => (
-                  <div key={l.id} className="small">揪團人{r.leaders.length > 1 ? ` ${i + 1}` : ''}：<b>{l.name}</b>{l.sameAsHead && <span className="muted">（同負責人）</span>}{'　'}
-                    <a href={`tel:${l.phone}`} className="mono">{ph(l.phone)}</a>　{l.noEmail ? <span style={{ color: 'var(--warn)' }}>沒有 Email（用 LINE 傳）</span> : <span className="mono">{l.email}</span>}</div>
-                ))}
-                {r.note && <div className="small muted">備註：{r.note}</div>}
-                {r.status === 'rejected' && r.reason && <div className="small muted">退回原因：{r.reason}</div>}
-                <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-                  {r.status === 'pending' && <button className="btn pri small" disabled={busy || !r.venueId} title={r.venueId ? '' : '先指定團練場'}
-                    onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'approved' }, '已核准')}>核准</button>}
-                  {r.status === 'pending' && <button className="btn small" disabled={busy} onClick={() => reject(r)}>退回</button>}
-                  {r.status !== 'pending' && <button className="btn small" disabled={busy} onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'pending' }, '已改回待審核')}>改回待審核</button>}
-                  <button className="btn small" disabled={busy} onClick={() => startEdit(r)}>修改</button>
-                  {r.status === 'rejected' && <button className="btn small" disabled={busy}
-                    onClick={() => confirm2(`join-del-${r.id}`, () => act({ action: 'join.reg.delete', id: r.id }, '已刪除'))}>
-                    {sure === `join-del-${r.id}` ? '再按一次刪除' : '刪除'}</button>}
+            </div>
+          ) : (
+            <>
+              <div className="small" style={{ marginTop: 6 }}>負責人：<b>{r.headName}</b>　<a href={`tel:${r.headPhone}`} className="mono">{ph(r.headPhone)}</a>　<span className="mono">{r.email || <span style={{ color: 'var(--warn)' }}>沒有 Email</span>}</span></div>
+              {r.note && <div className="small muted">備註：{r.note}</div>}
+              {r.status === 'rejected' && r.reason && <div className="small muted">退回原因：{r.reason}</div>}
+              {r.status === 'approved' && (
+                <div className="small" style={{ marginTop: 6 }}>
+                  <div>回報連結（給志工）：<button className="linkbtn" onClick={() => copy(r.reportUrl)}>複製</button>　劃位連結（負責人本人）：<button className="linkbtn" onClick={() => copy(r.pickUrl)}>複製</button></div>
+                  <div className="muted">{r.linksSentAt ? `連結信已寄 ${tw(r.linksSentAt)}` : '連結信還沒寄'}</div>
                 </div>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
+              )}
+              <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                {r.status === 'pending' && <button className="btn pri small" disabled={busy || !r.venueId} title={r.venueId ? '' : '先指定團練場'} onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'approved' }, '已核准')}>核准</button>}
+                {r.status === 'pending' && <button className="btn small" disabled={busy} onClick={() => reject(r)}>退回</button>}
+                {r.status === 'approved' && <button className="btn small" disabled={busy || !r.email} onClick={() => send([r.id])}>{r.linksSentAt ? '重寄連結' : '寄出連結'}</button>}
+                {r.status === 'approved' && <button className="btn small" disabled={busy} onClick={() => confirm2(`join-renew-${r.id}`, () => act({ action: 'join.reg.renew', id: r.id }, '已換新的劃位連結，請重寄連結'))}>{sure === `join-renew-${r.id}` ? '再按一次（舊連結失效）' : '換劃位連結'}</button>}
+                {r.status !== 'pending' && <button className="btn small" disabled={busy} onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'pending' }, '已改回待審核')}>改回待審核</button>}
+                <button className="btn small" disabled={busy} onClick={() => setEdit({ id: r.id, headName: r.headName, headPhone: r.headPhone, email: r.email, note: r.note })}>修改</button>
+                {r.status === 'rejected' && <button className="btn small" disabled={busy} onClick={() => confirm2(`join-del-${r.id}`, () => act({ action: 'join.reg.delete', id: r.id }, '已刪除'))}>{sure === `join-del-${r.id}` ? '再按一次刪除' : '刪除'}</button>}
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>團練場清單（登記表從這裡選）</h3>
-        <label className="f">新增團練場（一行一個，已有的會略過）
-          <textarea rows={3} value={bulk} placeholder={'台北微風小棧\n台北木柵'} onChange={(e) => setBulk(e.target.value)}
-            style={{ font: 'inherit', padding: 8, border: '1px solid var(--line)', borderRadius: 6 }} />
-        </label>
-        <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy || !bulk.trim()} onClick={async () => {
-          const r = await act({ action: 'join.venue.add', names: bulk.split('\n') }) as { added: number; skipped: number } | undefined;
-          if (r) { setBulk(''); setMsg({ kind: 'ok', text: `新增 ${r.added} 個${r.skipped ? `，${r.skipped} 個已存在略過` : ''}` }); }
-        }}>新增</button>
-        {!j.venues.length && <p className="small muted">還沒有團練場。</p>}
+/* ---------- 團練場清單 ---------- */
+function Venues({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg'] }) {
+  const [bulk, setBulk] = useState('');
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>團練場清單（登記表從這裡選）</h3>
+      <label className="f">新增團練場（一行一個，已有的會略過）
+        <textarea rows={3} value={bulk} placeholder={'台北微風小棧\n台北木柵'} onChange={(e) => setBulk(e.target.value)} style={{ font: 'inherit', padding: 8, border: '1px solid var(--line)', borderRadius: 6 }} /></label>
+      <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy || !bulk.trim()} onClick={async () => {
+        const r = await act({ action: 'join.venue.add', names: bulk.split('\n') }) as { added: number; skipped: number } | undefined;
+        if (r) { setBulk(''); setMsg({ kind: 'ok', text: `新增 ${r.added} 個${r.skipped ? `，${r.skipped} 個已存在略過` : ''}` }); }
+      }}>新增</button>
+      {!j.venues.length && <p className="small muted">還沒有團練場。</p>}
+      {j.venues.length > 0 && (
         <div className="tbl" style={{ marginTop: 10 }}><table>
-          {j.venues.length > 0 && <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>登記</th><th>核准</th><th>揪團人</th><th>登記表顯示</th><th /></tr></thead>}
-          <tbody>
-            {j.venues.map((v) => (
-              <tr key={v.id}>
-                <td>{v.name}</td>
-                <td style={{ textAlign: 'center' }}>{v.regs}</td>
-                <td style={{ textAlign: 'center' }}>{v.approved}</td>
-                <td style={{ textAlign: 'center' }}>{v.leaders}</td>
-                <td style={{ textAlign: 'center' }}><input type="checkbox" checked={v.active} disabled={busy}
-                  onChange={(e) => act({ action: 'join.venue.update', id: v.id, values: { active: e.target.checked } })} /></td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  <button className="btn small" disabled={busy} onClick={() => {
-                    const nm = window.prompt('改名', v.name);
-                    if (nm?.trim() && nm.trim() !== v.name) act({ action: 'join.venue.update', id: v.id, values: { name: nm } }, '已改名');
-                  }}>改名</button>
-                  <select style={{ width: 'auto', marginLeft: 4 }} value="" disabled={busy || j.venues.length < 2} onChange={(e) => {
-                    const into = Number(e.target.value);
-                    const to = j.venues.find((x) => x.id === into);
-                    if (to && window.confirm(`把「${v.name}」的 ${v.regs} 份登記併入「${to.name}」，並刪除「${v.name}」？`)) act({ action: 'join.venue.merge', id: v.id, into }, '已合併');
-                  }}>
-                    <option value="">合併到…</option>
-                    {j.venues.filter((x) => x.id !== v.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                  </select>
-                  {v.regs === 0 && <button className="btn small" style={{ marginLeft: 4 }} disabled={busy}
-                    onClick={() => confirm2(`jv-del-${v.id}`, () => act({ action: 'join.venue.delete', id: v.id }, '已刪除'))}>
-                    {sure === `jv-del-${v.id}` ? '再按一次' : '刪除'}</button>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
+          <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>登記</th><th>負責人</th><th>登記表顯示</th><th /></tr></thead>
+          <tbody>{j.venues.map((v) => (
+            <tr key={v.id}>
+              <td>{v.name}</td><td style={{ textAlign: 'center' }}>{v.regs}</td>
+              <td>{j.regs.find((r) => r.venueId === v.id && r.status === 'approved')?.headName ?? <span className="muted">—</span>}</td>
+              <td style={{ textAlign: 'center' }}><input type="checkbox" checked={v.active} disabled={busy} onChange={(e) => act({ action: 'join.venue.update', id: v.id, values: { active: e.target.checked } })} /></td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                <button className="btn small" disabled={busy} onClick={() => { const nm = window.prompt('改名', v.name); if (nm?.trim() && nm.trim() !== v.name) act({ action: 'join.venue.update', id: v.id, values: { name: nm } }, '已改名'); }}>改名</button>
+                <select style={{ width: 'auto', marginLeft: 4 }} value="" disabled={busy || j.venues.length < 2} onChange={(e) => {
+                  const to = j.venues.find((x) => x.id === Number(e.target.value));
+                  if (to && window.confirm(`把「${v.name}」的 ${v.regs} 份登記併入「${to.name}」，並刪除「${v.name}」？`)) act({ action: 'join.venue.merge', id: v.id, into: to.id }, '已合併');
+                }}>
+                  <option value="">合併到…</option>
+                  {j.venues.filter((x) => x.id !== v.id).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                </select>
+                {v.regs === 0 && <button className="btn small" style={{ marginLeft: 4 }} disabled={busy} onClick={() => confirm2(`jv-del-${v.id}`, () => act({ action: 'join.venue.delete', id: v.id }, '已刪除'))}>{sure === `jv-del-${v.id}` ? '再按一次' : '刪除'}</button>}
+              </td>
+            </tr>
+          ))}</tbody>
         </table></div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 年代名單 ---------- */
+function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: Props['setMsg'] }) {
+  const [grid, setGrid] = useState<string[][] | null>(null);
+  const [cols, setCols] = useState({ head: 0, no: -1, qty: -1, status: -1 });
+  const guess = (row: string[], words: string[]) => row.findIndex((c) => words.some((w) => c.includes(w)));
+  async function onFile(file: File) {
+    try {
+      const X = await import('xlsx');
+      const wb = X.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+      const g = X.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' }).slice(0, 50001).map((r) => r.map((c) => String(c ?? '').trim()));
+      const head = Math.max(0, g.findIndex((r) => r.some((c) => /訂單|編號|單號/.test(c))));
+      const h = g[head] ?? [];
+      setCols({ head, no: guess(h, ['訂單', '編號', '單號']), qty: guess(h, ['張', '數量']), status: guess(h, ['狀態', '退']) });
+      setGrid(g);
+    } catch { setMsg({ kind: 'err', text: '讀不到這個檔案。請用 Excel（.xlsx／.xls）或 .csv。' }); }
+  }
+  const rows = grid ? grid.slice(cols.head + 1).filter((r) => cols.no >= 0 && r[cols.no]) : [];
+  const toRow = (r: string[]) => ({ orderNo: r[cols.no], qty: Number(String(r[cols.qty] ?? '').replace(/\D/g, '')) || 0, status: cols.status >= 0 && /退|取消|作廢/.test(r[cols.status] ?? '') ? 'refunded' : 'sold' });
+  const header = grid?.[cols.head] ?? [];
+  const pickCol = (k: 'no' | 'qty' | 'status', label: string, optional = false) => (
+    <label className="f">{label}
+      <select value={cols[k]} onChange={(e) => setCols({ ...cols, [k]: Number(e.target.value) })}>
+        <option value={-1}>{optional ? '（沒有，全部算已售）' : '請選欄位'}</option>
+        {header.map((h, i) => <option key={i} value={i}>{`第 ${i + 1} 欄${h ? `：${h}` : ''}`}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>年代名單</h3>
+      <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後更新 {tw(j.era.updatedAt)}</p>
+      <p className="small muted">只需要：訂單編號、張數、狀態（已售／已退）。同一訂單以新上傳的為準，可以重複上傳。</p>
+      <label className="btn pri small">選擇年代名單檔案<input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
+      {grid && (
+        <div style={{ marginTop: 12 }}>
+          <div className="fields" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))' }}>
+            <label className="f">標題在第幾列<input inputMode="numeric" value={cols.head + 1} onChange={(e) => setCols({ ...cols, head: Math.max(0, Number(e.target.value) - 1 || 0) })} /></label>
+            {pickCol('no', '訂單編號')}{pickCol('qty', '張數')}{pickCol('status', '狀態（含「退」字＝已退）', true)}
+          </div>
+          {cols.no >= 0 && cols.qty >= 0 && (
+            <>
+              <p className="small" style={{ marginBottom: 4 }}>共 {rows.length} 筆，前 5 筆預覽：</p>
+              <div className="tbl"><table><thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th></tr></thead>
+                <tbody>{rows.slice(0, 5).map((r, i) => { const x = toRow(r); return <tr key={i}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>; })}</tbody></table></div>
+              <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={async () => {
+                const r = await act({ action: 'join.era.upload', rows: rows.map(toRow) }) as { rows: number; added: number; changed: number; refunded: number } | undefined;
+                if (r) { setGrid(null); setMsg({ kind: 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}` }); }
+              }}>上傳 {rows.length} 筆</button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 回報 ---------- */
+function Reports({ j, act, busy, sure, confirm2 }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2'] }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const odd = j.reports.filter((x) => x.era);
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>各團練場回報</h3>
+      {odd.length > 0 && <p className="note warn small">年代名單更新後，有 {odd.length} 筆回報和名單不一致（退票或張數變少），已用黃色標出。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
+      {!j.totals.length ? <p className="muted small">還沒有核准的團練場。</p> : (
+        <div className="tbl"><table>
+          <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>負責人</th><th>訂單</th><th>張數</th><th>核對後</th><th>劃位序</th><th>已選位</th></tr></thead>
+          <tbody>{j.totals.sort((a, b) => b.tickets - a.tickets).map((x) => (
+            <tr key={x.regId} style={{ cursor: 'pointer', background: x.short ? '#fff4d6' : undefined }} onClick={() => setOpen(open === x.regId ? null : x.regId)}>
+              <td>{open === x.regId ? '▼' : '▶'} {x.venue}</td><td>{x.headName}</td><td style={{ textAlign: 'center' }}>{x.orders}</td><td style={{ textAlign: 'center' }}>{x.tickets}</td>
+              <td style={{ textAlign: 'center' }}>{x.verified}{x.short && <span style={{ color: 'var(--red)' }}> ⚠</span>}</td><td style={{ textAlign: 'center' }}>{x.slots}</td><td style={{ textAlign: 'center' }}>{x.done}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      )}
+      {open !== null && (
+        <div className="tbl" style={{ marginTop: 10 }}><table>
+          <thead><tr><th>訂單編號</th><th>張數</th><th>填寫人</th><th>時間</th><th>名單</th><th /></tr></thead>
+          <tbody>{j.reports.filter((x) => x.regId === open).map((x) => (
+            <tr key={x.id} style={x.era ? { background: '#fff4d6' } : undefined}>
+              <td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td><td>{x.reporter}</td><td className="small">{tw(x.at)}</td><td className="small">{x.era || '相符'}</td>
+              <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button></td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- 三樓座位 ---------- */
+function Seats({ j, act }: { j: J; act: Act }) {
+  const [brush, setBrush] = useState<'gift' | 'era' | 'sale'>('gift');
+  const owner = useMemo(() => new Map(j.slots.filter((x) => x.seatId).map((x) => [x.seatId!, x])), [j.slots]);
+  const cnt = (id: number, free?: boolean) => j.seats.filter((s) => s.usageId === id && (!free || s.status === 'free')).length;
+  const look = (s: J['seats'][number]): SeatLook => {
+    const o = owner.get(s.id);
+    const kind = s.usageId === j.usage.gift ? 'gift' : s.usageId === j.usage.era ? 'era' : 'other';
+    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: kind === 'gift' ? '#ffd29d' : kind === 'era' ? '#cfcfcf' : '#e8f3fb', ink: '#18213a',
+      title: `${s.label}・${s.code}・${kind === 'gift' ? '揪團贈席' : kind === 'era' ? '年代售出' : '其他'}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
+  };
+  const names = { gift: '揪團贈席', era: '年代售出', sale: '恢復可售' };
+  return (
+    <div className="grid2">
+      <AdminMap floor="3F" seats={j.seats} vipInstalled={false} look={look} caption="點按或拖曳塗刷；已被選走的座位不會改"
+        onPaint={(ids) => act({ action: 'join.paint', kind: brush, seatIds: ids }, `已設定為「${names[brush]}」`)} />
+      <div className="side"><div className="card">
+        <h3 style={{ marginTop: 0 }}>三樓座位用途</h3>
+        <p className="small muted" style={{ marginTop: 0 }}>中間三區（年代賣）塗「年代售出」：系統內誰都選不到，招待也不行。兩側要給團練場的塗「揪團贈席」。</p>
+        <div className="brushes">
+          {(['gift', 'era', 'sale'] as const).map((k) => (
+            <button key={k} className={`brush${brush === k ? ' on' : ''}`} onClick={() => setBrush(k)}>
+              <i style={{ background: k === 'gift' ? '#ffd29d' : k === 'era' ? '#cfcfcf' : '#e8f3fb' }} />{names[k]}
+              <span className="c">{k === 'gift' ? cnt(j.usage.gift) : k === 'era' ? cnt(j.usage.era) : ''}</span>
+            </button>
+          ))}
+        </div>
+        <p className="small">揪團贈席：共 {cnt(j.usage.gift)} 席，空位 {cnt(j.usage.gift, true)} 席；劃位序 {j.slots.filter((x) => x.status !== 'void').length} 個。</p>
+        {cnt(j.usage.gift, true) < j.slots.filter((x) => x.status === 'wait' || x.status === 'turn' || x.status === 'skip').length && <p className="note warn small">贈席空位比還沒選位的劃位序少，請再加贈席。</p>}
+      </div></div>
+    </div>
+  );
+}
+
+/* ---------- 劃位排隊 ---------- */
+function Queue({ j, act, busy, queue, setMsg }: { j: J; act: Act; busy: boolean; queue: Slot[]; setMsg: Props['setMsg'] }) {
+  const s = j.settings;
+  const skip = j.slots.filter((x) => x.status === 'skip');
+  const voidIt = (x: Slot) => { const why = window.prompt(`取消劃位序第 ${x.no} 號（${x.venue}）的原因（必填）${x.seatId ? '\n已選的座位會放回贈席' : ''}`, ''); if (why?.trim()) act({ action: 'join.slot.void', id: x.id, reason: why }, '已取消'); else if (why !== null) setMsg({ kind: 'err', text: '請填寫取消原因' }); };
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>劃位排隊</h3>
+      <p className="small" style={{ marginTop: 0 }}>{!s.pickOpen ? '尚未開始（到「設定」開始）' : s.paused ? '暫停中' : !j.inHours ? `時段外（${s.hourFrom}–${s.hourTo}）` : '進行中'}</p>
+      {j.current ? (
+        <div className="note">正在劃位：<b>第 {j.current.nos.join('、')} 號 {j.current.venue}</b>・{j.current.seen ? '負責人已打開' : '等負責人打開'}・期限 {tw(j.current.deadline)}
+          <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => window.confirm('跳過這一輪？算一次叫不到。') && act({ action: 'join.queue.skip' }, '已跳過')}>跳過這一輪</button></div>
+      ) : <p className="muted small">目前沒有人在劃位。</p>}
+      <h4>排隊中（{queue.length}）</h4>
+      {queue.length > 0 && <div className="tbl"><table>
+        <thead><tr><th>順位</th><th>劃位序</th><th>團練場</th><th>狀態</th><th /></tr></thead>
+        <tbody>{queue.map((x, i) => <tr key={x.id}><td>{i + 1}</td><td className="mono">第 {x.no} 號</td><td>{x.venue}</td><td>{SLOT[x.status]}{x.misses ? `・叫不到 ${x.misses} 次` : ''}</td>
+          <td><button className="btn small" disabled={busy} onClick={() => voidIt(x)}>取消</button></td></tr>)}</tbody>
+      </table></div>}
+      {skip.length > 0 && <>
+        <h4>暫停排隊（叫不到 3 次）</h4>
+        <div className="tbl"><table><tbody>{skip.map((x) => <tr key={x.id}><td className="mono">第 {x.no} 號</td><td>{x.venue}</td>
+          <td><button className="btn small" disabled={busy} onClick={() => act({ action: 'join.slot.restore', id: x.id }, '已排到最後')}>恢復（排到最後）</button> <button className="btn small" disabled={busy} onClick={() => voidIt(x)}>取消</button></td></tr>)}</tbody></table></div>
+      </>}
+      <h4>全部劃位序（最初順序）</h4>
+      <div className="tbl"><table>
+        <thead><tr><th>劃位序</th><th>團練場</th><th>取得時間</th><th>狀態</th><th>座位</th><th /></tr></thead>
+        <tbody>{j.slots.map((x) => <tr key={x.id} style={x.status === 'void' ? { color: 'var(--muted)' } : undefined}>
+          <td className="mono">第 {x.no} 號</td><td>{x.venue}</td><td className="small">{tw(x.earnedAt)}</td><td>{SLOT[x.status] ?? x.status}</td><td>{x.seat}</td>
+          <td>{x.status === 'done' && <button className="btn small" disabled={busy} onClick={() => { const c = window.prompt('換到哪個座位？請輸入座位編號（座位圖上游標停住可看到，例：15-07-C0）', ''); const to = j.seats.find((y) => y.code === c?.trim()); if (c && !to) setMsg({ kind: 'err', text: '找不到這個座位編號' }); else if (to) act({ action: 'join.slot.seat', id: x.id, seatId: to.id }, '已換座位，記得重送年代'); }}>換座位</button>}
+            {x.status === 'done' && !x.sentAt && <button className="btn small" style={{ marginLeft: 4 }} disabled={busy} onClick={() => voidIt(x)}>取消</button>}</td>
+        </tr>)}</tbody>
+      </table></div>
+    </div>
+  );
+}
+
+/* ---------- 送年代名單 ---------- */
+function List({ j, act, busy, done, setMsg }: { j: J; act: Act; busy: boolean; done: Slot[]; setMsg: Props['setMsg'] }) {
+  const rows = [...done].sort(byVenueSeat);
+  const unsent = rows.filter((x) => !x.sentAt).length;
+  async function download(onlyUnsent: boolean) {
+    const X = await import('xlsx');
+    const data: (string | number)[][] = [['團練場', '負責人', '領票代表', '手機末三碼', '排', '號', '劃位序']];
+    for (const x of rows.filter((y) => !onlyUnsent || !y.sentAt)) data.push([x.venue, x.headName, x.repName, x.repPhone.slice(-3), x.rowNo ?? '', x.seatNo, x.no]);
+    const ws = X.utils.aoa_to_sheet(data);
+    ws['!cols'] = [{ wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 5 }, { wch: 5 }, { wch: 7 }];
+    const wb = X.utils.book_new(); X.utils.book_append_sheet(wb, ws, '揪團贈席');
+    const d = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
+    X.writeFile(wb, `揪團贈席名單-${d}.xlsx`);
+  }
+  const rep = (x: Slot) => {
+    const name = window.prompt('領票代表姓名', x.repName); if (name === null) return;
+    const phone = window.prompt('領票代表手機', x.repPhone); if (phone === null) return;
+    act({ action: 'join.slot.rep', id: x.id, repName: name, repPhone: phone }, '已修改，記得重送年代');
+  };
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>送年代名單</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>下載名單送年代出紙本招待票，送出後按「標示已送年代」。之後負責人不能改；後台改座位或領票代表時會變回「未送」，要重送。</p>
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        <button className="btn pri small" disabled={!rows.length} onClick={() => download(false)}>下載全部（{rows.length} 席）</button>
+        <button className="btn small" disabled={!unsent} onClick={() => download(true)}>只下載未送的（{unsent} 席）</button>
+        <button className="btn small" disabled={busy || !unsent} onClick={async () => { const r = await act({ action: 'join.sent', sent: true }) as { count: number } | undefined; if (r) setMsg({ kind: 'ok', text: `已標示 ${r.count} 席為已送年代` }); }}>標示已送年代（{unsent} 席）</button>
       </div>
+      {rows.length > 0 && <div className="tbl" style={{ marginTop: 10 }}><table>
+        <thead><tr><th>團練場</th><th>負責人</th><th>領票代表</th><th>手機</th><th>排</th><th>號</th><th>劃位序</th><th>已送年代</th><th /></tr></thead>
+        <tbody>{rows.map((x) => <tr key={x.id}>
+          <td>{x.venue}</td><td>{x.headName}</td><td>{x.repName}</td><td className="mono">{ph(x.repPhone)}</td><td>{x.rowNo}</td><td>{x.seatNo}</td><td className="mono">{x.no}</td>
+          <td>{x.sentAt ? tw(x.sentAt) : <span style={{ color: 'var(--warn)' }}>未送</span>}</td>
+          <td style={{ whiteSpace: 'nowrap' }}><button className="btn small" disabled={busy} onClick={() => rep(x)}>改領票代表</button>
+            {x.sentAt && <button className="btn small" style={{ marginLeft: 4 }} disabled={busy} onClick={() => act({ action: 'join.sent', sent: false, ids: [x.id] }, '已改回未送')}>改回未送</button>}</td>
+        </tr>)}</tbody>
+      </table></div>}
     </div>
   );
 }

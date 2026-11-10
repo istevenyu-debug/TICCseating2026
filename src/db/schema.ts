@@ -3,7 +3,7 @@
  * 金額一律為整數新台幣；時間一律 timestamptz。
  */
 import {
-  pgTable, serial, integer, text, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb,
+  pgTable, serial, integer, text, boolean, timestamp, primaryKey, uniqueIndex, index, jsonb, doublePrecision,
 } from 'drizzle-orm/pg-core';
 
 /** 發布到購票頁的開放設定快照：後台勾選後按「發布」才寫入，購票端只看這份 */
@@ -401,6 +401,10 @@ export const joinReg = pgTable('join_reg', {
   venueText: text('venue_text').notNull().default(''), // 選「其他」時自己填的團練場名稱
   headName: text('head_name').notNull(),
   headPhone: text('head_phone').notNull(),
+  email: text('email').notNull().default(''), // 負責人 Email：回報連結、劃位連結、通知都寄到這裡
+  reportCode: text('report_code'), // 團練場回報連結（負責人轉給志工）
+  pickCode: text('pick_code'), // 負責人劃位連結（綁 Email，請勿轉傳）
+  linksSentAt: timestamp('links_sent_at', { withTimezone: true }),
   status: text('status').notNull().default('pending'), // pending 待審核 / approved 已核准 / rejected 已退回
   reason: text('reason').notNull().default(''), // 退回原因
   note: text('note').notNull().default(''), // 後台備註
@@ -408,9 +412,9 @@ export const joinReg = pgTable('join_reg', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   decidedAt: timestamp('decided_at', { withTimezone: true }),
   decidedBy: text('decided_by'),
-}, (t) => ({ byStatus: index('join_reg_status_idx').on(t.status) }));
+}, (t) => ({ byStatus: index('join_reg_status_idx').on(t.status), report: uniqueIndex('join_reg_report_idx').on(t.reportCode), pick: uniqueIndex('join_reg_pick_idx').on(t.pickCode) }));
 
-/** 揪團人（屬於某一份登記）。code 給第二階段的揪團人專頁用 */
+/** （舊）揪團人：11/10 改為「志工不登記」後不再使用，保留資料表以免舊資料遺失 */
 export const joinLeader = pgTable('join_leader', {
   id: serial('id').primaryKey(),
   regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
@@ -422,3 +426,44 @@ export const joinLeader = pgTable('join_leader', {
   code: text('code').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ code: uniqueIndex('join_leader_code_idx').on(t.code), byPhone: index('join_leader_phone_idx').on(t.phone) }));
+
+/** 年代銷售名單（後台上傳；回報時當下核對） */
+export const joinEra = pgTable('join_era', {
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  orderNo: text('order_no').notNull(),
+  qty: integer('qty').notNull(),
+  status: text('status').notNull().default('sold'), // sold 已售 / refunded 已退
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ pk: primaryKey({ columns: [t.eventId, t.orderNo] }) }));
+
+/** 志工回報的年代訂單（同一訂單全場只能報一次） */
+export const joinReport = pgTable('join_report', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
+  orderNo: text('order_no').notNull(),
+  qty: integer('qty').notNull(),
+  reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ order: uniqueIndex('join_report_order_idx').on(t.eventId, t.orderNo), byReg: index('join_report_reg_idx').on(t.regId) }));
+
+/** 劃位序：團練場每滿 10 張取得一個。pos 是目前排隊位置（延後時會變），no 是最初序號 */
+export const joinSlot = pgTable('join_slot', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
+  no: integer('no').notNull(),
+  pos: doublePrecision('pos').notNull(),
+  status: text('status').notNull().default('wait'), // wait 排隊 / turn 輪到 / done 已選位 / void 取消
+  misses: integer('misses').notNull().default(0),
+  turnAt: timestamp('turn_at', { withTimezone: true }),
+  seenAt: timestamp('seen_at', { withTimezone: true }), // 輪到後負責人有打開頁面
+  soonMailed: boolean('soon_mailed').notNull().default(false),
+  turnMailed: boolean('turn_mailed').notNull().default(false),
+  seatId: text('seat_id'),
+  repName: text('rep_name').notNull().default(''), // 領票代表
+  repPhone: text('rep_phone').notNull().default(''),
+  pickedAt: timestamp('picked_at', { withTimezone: true }),
+  sentAt: timestamp('sent_at', { withTimezone: true }), // 已送年代：之後只有後台能改
+  earnedAt: timestamp('earned_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ no: uniqueIndex('join_slot_no_idx').on(t.eventId, t.no), seat: uniqueIndex('join_slot_seat_idx').on(t.eventId, t.seatId), byReg: index('join_slot_reg_idx').on(t.regId) }));

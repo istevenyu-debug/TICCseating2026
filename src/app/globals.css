@@ -270,3 +270,4 @@ ol.flow li.on { font-weight: 700; }
 .join label.f { font-size: 14px; }
 .join .check input { width: 20px; height: 20px; }
 select.need { border-color: var(--red); }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }

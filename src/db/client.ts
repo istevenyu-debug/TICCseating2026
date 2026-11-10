@@ -23,6 +23,7 @@ export function getDb(): Promise<Db> {
       (await import('@/lib/notify')).startDispatcher(db); // 每 30 秒補寄通知
       (await import('@/lib/backup')).startBackups(db); // 每小時自動備份
       (await import('@/lib/card')).startCardPoller(db); // 定時向綠界查「付款中」的訂單（防漏單）
+      (await import('@/lib/joinQueue')).startJoinTicker(db); // 揪團劃位：每 10 秒推進排隊
       return db;
     });
   }

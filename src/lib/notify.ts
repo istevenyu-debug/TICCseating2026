@@ -81,6 +81,11 @@ const SUBJECT: Record<string, string> = {
   preorder_link: '劃位通知',
   preorder_cancelled: '認購登記取消通知',
   preorder_restored: '您的認購登記仍然有效（更正通知）',
+  join_links: '揪團贈票：回報連結與劃位連結',
+  join_report: '揪團贈票：收到訂單回報',
+  join_soon: '揪團贈票：快輪到您劃位了',
+  join_turn: '揪團贈票：輪到您劃位了',
+  join_missed: '揪團贈票：劃位已延後',
   test: '測試信',
 };
 
@@ -175,6 +180,7 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
     else await senders.email(c as EmailConfig, n.recipient, subjectOf(n.template, n.content), n.content,
       n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content, (c as EmailConfig).fromName)
         : n.template === 'preorder_link' ? linkMail(n.content, (c as EmailConfig).fromName)
+        : n.template === 'join_links' ? joinLinksMail(n.content, (c as EmailConfig).fromName)
         : niceMail(n.template, n.content, (c as EmailConfig).fromName));
     await set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1 });
   } catch (e) {
@@ -192,6 +198,7 @@ function subjectOf(template: string, content: string) {
   if (template === 'order_confirmed' && ev) return `【${ev}】劃位成功通知`;
   if (template === 'order_received' && ev) return `【${ev}】已收到您的劃位資料`;
   if (template === 'order_cancelled' && ev) return `【${ev}】劃位取消通知`;
+  if (template.startsWith('join_') && ev) return `【${ev}】${MAIL_TITLE[template] ?? '揪團贈票通知'}`;
   return SUBJECT[template] ?? '通知';
 }
 
@@ -200,6 +207,7 @@ function subjectOf(template: string, content: string) {
 const MAIL_TITLE: Record<string, string> = {
   preorder_received: '已收到您的認購登記', preorder_link: '輪到您劃位了', preorder_cancelled: '認購登記取消通知', preorder_restored: '您的認購登記仍然有效',
   order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
+  join_links: '揪團贈票連結', join_report: '收到訂單回報', join_soon: '快輪到您劃位了', join_turn: '輪到您劃位了', join_missed: '劃位已延後',
 };
 
 /** 把系統訊息拆成：演出名稱、稱呼、內文段落、連結 */
@@ -259,6 +267,20 @@ export function linkMail(text: string, fromName = ''): MailExtra {
   const { ev, url, greet, paras } = partsOf(text);
   return { html: mailLayout({ ev, title: MAIL_TITLE.preorder_link, greet, paras: paras.filter((x) => !/請勿轉傳/.test(x)), url, button: '開始劃位（選座位）',
     note: '這是您專屬的劃位連結，請勿轉傳他人。劃位送出後，主辦方確認即會寄出入場 QR code。', fromName }) };
+}
+
+/** 揪團贈票連結信：兩個按鈕（回報連結可轉給志工、劃位連結只給負責人） */
+export function joinLinksMail(text: string, fromName = ''): MailExtra {
+  const ev = text.match(/^【([^】]+)】/)?.[1] ?? '';
+  const urls = text.match(/https?:\/\/[^\s　]+/g) ?? [];
+  const g = text.replace(/^【[^】]+】/, '').match(/^(.{1,20}?)\s*您好[，,]\s*/);
+  const intro = text.replace(/^【[^】]+】/, '').replace(g?.[0] ?? '', '').split(/回報連結/)[0].trim();
+  const btn = (url: string, label: string, color: string) => `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 6px"><tr><td style="background:${color};border-radius:8px">
+    <a href="${esc(url)}" style="display:inline-block;padding:12px 26px;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700">${esc(label)}</a></td></tr></table>
+    <p style="margin:0 0 16px;font-size:12px;color:#6b7488;word-break:break-all">${esc(url)}</p>`;
+  const extraHtml = `<p style="margin:0 0 4px;font-weight:700">① 回報連結：請轉給協助回報的志工</p>${urls[0] ? btn(urls[0], '開啟回報頁', '#8a6a2a') : ''}`
+    + `<p style="margin:0 0 4px;font-weight:700">② 劃位連結：只給您本人，請勿轉傳</p><p style="margin:0 0 6px;font-size:14px">輪到您時會再寄信通知，打開這個連結選位。</p>${urls[1] ? btn(urls[1], '開啟劃位頁', '#1f2a44') : ''}`;
+  return { html: mailLayout({ ev, title: MAIL_TITLE.join_links, greet: g ? `${g[1].trim()} 您好：` : '', paras: intro ? [intro] : [], extraHtml, fromName }) };
 }
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

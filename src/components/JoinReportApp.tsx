@@ -1,0 +1,139 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { fmtDate } from './JoinApp';
+
+type Page = {
+  event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; perSeat: number; contact: string;
+  orders: number; tickets: number; slots: number[]; next: number;
+  list: { orderNo: string; qty: number; reporter: string; at: string }[];
+};
+type Result = { accepted: { orderNo: string; qty: number }[]; rejected: { orderNo: string; qty: string; reason: string }[]; fresh: number[]; orders: number; tickets: number; slots: number[]; next: number };
+type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
+type Row = { orderNo: string; qty: string; reason?: string };
+
+const NAME_KEY = 'join-reporter';
+const blank = (n = 3): Row[] => Array.from({ length: n }, () => ({ orderNo: '', qty: '' }));
+const tw = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+const store = { get: () => { try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; } }, set: (v: string) => { try { localStorage.setItem(NAME_KEY, v); } catch { /* 不能存也沒關係 */ } } };
+
+async function call<T>(code: string, body?: unknown): Promise<Res<T>> {
+  try {
+    const r = await fetch(`/api/join/r/${encodeURIComponent(code)}`, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return await r.json();
+  } catch { return { ok: false, code: 'NETWORK', message: '網路連線異常，請確認後再試。' }; }
+}
+
+/** 志工回報：第一次輸入名字（手機記住），之後輸入年代訂單編號＋張數，整批送出 */
+export default function JoinReportApp({ code }: { code: string }) {
+  const [page, setPage] = useState<Page | null>(null);
+  const [err, setErr] = useState('');
+  const [name, setName] = useState('');
+  const [nameDraft, setNameDraft] = useState('');
+  const [editName, setEditName] = useState(false);
+  const [rows, setRows] = useState<Row[]>(blank());
+  const [busy, setBusy] = useState(false);
+  const [last, setLast] = useState<Result | null>(null);
+  const [showList, setShowList] = useState(false);
+
+  const load = () => call<Page>(code).then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
+  useEffect(() => { const n = store.get(); setName(n); setEditName(!n); load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setRow = (i: number, v: Partial<Row>) => setRows(rows.map((r, k) => (k === i ? { ...r, ...v, reason: undefined } : r)));
+
+  async function send(e: React.FormEvent) {
+    e.preventDefault();
+    const filled = rows.filter((r) => r.orderNo.trim() || r.qty.trim());
+    if (!filled.length) { setErr('請輸入訂單編號與張數'); return; }
+    setBusy(true); setErr('');
+    const r = await call<Result>(code, { reporter: name, rows: filled.map((x) => ({ orderNo: x.orderNo, qty: x.qty })) });
+    setBusy(false);
+    if (!r.ok) { setErr(r.message); return; }
+    setLast(r.data);
+    const left: Row[] = r.data.rejected.map((x) => ({ orderNo: x.orderNo, qty: x.qty, reason: x.reason }));
+    setRows(left.length ? [...left, ...blank(1)] : blank());
+    load();
+    window.scrollTo(0, 0);
+  }
+
+  if (err && !page) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
+  if (!page) return <main className="wrap join"><div className="card muted">載入中…</div></main>;
+
+  const head = (
+    <div className="card">
+      <h1 style={{ margin: '0 0 4px' }}>揪團回報・{page.venue}</h1>
+      <div className="muted">{page.event.name}・{fmtDate(page.event.showAt)}</div>
+    </div>
+  );
+  const summary = (
+    <div className="card" style={{ borderTop: '4px solid var(--accent)' }}>
+      <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+        <div className="stat"><b>{page.orders}</b><span>筆訂單</span></div>
+        <div className="stat"><b>{page.tickets}</b><span>張</span></div>
+        <div className="stat"><b style={{ color: 'var(--ok)' }}>{page.slots.length}</b><span>個劃位序</span></div>
+      </div>
+      {page.slots.length > 0 && <p style={{ margin: '10px 0 0' }}>劃位序：<b>第 {page.slots.join('、')} 號</b></p>}
+      <p className="small muted" style={{ margin: '6px 0 0' }}>每 {page.perSeat} 張一個劃位序，再 {page.next} 張可取得下一個。</p>
+    </div>
+  );
+
+  if (!page.open) return <main className="wrap join">{head}{summary}<div className="note" style={{ textAlign: 'center', padding: 16 }}>回報目前沒有開放。有問題請聯絡負責人{page.headName}。</div></main>;
+
+  if (editName || !name) return (
+    <main className="wrap join">
+      {head}
+      <form className="card" onSubmit={(e) => { e.preventDefault(); const n = nameDraft.trim(); if (!n) return; store.set(n); setName(n); setEditName(false); }}>
+        <h2 style={{ marginTop: 0 }}>請輸入您的名字</h2>
+        <p className="small muted" style={{ marginTop: 0 }}>只要輸入一次，這支手機會記住。負責人會看到是誰回報的。</p>
+        <input value={nameDraft} maxLength={20} autoFocus placeholder="例：王小明" onChange={(e) => setNameDraft(e.target.value)} />
+        <button className="btn pri" style={{ marginTop: 12, width: '100%', padding: 12 }} disabled={!nameDraft.trim()}>確定</button>
+      </form>
+    </main>
+  );
+
+  return (
+    <main className="wrap join">
+      {head}
+      {last && (
+        <div className={`note${last.accepted.length ? '' : ' err'}`} style={{ marginBottom: 12 }}>
+          {last.accepted.length > 0 && <div><b>已收到 {last.accepted.length} 筆、{last.accepted.reduce((a, x) => a + x.qty, 0)} 張。</b></div>}
+          {last.fresh.length > 0 && <div style={{ color: 'var(--ok)', fontWeight: 700 }}>取得劃位序第 {last.fresh.join('、')} 號！</div>}
+          {last.rejected.length > 0 && <div>{last.rejected.length} 筆沒有收下，原因寫在下面，請修正後再送出。</div>}
+        </div>
+      )}
+      {summary}
+      <form onSubmit={send} noValidate className="card" style={{ marginTop: 12 }}>
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0 }}>輸入年代訂單</h2>
+          <span className="small muted">填寫人：{name}（<button type="button" className="linkbtn" onClick={() => { setNameDraft(name); setEditName(true); }}>更換</button>）</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: '6px 8px', marginTop: 10, alignItems: 'center' }}>
+          <span className="small muted">訂單編號</span><span className="small muted">張數</span>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: 'contents' }}>
+              <input value={r.orderNo} maxLength={40} autoCapitalize="characters" aria-label={`第 ${i + 1} 筆訂單編號`}
+                className={r.reason ? 'need' : undefined} onChange={(e) => setRow(i, { orderNo: e.target.value })} />
+              <input value={r.qty} inputMode="numeric" maxLength={3} aria-label={`第 ${i + 1} 筆張數`}
+                className={r.reason ? 'need' : undefined} onChange={(e) => setRow(i, { qty: e.target.value.replace(/\D/g, '') })} />
+              {r.reason && <div className="small" style={{ gridColumn: '1 / -1', color: 'var(--red)', marginTop: -2 }}>{r.reason}</div>}
+            </div>
+          ))}
+        </div>
+        <button type="button" className="btn" style={{ marginTop: 10, width: '100%' }} onClick={() => setRows([...rows, ...blank(1)])}>＋ 再一筆</button>
+        {err && <p className="note err" style={{ margin: '10px 0 0' }}>{err}</p>}
+        <button className="btn pri" style={{ marginTop: 12, width: '100%', padding: 14, fontSize: 18 }} disabled={busy}>{busy ? '核對中…' : '送出'}</button>
+        <p className="small muted" style={{ margin: '8px 0 0' }}>送出時會立刻和年代名單核對。可以分很多次送。</p>
+      </form>
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <button type="button" className="linkbtn" onClick={() => setShowList(!showList)}>{showList ? '▼' : '▶'} 已回報的訂單（{page.list.length}）</button>
+        {showList && (
+          <div className="tbl" style={{ marginTop: 8 }}><table>
+            <thead><tr><th>訂單編號</th><th>張數</th><th>填寫人</th><th>時間</th></tr></thead>
+            <tbody>{[...page.list].reverse().map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td><td>{x.reporter}</td><td className="small">{tw(x.at)}</td></tr>)}</tbody>
+          </table></div>
+        )}
+      </div>
+    </main>
+  );
+}

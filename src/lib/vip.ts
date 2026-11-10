@@ -47,6 +47,11 @@ async function takeSeats(tx: Tx, eventId: number, seatIds: string[], orderId: nu
   if (ids.length > 60) throw new BookingError('INVALID', '一次最多 60 席');
   const es = await tx.select().from(t.eventSeat).where(and(eq(t.eventSeat.eventId, eventId), inArray(t.eventSeat.seatId, ids)));
   if (es.length !== ids.length) throw new BookingError('INVALID', '有座位不存在');
+  // 揪團贈席、年代售出的座位不能拿來招待（年代那邊已經賣掉、或要留給團練場選）
+  const locked = await tx.select({ id: t.eventSeat.seatId, code: t.seatUsage.code }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+    .where(and(eq(t.eventSeat.eventId, eventId), inArray(t.eventSeat.seatId, ids), inArray(t.seatUsage.code, ['join-gift', 'era-sold'])));
+  const fresh = locked.filter((l) => !es.find((s) => s.seatId === l.id && s.orderId === orderId));
+  if (fresh.length) throw new BookingError('INVALID', `有 ${fresh.length} 席是${fresh.some((l) => l.code === 'era-sold') ? '「年代售出」' : '「揪團贈席」'}，不能用於招待。要用的話，請先到「十二、揪團贈票」把座位改回可售。`, fresh.map((l) => l.id));
   const busy = es.filter((s) => s.status !== 'free' && s.orderId !== orderId);
   if (busy.length) throw new BookingError('SEAT_TAKEN', `${busy.length} 席已有人訂，請重新選取。`, busy.map((s) => s.seatId));
   const bundles = [...new Set(es.map((s) => s.bundle).filter((b): b is string => !!b))];

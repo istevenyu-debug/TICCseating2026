@@ -65,7 +65,15 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
       await tx.delete(t.orders).where(inArray(t.orders.id, orders));
     }
     // 沒有對應訂單卻被佔住的座位（理論上不會有）也一併釋放
-    await tx.update(t.eventSeat).set({ status: 'free', holdUntil: null }).where(and(eq(t.eventSeat.eventId, ev.id), isNull(t.eventSeat.orderId), sql`${t.eventSeat.status} <> 'free'`));
+    // 揪團贈席：全部清除時一起清（回報、劃位序、年代名單）；保留部分連結時不動
+    if (!keep.length) {
+      await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+      await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id));
+      await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
+    }
+    const joinSeats = (await tx.select({ id: t.joinSlot.seatId }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), sql`${t.joinSlot.seatId} is not null`))).map((x) => x.id!);
+    await tx.update(t.eventSeat).set({ status: 'free', holdUntil: null }).where(and(eq(t.eventSeat.eventId, ev.id), isNull(t.eventSeat.orderId), sql`${t.eventSeat.status} <> 'free'`,
+      joinSeats.length ? notInArray(t.eventSeat.seatId, joinSeats) : undefined));
 
     // 訂單（預購單送出的）：保留連結對應的那幾張，其他全刪。正式發票還沒作廢的不能刪
     const preCond = and(eq(t.preorder.eventId, ev.id), keep.length ? or(isNull(t.preorder.linkId), notInArray(t.preorder.linkId, keep)) : sql`true`);

@@ -1,152 +1,277 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import { exportAll, importAll } from '@/lib/backup';
+import { ensureFloor3 } from '@/lib/floor';
+import { createVip } from '@/lib/vip';
+import { resetSales } from '@/lib/reset';
 import {
-  addVenues, decideReg, deleteReg, deleteVenue, editReg, joinAdminState, joinMenu, mergeVenue, setJoinSettings, setRegVenue, submitJoin, updateVenue,
+  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, sendLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
+import {
+  deleteReport, joinAdminState, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, uploadEra, voidSlot,
+} from '@/lib/joinQueue';
 
 let db: Db;
 let ipN = 0;
-const ip = () => `10.0.0.${++ipN}`; // 每次換來源，不受防灌次數影響
+const ip = () => `10.0.${Math.floor(++ipN / 200)}.${ipN % 200}`; // 每次換來源，不受防灌次數影響
+const BASE = 'https://ticket.example.com';
+const T0 = new Date('2026-11-20T10:00:00+08:00'); // 劃位時段內
+const at = (min: number) => new Date(T0.getTime() + min * 60_000);
+
 beforeEach(async () => {
   db = await createPgliteDb();
   await seedVenue(db);
   await createEvent(db, { name: '古儒吉大師課程', showAt: new Date('2026-12-09T19:30:00+08:00'), bankName: 'b', bankAccount: '1', accountName: 'c' });
+  await ensureFloor3(db);
 });
 
-const venueId = async (name: string) => (await db.select().from(t.joinVenue).where(eq(t.joinVenue.name, name)))[0].id;
-const base = (vid: number | null, extra: Record<string, unknown> = {}) => ({
-  venueId: vid, venueText: '', headName: '王小明', headPhone: '0912-345-678',
-  leaders: [{ sameAsHead: true, email: 'wang@example.com' }], consent: true, ...extra,
-});
 const msg = async (p: Promise<unknown>) => { try { await p; return ''; } catch (e) { return (e as Error).message; } };
+const venueId = async (name: string) => (await db.select().from(t.joinVenue).where(eq(t.joinVenue.name, name)))[0].id;
+let phoneN = 0;
+const nextPhone = () => `09${String(10000000 + ++phoneN).slice(-8)}`;
 
-describe('揪團登記（第一階段）', () => {
-  it('預設關閉：登記頁不給團練場、送出被擋；開放後才收', async () => {
+/** 開放登記、建團練場、登記並核准，回傳 reg（含連結代碼） */
+async function venueReg(name: string, email = `${name}@example.com`) {
+  await setJoinSettings(db, '網管', { open: true });
+  await addVenues(db, '網管', [name]);
+  const r = await submitJoin(db, { venueId: await venueId(name), headName: `${name}負責人`, headPhone: nextPhone(), email }, ip());
+  await decideReg(db, '網管', r.id, 'approved');
+  return (await db.select().from(t.joinReg).where(eq(t.joinReg.id, r.id)))[0];
+}
+async function eraList(orders: [string, number][]) { await uploadEra(db, '網管', orders.map(([orderNo, qty]) => ({ orderNo, qty, status: 'sold' }))); }
+const report = (code: string, rows: [string, number | string][], reporter = '志工甲', now = T0) =>
+  submitReport(db, code, { reporter, rows: rows.map(([orderNo, qty]) => ({ orderNo, qty })) }, ip(), now, BASE);
+/** 三樓左側斜區前 n 個座位塗成贈席 */
+async function giftSeats(n: number) {
+  const seats = await db.select({ id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y }).from(t.venueSeat).where(eq(t.venueSeat.floor, '3F')).orderBy(t.venueSeat.y, t.venueSeat.x);
+  const ids = seats.slice(0, n).map((s) => s.id);
+  await paintFloor3(db, '網管', 'gift', ids);
+  return ids;
+}
+const mails = async (template: string) => db.select().from(t.notification).where(eq(t.notification.template, template));
+const slotsOf = async (regId: number) => db.select().from(t.joinSlot).where(eq(t.joinSlot.regId, regId)).orderBy(t.joinSlot.no);
+
+describe('揪團登記（負責人 4 欄）', () => {
+  it('預設關閉；開放後收 4 欄；Email 必填；一個團練場只能核准一位', async () => {
     await addVenues(db, '網管', ['台北微風小棧', '台北木柵']);
     expect((await joinMenu(db)).open).toBe(false);
-    expect((await joinMenu(db)).venues).toEqual([]);
-    expect(await msg(submitJoin(db, base(await venueId('台北木柵')), ip()))).toContain('尚未開放');
-    await setJoinSettings(db, '網管', { open: true, contact: '群票服務' });
-    const m = await joinMenu(db);
-    expect(m.venues.map((v) => v.name).sort()).toEqual(['台北微風小棧', '台北木柵'].sort());
-    expect(m.contact).toBe('群票服務');
-    expect(JSON.stringify(m)).not.toContain('0912'); // 不含個資
-  });
-
-  it('團練場一行一個新增，重複略過；可隱藏、改名、合併、只能刪沒有登記的', async () => {
-    expect(await addVenues(db, '網管', ['台北木柵', ' 台北木柵 ', '', '木柵'])).toEqual({ added: 2, skipped: 0 }); // 同一批重複的合成一個
-    expect(await addVenues(db, '網管', ['台北木柵'])).toEqual({ added: 0, skipped: 1 });
-    await setJoinSettings(db, '網管', { open: true });
-    const r = await submitJoin(db, base(await venueId('木柵')), ip());
-    expect(await msg(deleteVenue(db, '網管', await venueId('木柵')))).toContain('不能刪除');
-    expect(await msg(updateVenue(db, '網管', await venueId('木柵'), { name: '台北木柵' }))).toContain('合併');
-    await mergeVenue(db, '網管', await venueId('木柵'), await venueId('台北木柵'));
-    const [reg] = await db.select().from(t.joinReg).where(eq(t.joinReg.id, r.id));
-    expect(reg.venueId).toBe(await venueId('台北木柵'));
-    await updateVenue(db, '網管', await venueId('台北木柵'), { active: false });
-    expect((await joinMenu(db)).venues).toEqual([]);
-    expect(await msg(submitJoin(db, base(await venueId('台北木柵'), { headPhone: '0922000111', leaders: [{ sameAsHead: true, email: 'a@b.co' }] }), ip()))).toContain('找不到這個團練場');
-  });
-
-  it('同負責人自動帶入姓名、手機；可多位揪團人；沒有 Email 要勾選', async () => {
-    await addVenues(db, '網管', ['台北木柵']);
-    await setJoinSettings(db, '網管', { open: true });
     const v = await venueId('台北木柵');
-    const r = await submitJoin(db, base(v, { leaders: [
-      { sameAsHead: true, email: 'wang@example.com' },
-      { name: ' 李 大 華 ', phone: '0933 111 222', noEmail: true },
-    ] }), ip());
-    const ls = await db.select().from(t.joinLeader).where(eq(t.joinLeader.regId, r.id));
-    expect(ls.map((l) => [l.name, l.phone, l.email, l.noEmail, l.sameAsHead])).toEqual([
-      ['王小明', '0912345678', 'wang@example.com', false, true],
-      ['李 大 華', '0933111222', '', true, false],
-    ]);
-    expect(new Set(ls.map((l) => l.code)).size).toBe(2);
-    expect(r.contact).toBe('主辦方');
-
-    expect(await msg(submitJoin(db, base(v, { headPhone: '0955000111', leaders: [{ sameAsHead: true, email: '' }] }), ip()))).toContain('Email');
-    expect(await msg(submitJoin(db, base(v, { headPhone: '0955000111', leaders: [{ sameAsHead: true, email: 'x@y' }] }), ip()))).toContain('格式');
-    expect(await msg(submitJoin(db, base(v, { headPhone: '0955000111', consent: false }), ip()))).toContain('同意');
-    expect(await msg(submitJoin(db, base(v, { headPhone: '0955000111', leaders: [{ sameAsHead: true, noEmail: true }, { name: '甲', phone: '0955000111', noEmail: true }] }), ip()))).toContain('重複');
-    expect(await msg(submitJoin(db, base(v, { headPhone: '0955000111', leaders: [{ name: '甲', phone: '0912', noEmail: true }] }), ip()))).toContain('10 位');
+    expect(await msg(submitJoin(db, { venueId: v, headName: '王', headPhone: '0912345678', email: 'a@b.co' }, ip()))).toContain('尚未開放');
+    await setJoinSettings(db, '網管', { open: true, contact: '群票服務' });
+    expect(await msg(submitJoin(db, { venueId: v, headName: '王', headPhone: '0912345678', email: '' }, ip()))).toContain('Email');
+    expect(await msg(submitJoin(db, { venueId: v, headName: '王', headPhone: '0912345678', email: 'x@y' }, ip()))).toContain('格式');
+    const a = await submitJoin(db, { venueId: v, headName: '王小明', headPhone: '0912-345-678', email: 'wang@example.com' }, ip());
+    expect(a.contact).toBe('群票服務');
+    expect(await msg(submitJoin(db, { venueId: v, headName: '陳', headPhone: '0912345678', email: 'c@example.com' }, ip()))).toContain('已經登記過');
+    const b = await submitJoin(db, { venueId: v, headName: '陳', headPhone: '0922000111', email: 'c@example.com' }, ip());
+    await decideReg(db, '網管', a.id, 'approved');
+    expect(await msg(decideReg(db, '網管', b.id, 'approved'))).toContain('只能一位');
+    expect(await msg(submitJoin(db, { venueId: v, headName: '林', headPhone: '0933000111', email: 'l@example.com' }, ip()))).toContain('已經有負責人');
+    const [reg] = await db.select().from(t.joinReg).where(eq(t.joinReg.id, a.id));
+    expect(reg.reportCode).toBeTruthy();
+    expect(reg.pickCode).toBeTruthy();
   });
 
-  it('同一位揪團人不能登記兩次（不洩漏別人姓名）；退回後可重新登記', async () => {
-    await addVenues(db, '網管', ['台北木柵', '台北微風小棧']);
+  it('「其他」團練場要先指定才能核准；合併時兩邊都有負責人要先處理', async () => {
     await setJoinSettings(db, '網管', { open: true });
-    const r = await submitJoin(db, base(await venueId('台北木柵')), ip());
-    const m = await msg(submitJoin(db, base(await venueId('台北微風小棧'), { headName: '陳某' }), ip()));
-    expect(m).toContain('0912-345-678 已經登記過');
-    expect(m).not.toContain('王小明');
-    await decideReg(db, '網管', r.id, 'rejected', '重複登記');
-    const r2 = await submitJoin(db, base(await venueId('台北微風小棧')), ip());
-    // 舊的那份不能直接恢復：手機已在新的一份
-    expect(await msg(decideReg(db, '網管', r.id, 'pending'))).toContain(`第 ${r2.id} 號`);
+    const r = await submitJoin(db, { venueId: null, venueText: '新竹 竹北', headName: '陳', headPhone: '0966111222', email: 'c@example.com' }, ip());
+    expect(await msg(decideReg(db, '網管', r.id, 'approved'))).toContain('先指定團練場');
+    await setRegVenue(db, '網管', r.id, { newName: '新竹竹北' });
+    await decideReg(db, '網管', r.id, 'approved');
+    const other = await venueReg('竹北');
+    expect(other.status).toBe('approved');
+    expect(await msg(mergeVenue(db, '網管', await venueId('竹北'), await venueId('新竹竹北')))).toContain('兩邊都有');
   });
 
-  it('「其他」團練場：要先指定才能核准；打的名字已在清單就直接用清單的', async () => {
-    await addVenues(db, '網管', ['台北木柵']);
-    await setJoinSettings(db, '網管', { open: true });
-    const a = await submitJoin(db, base(null, { venueText: '台北木柵' }), ip());
-    expect((await db.select().from(t.joinReg).where(eq(t.joinReg.id, a.id)))[0].venueId).toBe(await venueId('台北木柵'));
+  it('寄出連結：Email 兩個連結；沒寄過的才寄；修改負責人可換 Email', async () => {
+    const reg = await venueReg('台北木柵');
+    expect(await sendLinks(db, '網管', BASE)).toEqual({ sent: 1, noEmail: 0 });
+    expect(await sendLinks(db, '網管', BASE)).toEqual({ sent: 0, noEmail: 0 });
+    const [m] = await mails('join_links');
+    expect(m.content).toContain(`${BASE}/join/r/${reg.reportCode}`);
+    expect(m.content).toContain(`${BASE}/join/p/${reg.pickCode}`);
+    await editReg(db, '網管', reg.id, { headName: '新負責人', headPhone: '0977123456', email: 'new@example.com' });
+    expect(await sendLinks(db, '網管', BASE, [reg.id])).toEqual({ sent: 1, noEmail: 0 });
+    expect((await mails('join_links')).map((x) => x.recipient)).toEqual(['台北木柵@example.com', 'new@example.com']);
+  });
+});
 
-    const b = await submitJoin(db, base(null, { venueText: '新竹 竹北', headPhone: '0966111222', leaders: [{ sameAsHead: true, noEmail: true }] }), ip());
-    expect(await msg(decideReg(db, '網管', b.id, 'approved'))).toContain('先指定團練場');
-    await setRegVenue(db, '網管', b.id, { newName: '新竹竹北' });
-    await decideReg(db, '網管', b.id, 'approved');
-    const s = await joinAdminState(db);
-    const reg = s.regs.find((r) => r.id === b.id)!;
-    expect(reg).toMatchObject({ venueName: '新竹竹北', venueText: '新竹 竹北', status: 'approved', decidedBy: '網管' });
-    expect(s.venues.find((v) => v.name === '新竹竹北')).toMatchObject({ regs: 1, approved: 1, leaders: 1 });
-    expect(await msg(submitJoin(db, base(null, { venueText: '', headPhone: '0977000111' }), ip()))).toContain('選擇團練場');
+describe('志工回報：送出當下核對年代名單，每 10 張一個劃位序', () => {
+  it('查無、張數不符、重複、已退票都擋下；正確的存起來並給劃位序；負責人收到 Email', async () => {
+    const a = await venueReg('台北木柵');
+    const b = await venueReg('台北微風小棧');
+    await eraList([['A001', 4], ['A002', 6], ['A003', 3], ['B001', 2]]);
+    await uploadEra(db, '網管', [{ orderNo: 'R9', qty: 2, status: 'refunded' }]);
+    expect(await msg(report(a.reportCode!, [['A001', 4]]))).toContain('沒有開放');
+    await setJoinSettings(db, '網管', { reportOpen: true });
+
+    const r1 = await report(a.reportCode!, [[' a001 ', 4], ['A002', 5], ['ZZZ', 1], ['R9', 2], ['A001', 4], ['', 3]]);
+    expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4 }]);
+    expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', expect.stringContaining('查無此訂單'), '此訂單已退票', '這次重複輸入了', '請輸入訂單編號']);
+    expect(r1).toMatchObject({ tickets: 4, slots: [], next: 6 });
+
+    const r2 = await report(a.reportCode!, [['A002', 6], ['A001', 4]], '志工乙');
+    expect(r2.accepted).toHaveLength(1);
+    expect(r2.rejected[0].reason).toBe('本團練場已回報過');
+    expect(r2).toMatchObject({ tickets: 10, slots: [1], fresh: [1] });
+    expect((await report(b.reportCode!, [['A003', 3]])).rejected).toHaveLength(0);
+    expect((await report(b.reportCode!, [['A002', 6]])).rejected[0].reason).toBe('此訂單已由其他團練場回報');
+
+    const m = await mails('join_report');
+    expect(m.find((x) => x.content.includes('志工乙'))?.content).toContain('新取得第 1 號');
+    const page = await reportPage(db, a.reportCode!);
+    expect(page).toMatchObject({ venue: '台北木柵', orders: 2, tickets: 10, slots: [1] });
+    expect(page.list.map((x) => x.reporter)).toEqual(['志工甲', '志工乙']);
   });
 
-  it('退回必填原因；可改回待審；只能刪已退回的；後台可修改揪團人', async () => {
-    await addVenues(db, '網管', ['台北木柵']);
-    await setJoinSettings(db, '網管', { open: true });
-    const r = await submitJoin(db, base(await venueId('台北木柵')), ip());
-    expect(await msg(decideReg(db, '網管', r.id, 'rejected', ' '))).toContain('原因');
-    expect(await msg(deleteReg(db, '網管', r.id))).toContain('已退回');
+  it('一筆跨過好幾個 10 張：一次給好幾個連續劃位序；刪回報不能讓劃位序不夠', async () => {
+    const a = await venueReg('台北木柵');
+    await eraList([['BIG', 25], ['S1', 1]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    expect((await report(a.reportCode!, [['BIG', 25]])).fresh).toEqual([1, 2]);
+    const [rep] = await db.select().from(t.joinReport).where(eq(t.joinReport.orderNo, 'BIG'));
+    expect(await msg(deleteReport(db, '網管', rep.id))).toContain('不夠');
+    await report(a.reportCode!, [['S1', 1]]);
+    const [s1] = await db.select().from(t.joinReport).where(eq(t.joinReport.orderNo, 'S1'));
+    await deleteReport(db, '網管', s1.id);
+    expect(await msg(setJoinSettings(db, '網管', { perSeat: 5 }))).toContain('不能再改');
+  });
+});
 
-    const [l] = await db.select().from(t.joinLeader).where(eq(t.joinLeader.regId, r.id));
-    await editReg(db, '網管', r.id, { headName: '王小明', headPhone: '0912345678', note: '老師確認過', leaders: [
-      { id: l.id, name: '王小明', phone: '0912345678', email: 'new@example.com' },
-      { name: '林助理', phone: '0988123456', noEmail: true },
-    ] });
-    const ls = await db.select().from(t.joinLeader).where(eq(t.joinLeader.regId, r.id));
-    expect(ls.map((x) => [x.name, x.email, x.sameAsHead])).toEqual([['王小明', 'new@example.com', true], ['林助理', '', false]]);
-    expect(ls[0].code).toBe(l.code); // 原本那位的連結代碼不變
+describe('自動輪號劃位', () => {
+  async function setup() {
+    const a = await venueReg('A場');
+    const b = await venueReg('B場');
+    const c = await venueReg('C場');
+    const d = await venueReg('D場');
+    await eraList([['A1', 20], ['B1', 10], ['C1', 10], ['D1', 10]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await report(a.reportCode!, [['A1', 20]]); // 第 1、2 號
+    await report(b.reportCode!, [['B1', 10]]); // 第 3 號
+    await report(c.reportCode!, [['C1', 10]]); // 第 4 號
+    await report(d.reportCode!, [['D1', 10]]); // 第 5 號
+    const seats = await giftSeats(12);
+    return { a, b, c, d, seats };
+  }
 
-    await decideReg(db, '網管', r.id, 'rejected', '測試');
-    await decideReg(db, '網管', r.id, 'pending');
-    expect((await joinAdminState(db)).regs[0]).toMatchObject({ status: 'pending', reason: '', decidedAt: null });
-    await decideReg(db, '網管', r.id, 'rejected', '測試');
-    await deleteReg(db, '網管', r.id);
-    expect(await db.select().from(t.joinLeader)).toHaveLength(0);
+  it('一次只開放一位；連續序號一起選；送出後下一位自動開放；寄「輪到您了」「快輪到了」', async () => {
+    const { a, b, c, seats } = await setup();
+    expect(await msg(submitPick(db, a.pickCode!, { seatIds: seats.slice(0, 2), repName: '王', repPhone: '0912345678' }, T0))).toContain('不是您的劃位時間');
+    await setJoinSettings(db, '網管', { pickOpen: true, notifyAhead: 2 });
+    await tickQueue(db, BASE, T0);
+    const pa = await pickPage(db, a.pickCode!, T0, BASE);
+    expect(pa.current).toMatchObject({ nos: [1, 2], mine: true, seen: true });
+    expect(pa.pickCount).toBe(2);
+    expect((await pickPage(db, b.pickCode!, T0, BASE)).current).toMatchObject({ mine: false, venue: 'A場' });
+    expect((await mails('join_turn')).map((x) => x.recipient)).toEqual(['A場@example.com']);
+    expect((await mails('join_soon')).map((x) => x.recipient).sort()).toEqual(['B場@example.com', 'C場@example.com']);
+
+    expect(await msg(submitPick(db, a.pickCode!, { seatIds: seats.slice(0, 1), repName: '王', repPhone: '0912345678' }, at(1)))).toContain('要選 2 席');
+    const ok = await submitPick(db, a.pickCode!, { seatIds: seats.slice(0, 2), repName: '王代表', repPhone: '0912-345-678' }, at(1), BASE);
+    expect(ok.nos).toEqual([1, 2]);
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
+    expect(es.status).toBe('sold');
+    const pb = await pickPage(db, b.pickCode!, at(1), BASE);
+    expect(pb.current).toMatchObject({ nos: [3], mine: true });
+    expect(pb.board.filter((x) => x.status === 'done').map((x) => x.seat)).toHaveLength(2);
+    expect(await msg(submitPick(db, b.pickCode!, { seatIds: [seats[0]], repName: '陳', repPhone: '0922333444' }, at(2)))).toContain('已被選走');
+    const st = await joinAdminState(db, BASE, at(2));
+    expect(st.current?.venue).toBe('B場');
+    expect(st.slots.filter((x) => x.status === 'done').map((x) => x.repPhone)).toEqual(['0912345678', '0912345678']);
+    expect((await pickPage(db, c.pickCode!, at(2), BASE)).queue.find((x) => x.mine)?.place).toBe(0);
   });
 
-  it('備份包含揪團資料；沒有這些資料表的舊備份照樣能還原', async () => {
-    await addVenues(db, '網管', ['台北木柵']);
-    await setJoinSettings(db, '網管', { open: true });
-    await submitJoin(db, base(await venueId('台北木柵')), ip());
+  it('叫不到：第 1 次延後 3 號、第 2 次排到最後、第 3 次暫停；按「我回來了」排到最後', async () => {
+    const { a, b } = await setup();
+    await setJoinSettings(db, '網管', { pickOpen: true, turnMin: 3, pushBack: 3, notifyAhead: 0 });
+    await tickQueue(db, BASE, T0); // A（1、2 號）輪到，但沒打開
+    await tickQueue(db, BASE, at(4)); // 3 分鐘到 → 延後 3 號，B 輪到
+    let order = (await pickPage(db, b.pickCode!, at(4), BASE)).queue.map((x) => x.no);
+    expect(order).toEqual([3, 4, 5, 1, 2]);
+    expect((await mails('join_missed'))[0].content).toContain('已延後 3 號');
+    // B 打開了（pickPage），10 分鐘選位時間內都還在
+    await tickQueue(db, BASE, at(12));
+    expect((await joinAdminState(db, BASE, at(12))).current?.venue).toBe('B場');
+    await skipTurn(db, '網管'); // 後台跳過 B：算一次叫不到 → 延後 3 號（後面只剩 3 個，排到最後）
+    await tickQueue(db, BASE, at(13));
+    order = (await joinAdminState(db, BASE, at(13))).slots.filter((x) => x.status === 'wait' || x.status === 'turn').sort((p, q) => p.pos - q.pos).map((x) => x.no);
+    expect(order).toEqual([4, 5, 1, 2, 3]);
+    // A 再叫不到兩次：第 2 次排到最後、第 3 次暫停
+    for (const now of [at(20), at(30), at(40), at(50), at(60), at(70), at(80), at(90), at(100), at(110)]) await tickQueue(db, BASE, now);
+    const sa = await slotsOf(a.id);
+    expect(sa.map((x) => x.status)).toEqual(['skip', 'skip']);
+    expect((await mails('join_missed')).some((x) => x.content.includes('我回來了'))).toBe(true);
+    await rejoinQueue(db, a.pickCode!);
+    expect((await slotsOf(a.id)).map((x) => [x.status, x.misses])).toEqual([['wait', 2], ['wait', 2]]);
+  });
+
+  it('時段外、暫停時不開始新的一輪', async () => {
+    const { a } = await setup();
+    await setJoinSettings(db, '網管', { pickOpen: true, paused: true });
+    await tickQueue(db, BASE, T0);
+    expect((await pickPage(db, a.pickCode!, T0, BASE)).current).toBeNull();
+    await setJoinSettings(db, '網管', { paused: false, hourFrom: '09:00', hourTo: '21:00' });
+    await tickQueue(db, BASE, new Date('2026-11-20T22:30:00+08:00'));
+    expect((await pickPage(db, a.pickCode!, new Date('2026-11-20T22:30:00+08:00'), BASE)).current).toBeNull();
+    await tickQueue(db, BASE, new Date('2026-11-21T09:00:00+08:00'));
+    expect((await joinAdminState(db, BASE, new Date('2026-11-21T09:00:00+08:00'))).current?.nos).toEqual([1, 2]);
+  });
+
+  it('只能選揪團贈席；取消劃位序把座位放回；已送年代要先取消才能改', async () => {
+    const { a, seats } = await setup();
+    await setJoinSettings(db, '網管', { pickOpen: true });
+    await tickQueue(db, BASE, T0);
+    const [plain] = await db.select({ id: t.venueSeat.id }).from(t.venueSeat).where(and(eq(t.venueSeat.floor, '3F'), eq(t.venueSeat.rowNo, 27))).limit(1);
+    expect(await msg(submitPick(db, a.pickCode!, { seatIds: [seats[0], plain.id], repName: '王', repPhone: '0912345678' }, T0))).toContain('揪團贈席');
+    await submitPick(db, a.pickCode!, { seatIds: [seats[0], seats[1]], repName: '王', repPhone: '0912345678' }, T0, BASE);
+    expect(await markSent(db, '網管', true)).toEqual({ count: 2 });
+    const [s1] = await slotsOf(a.id);
+    expect(await msg(voidSlot(db, '網管', s1.id, '退票'))).toContain('已送年代');
+    await markSent(db, '網管', false, [s1.id]);
+    await voidSlot(db, '網管', s1.id, '退票');
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, s1.seatId!));
+    expect(es.status).toBe('free');
+    expect(await msg(restoreSlot(db, '網管', s1.id))).toContain('暫停排隊');
+  });
+
+  it('招待不能用揪團贈席、年代售出的座位；清除測試資料（保留連結）不會放掉已選的贈席', async () => {
+    const { a, seats } = await setup();
+    const ev = (await db.select().from(t.event))[0];
+    const u = await joinUsages(db, ev.id);
+    expect(u.gift).toBeGreaterThan(0);
+    expect(await msg(createVip(db, '網管', { name: '貴賓', phone: '', email: '', seatIds: [seats[5]], mode: 'none' }))).toContain('揪團贈席');
+    await setJoinSettings(db, '網管', { pickOpen: true });
+    await tickQueue(db, BASE, T0);
+    await submitPick(db, a.pickCode!, { seatIds: [seats[0], seats[1]], repName: '王', repPhone: '0912345678' }, T0, BASE);
+    const [lk] = await db.insert(t.inviteLink).values({ eventId: ev.id, code: 'KEEP0001', name: 'x', phone: '', quota: 1, expiresAt: new Date('2027-01-01') }).returning();
+    await resetSales(db, '網管', { keepLinkIds: [lk.id] });
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
+    expect(es.status).toBe('sold');
+    await resetSales(db, '網管', {});
+    expect(await db.select().from(t.joinSlot)).toHaveLength(0);
+    const [es2] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
+    expect(es2.status).toBe('free');
+  });
+});
+
+describe('備份', () => {
+  it('包含揪團資料；沒有新資料表的舊備份照樣能還原', async () => {
+    const a = await venueReg('台北木柵');
+    await eraList([['A1', 10]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await report(a.reportCode!, [['A1', 10]]);
     const b = await exportAll(db);
-    expect(b.tables.join_reg).toHaveLength(1);
+    expect(b.tables.join_slot).toHaveLength(1);
     const db2 = await createPgliteDb();
     await importAll(db2, b);
-    expect(await db2.select().from(t.joinLeader)).toHaveLength(1);
-
+    expect(await db2.select().from(t.joinReport)).toHaveLength(1);
     const old = { ...b, tables: { ...b.tables } };
-    delete old.tables.join_venue; delete old.tables.join_reg; delete old.tables.join_leader;
+    for (const k of ['join_venue', 'join_reg', 'join_leader', 'join_era', 'join_report', 'join_slot']) delete old.tables[k];
     const db3 = await createPgliteDb();
     await importAll(db3, old);
-    expect(await db3.select().from(t.joinReg)).toHaveLength(0);
-    // 還原後流水號接續，可以繼續登記
-    await addVenues(db3, '網管', ['台北木柵']);
-    const v3 = (await db3.select().from(t.joinVenue))[0].id;
-    expect((await submitJoin(db3, base(v3), ip())).id).toBeGreaterThan(0);
+    expect(await db3.select().from(t.joinSlot)).toHaveLength(0);
   });
 });
