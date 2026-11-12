@@ -217,7 +217,7 @@ const MAIL_TITLE: Record<string, string> = {
 /** 把系統訊息拆成：演出名稱、稱呼、內文段落、連結 */
 function partsOf(text: string) {
   const ev = text.match(/^【([^】]+)】/)?.[1] ?? '';
-  const url = text.match(/https?:\/\/[^\s　]+/)?.[0] ?? '';
+  const url = text.match(/https?:\/\/[^\s　（）「」『』，。、；：！？【】]+/)?.[0] ?? '';
   let rest = text.replace(/^【[^】]+】/, '').replace(url, '').replace(/請點以下(專屬)?連結[^：:]*[：:]\s*/, '').replace(/[：:]\s*$/, '');
   const g = rest.match(/^(.{1,20}?)\s*您好[，,]\s*/);
   const greet = g ? `${g[1].trim()} 您好：` : '';
@@ -263,7 +263,7 @@ export function mailLayout(o: { ev: string; title: string; greet?: string; paras
 /** 一般通知（收到訂單、收到劃位資料、取消…）：套用共用版面 */
 export function niceMail(template: string, text: string, fromName = ''): MailExtra {
   const { ev, url, greet, paras } = partsOf(text);
-  const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' ? '開啟回報頁'
+  const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' || template === 'join_group' ? '開啟回報頁'
     : ['join_plink', 'join_soon', 'join_turn', 'join_missed'].includes(template) ? '開啟劃位頁' : '開啟連結';
   return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button, fromName }) };
 }
@@ -278,7 +278,7 @@ export function linkMail(text: string, fromName = ''): MailExtra {
 /** 揪團贈票連結信：兩個按鈕（回報連結可轉給志工、劃位連結只給負責人） */
 export function joinLinksMail(text: string, fromName = ''): MailExtra {
   const ev = text.match(/^【([^】]+)】/)?.[1] ?? '';
-  const urls = text.match(/https?:\/\/[^\s　]+/g) ?? [];
+  const urls = text.match(/https?:\/\/[^\s　（）「」『』，。、；：！？【】]+/g) ?? [];
   const g = text.replace(/^【[^】]+】/, '').match(/^(.{1,20}?)\s*您好[，,]\s*/);
   const intro = text.replace(/^【[^】]+】/, '').replace(g?.[0] ?? '', '').split(/回報連結/)[0].trim();
   const btn = (url: string, label: string, color: string) => `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 6px"><tr><td style="background:${color};border-radius:8px">

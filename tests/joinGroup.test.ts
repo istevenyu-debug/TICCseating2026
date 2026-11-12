@@ -7,6 +7,7 @@ import { ensureFloor3 } from '@/lib/floor';
 import { setJoinSettings } from '@/lib/join';
 import { groupDelete, groupFix, groupMenu, groupPage, groupSubmit, mergeGroups, moveReport, nextFreeName, groupKey, renameGroup } from '@/lib/joinGroup';
 import { joinAdminState, lockSlots, uploadEra } from '@/lib/joinQueue';
+import { niceMail } from '@/lib/notify';
 
 let db: Db;
 const BASE = 'https://ticket.example.com';
@@ -37,6 +38,11 @@ describe('揪團回報：共用連結、不用註冊', () => {
     const [mail] = await db.select().from(t.notification).where(eq(t.notification.template, 'join_group'));
     expect(mail.content).toContain('台北大安1');
     expect(mail.content).toContain(`${BASE}/join`);
+    // 信裡的按鈕連結要乾淨（不能把後面的中文標點、文字吃進網址）
+    const html = niceMail('join_group', mail.content).html ?? '';
+    expect(html).toContain(`href="${BASE}/join"`);
+    expect(html).toContain(`${BASE}/join/board`);
+    expect(niceMail('join_fix', `【x】王 您好，請打開（${BASE}/join），點選。`).html).toContain(`href="${BASE}/join"`);
     // 回報還沒開放：只能建群
     expect(await msg(groupSubmit(db, { groupId: gid(r), device: 'd2', reporter: '志工', rows: [{ orderNo: '0109', qty: 6 }] }, ip(), N, BASE))).toContain('沒有開放');
   });
