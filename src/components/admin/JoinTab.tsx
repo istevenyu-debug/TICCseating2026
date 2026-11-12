@@ -357,7 +357,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th><th>時間</th><th /></tr></thead>
           <tbody>{j.reports.filter((x) => x.regId === open).map((x) => (
             <tr key={x.id}>
-              <td className="mono">{x.orderNo ?? x.key}{x.orderNo && x.key !== x.orderNo && <div className="small muted">輸入 {x.key}</div>}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
+              <td className="mono">{x.orderNo ?? `${x.buyDate ? `${+x.buyDate.slice(2, 4)}/${+x.buyDate.slice(4, 6)}・` : ''}${x.key}`}{x.orderNo && x.key !== x.orderNo && <div className="small muted">輸入 {x.key}</div>}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
               <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}{x.era && <div className="small">{x.era}</div>}</td>
               <td>{x.reporter}</td><td className="small">{tw(x.at)}</td>
               <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button></td>

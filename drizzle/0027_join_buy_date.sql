@@ -1,0 +1,1 @@
+ALTER TABLE "join_report" ADD COLUMN "buy_date" text;

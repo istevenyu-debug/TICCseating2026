@@ -6,7 +6,8 @@ import { fmtDate } from './JoinApp';
 type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
   orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
-  list: { id: number; key: string; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
+  today: string;
+  list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
 };
 type Result = { accepted: { orderNo: string; qty: number; status: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
@@ -36,6 +37,9 @@ export default function JoinReportApp({ code }: { code: string }) {
   const [nameDraft, setNameDraft] = useState('');
   const [editName, setEditName] = useState(false);
   const [rows, setRows] = useState<Row[]>(blank());
+  const todayIso = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
+  const [buyDate, setBuyDate] = useState(todayIso);
+  const [editDate, setEditDate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<Result | null>(null);
   const [showList, setShowList] = useState(true);
@@ -50,7 +54,7 @@ export default function JoinReportApp({ code }: { code: string }) {
     const filled = rows.filter((r) => r.orderNo.trim() || r.qty.trim());
     if (!filled.length) { setErr('請輸入訂單編號與張數'); return; }
     setBusy(true); setErr('');
-    const r = await call<Result>(code, { reporter: name, rows: filled.map((x) => ({ orderNo: x.orderNo, qty: x.qty })) });
+    const r = await call<Result>(code, { reporter: name, buyDate, rows: filled.map((x) => ({ orderNo: x.orderNo, qty: x.qty })) });
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     setLast(r.data);
@@ -100,7 +104,7 @@ export default function JoinReportApp({ code }: { code: string }) {
   );
   const howto = (
     <div className="note" style={{ margin: '12px 0' }}>
-      <b>訂單編號只要輸入後 4 碼：</b>「-」前面的最後 4 個數字，例如 ER2611120000109-1 → 輸入 <b>0109</b>。若有別筆訂單後 4 碼相同，系統會請您補上完整編號。
+      <b>訂單編號只要輸入後 4 碼：</b>「-」前面的最後 4 個數字，例如 ER2611120000109-1 → 輸入 <b>0109</b>。系統自動帶入今天的日期；當天買、當天回報最簡單，也排得最前面。若同一天有別筆訂單後 4 碼相同，系統會請您補上完整編號。
       <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。</div>
       <div style={{ marginTop: 4 }}>有疑義請洽 {page.contact}</div>
     </div>
@@ -115,7 +119,7 @@ export default function JoinReportApp({ code }: { code: string }) {
           <tbody>{[...page.list].reverse().map((x) => (
             <Fragment key={x.id}>
               <tr>
-                <td className="mono">{x.orderNo ?? x.key}{x.orderNo && x.orderNo !== x.key && <div className="small muted">輸入 {x.key}</div>}<div className="small muted">{tw(x.at)}</div></td>
+                <td className="mono">{x.orderNo ?? `${x.buyDate ? `${+x.buyDate.slice(2, 4)}/${+x.buyDate.slice(4, 6)}・` : ''}${x.key}`}{x.orderNo && x.orderNo !== x.key && <div className="small muted">輸入 {x.key}</div>}<div className="small muted">{tw(x.at)}</div></td>
                 <td style={{ textAlign: 'center' }}>{x.qty}</td>
                 <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
                 <td>{x.reporter}</td>
@@ -168,6 +172,13 @@ export default function JoinReportApp({ code }: { code: string }) {
           <h2 style={{ margin: 0 }}>輸入年代訂單</h2>
           <span className="small muted">填寫人：{name}（<button type="button" className="linkbtn" onClick={() => { setNameDraft(name); setEditName(true); }}>更換</button>）</span>
         </div>
+        <div className="row" style={{ marginTop: 12, gap: 8, alignItems: 'center', background: '#f4f6fb', borderRadius: 10, padding: '8px 12px' }}>
+          <span>購買日期：<b>{buyDate === todayIso() ? '今天 ' : ''}{+buyDate.slice(5, 7)}/{+buyDate.slice(8, 10)}</b></span>
+          {editDate
+            ? <input type="date" value={buyDate} max={todayIso()} onChange={(e) => { if (e.target.value) setBuyDate(e.target.value); setEditDate(false); }} style={{ width: 'auto' }} />
+            : <button type="button" className="linkbtn small" onClick={() => setEditDate(true)}>改日期</button>}
+        </div>
+        <p className="small muted" style={{ margin: '4px 0 0' }}>只填後 4 碼時，系統找這一天買的訂單。不是今天買的請先「改日期」；不同天買的請分開送出。</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: '6px 8px', marginTop: 10, alignItems: 'center' }}>
           <span className="small muted">訂單編號（後 4 碼即可）</span><span className="small muted">張數</span>
           {rows.map((r, i) => (

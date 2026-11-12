@@ -445,6 +445,7 @@ export const joinReport = pgTable('join_report', {
   regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
   key: text('key').notNull().default(''), // 志工輸入的（後 4 碼以上的數字，或完整訂單編號）
   orderNo: text('order_no'), // 對到的完整訂單編號；還沒對到（待核對、需補完整編號）時是 null
+  buyDate: text('buy_date'), // 只輸入後幾碼時的購買日期 YYMMDD（預設回報當天，訂單編號 ER+YYMMDD+流水號）
   qty: integer('qty').notNull(),
   reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
   // 先收後核：pending 待核對 / ok 已核對 / mismatch 張數不符 / refunded 已退票 / ambiguous 後四碼對到多筆，需補完整編號

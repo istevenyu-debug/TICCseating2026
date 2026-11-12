@@ -431,3 +431,28 @@ describe('志工只輸入訂單編號後 4 碼', () => {
     expect(after.at).toBe(T(10).toISOString());
   });
 });
+
+describe('後 4 碼＋購買日期（預設今天，可改）', () => {
+  const send = (code: string, buyDate: string, rows: [string, number][], now: Date) =>
+    submitReport(db, code, { reporter: '甲', buyDate, rows: rows.map(([orderNo, qty]) => ({ orderNo, qty })) }, ip(), now, BASE);
+  const N = new Date('2026-11-14T10:00:00+08:00');
+
+  it('只在那一天的訂單裡找：不同天同後 4 碼不撞號；不能選未來日期；補完整編號要同一天', async () => {
+    const a = await venueReg('台北木柵');
+    await uploadEra(db, '網管', [['ER2611130000109', 6], ['ER2611140000109', 6], ['ER2611130000222', 2]].map(([orderNo, qty]) => ({ orderNo: orderNo as string, qty: qty as number, status: 'sold' as const })));
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    expect((await send(a.reportCode!, '2026-11-14', [['0109', 6]], N)).accepted[0]).toMatchObject({ orderNo: 'ER2611140000109', status: 'ok' });
+    expect((await send(a.reportCode!, '2026-11-13', [['0109', 6]], N)).accepted[0]).toMatchObject({ orderNo: 'ER2611130000109', status: 'ok' });
+    expect((await send(a.reportCode!, '2026-11-14', [['0109', 6]], N)).rejected[0].reason).toContain('本團練場已回報過 11/14 0109');
+    expect(await msg(send(a.reportCode!, '2026-11-15', [['0109', 6]], N))).toContain('購買日期不正確');
+    // 11/14 的 0222 還不在名單上：待核對；11/13 的 0222 不會被拿走
+    const r = await send(a.reportCode!, '2026-11-14', [['0222', 2], ['0333', 1]], N);
+    expect(r.accepted.map((x) => x.status)).toEqual(['pending', 'pending']);
+    await uploadEra(db, '網管', [{ orderNo: 'ER2611140000222', qty: 2, status: 'sold', soldAt: '2026-11-14T09:30:00+08:00' }]);
+    const list = (await reportPage(db, a.reportCode!)).list;
+    expect(list.find((x) => x.key === '0222')).toMatchObject({ orderNo: 'ER2611140000222', status: 'ok', buyDate: '261114' });
+    const id = list.find((x) => x.key === '0333')!.id;
+    expect(await msg(fixOwnReport(db, a.reportCode!, id, 'ER2611130000333', '甲'))).toContain('日期不同');
+    expect(await fixOwnReport(db, a.reportCode!, id, 'ER2611140000333', '甲')).toEqual({ orderNo: 'ER2611140000333', status: 'pending' });
+  });
+});

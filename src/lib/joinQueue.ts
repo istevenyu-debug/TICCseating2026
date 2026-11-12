@@ -55,10 +55,11 @@ export type Match = { status: 'pending' | 'ok' | 'mismatch' | 'refunded' | 'ambi
  *  - 張數相同的有好幾筆 → 需補完整編號
  *  - 沒有張數相同的：只有一筆後幾碼相同 → 張數不符（不認領）；好幾筆 → 需補完整編號；沒有 → 待核對
  */
-export function matchKey(key: string, qty: number, at: Date, era: Map<string, EraRec>, claimed: Set<string>): Match {
+export function matchKey(key: string, qty: number, at: Date, era: Map<string, EraRec>, claimed: Set<string>, buyDate: string | null = null): Match {
   if (!isSuffixKey(key)) { const j = judge(era.get(key), qty); return { ...j, orderNo: key, cands: era.has(key) ? 1 : 0 }; }
   const limit = at.getTime() + SOLD_GRACE;
-  const cands = [...era.values()].filter((e) => e.orderNo.endsWith(key) && !claimed.has(e.orderNo) && (!e.soldAt || e.soldAt.getTime() <= limit));
+  const cands = [...era.values()].filter((e) => e.orderNo.endsWith(key) && !claimed.has(e.orderNo) && (!e.soldAt || e.soldAt.getTime() <= limit)
+    && (!buyDate || [null, buyDate].includes(orderDate(e))));
   const same = cands.filter((e) => e.qty === qty);
   const sold = same.filter((e) => e.status === 'sold');
   if (sold.length === 1) return { status: 'ok', orderNo: sold[0].orderNo, eraQty: sold[0].qty, cands: cands.length };
@@ -68,6 +69,16 @@ export function matchKey(key: string, qty: number, at: Date, era: Map<string, Er
   if (cands.length > 1) return { status: 'ambiguous', orderNo: null, eraQty: null, cands: cands.length };
   return { status: 'pending', orderNo: null, eraQty: null, cands: 0 };
 }
+
+/** 台北日期 YYMMDD */
+export const tpeYmd = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' }).slice(2).replace(/-/g, '');
+/** 訂單的購買日期 YYMMDD：訂單編號 ER+YYMMDD+流水號；看不出來就用售出時間；都沒有回傳 null（不限制） */
+export function orderDate(e: { orderNo: string; soldAt: Date | null }) {
+  const m = e.orderNo.match(/^[A-Z]{1,4}(\d{6})\d{4,}$/);
+  if (m) return m[1];
+  return e.soldAt ? tpeYmd(e.soldAt) : null;
+}
+const ymdLabel = (bd: string | null) => (bd ? `${+bd.slice(2, 4)}/${+bd.slice(4, 6)} ` : '');
 
 async function eraMap(db: Db | Tx, eventId: number) {
   return new Map((await db.select().from(t.joinEra).where(eq(t.joinEra.eventId, eventId))).map((e) => [e.orderNo, e as EraRec]));
@@ -113,11 +124,11 @@ export async function recheckReports(db: Db, eventId: number, now = new Date(), 
   for (const r of reps) {
     let m: Match;
     if (r.orderNo) { const j = judge(era.get(r.orderNo), r.qty); m = { ...j, orderNo: r.orderNo, cands: 1 }; }
-    else { m = matchKey(r.key, r.qty, r.createdAt, era, claimed); if (m.orderNo) claimed.add(m.orderNo); }
+    else { m = matchKey(r.key, r.qty, r.createdAt, era, claimed, r.buyDate); if (m.orderNo) claimed.add(m.orderNo); }
     if (m.status === 'ok') n.verified++; else if (m.status === 'pending') n.pending++; else if (m.status === 'mismatch') n.mismatch++; else if (m.status === 'ambiguous') n.ambiguous++; else n.refundedReports++;
     if (m.status !== r.status || m.eraQty !== r.eraQty || m.orderNo !== r.orderNo) {
       if (m.status === 'ok' && r.status !== 'ok') n.newlyVerified++;
-      if (m.status === 'ambiguous' && r.status !== 'ambiguous') fix.set(r.regId, [...(fix.get(r.regId) ?? []), `後 ${r.key.length} 碼 ${r.key}（${r.qty} 張）`]);
+      if (m.status === 'ambiguous' && r.status !== 'ambiguous') fix.set(r.regId, [...(fix.get(r.regId) ?? []), `${ymdLabel(r.buyDate)}後 ${r.key.length} 碼 ${r.key}（${r.qty} 張）`]);
       await db.update(t.joinReport).set({ status: m.status, eraQty: m.eraQty, orderNo: m.orderNo, checkedAt: now }).where(eq(t.joinReport.id, r.id));
     }
   }
@@ -127,7 +138,7 @@ export async function recheckReports(db: Db, eventId: number, now = new Date(), 
     for (const [regId, items] of fix) {
       const [reg] = await db.select().from(t.joinReg).where(eq(t.joinReg.id, regId));
       if (!reg || reg.status !== 'approved') continue;
-      await mailHead(db, reg, 'join_fix', `【${ev.name}】${reg.headName} 您好，年代名單上有好幾筆訂單的後幾碼相同，下列回報需要補上完整訂單編號才能核對：${items.join('、')}。`
+      await mailHead(db, reg, 'join_fix', `【${ev.name}】${reg.headName} 您好，年代名單上同一天有好幾筆訂單的後幾碼相同，下列回報需要補上完整訂單編號才能核對：${items.join('、')}。`
         + `請志工打開回報連結，在「已回報的訂單」那一筆輸入完整編號（例如 ER2611120000109）。有疑義請洽${s.contact}`);
     }
   }
@@ -229,12 +240,14 @@ export async function reportPage(db: Db, code: string) {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: await venueName(db, r), headName: r.headName,
     open: s.reportOpen && !num.locked, locked: num.locked, perSeat: s.perSeat, contact: s.contact,
     orders: tot.orders, verified: tot.verified, pending: tot.pending, bad: tot.bad, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat),
-    list: list.map((x) => ({ id: x.id, key: x.key, orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty })),
+    today: tpeYmd(new Date()),
+    list: list.map((x) => ({ id: x.id, key: x.key, buyDate: x.buyDate, orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty })),
   };
 }
 
 export const reportInput = z.object({
   reporter: z.string().transform(clean).pipe(z.string().min(1, '請先輸入您的名字').max(20, '名字最多 20 字')),
+  buyDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '購買日期格式不正確').optional(),
   rows: z.array(z.object({ orderNo: z.string().max(60).default(''), qty: z.union([z.number(), z.string()]).default('') })).min(1).max(50, '一次最多 50 筆'),
 });
 
@@ -252,12 +265,15 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
   rateLimit(`repip:${ip}`, now.getTime(), 60);
   const rows = p.data.rows.map((x) => ({ orderNo: normOrderNo(String(x.orderNo)), qtyRaw: String(x.qty).trim() })).filter((x) => x.orderNo || x.qtyRaw);
   if (!rows.length) throw new BookingError('INVALID', '請輸入訂單編號與張數');
+  // 購買日期：預設今天；可以改成之前的日期（晚報），不能是未來、不能超過 60 天前
+  const bd = p.data.buyDate ? p.data.buyDate.slice(2).replace(/-/g, '') : null;
+  if (bd && (bd > tpeYmd(now) || bd < tpeYmd(new Date(now.getTime() - 60 * 86400000)))) throw new BookingError('INVALID', '購買日期不正確（不能是未來的日期）');
   const era = await eraMap(db, reg.eventId);
   const all = await db.select().from(t.joinReport).where(eq(t.joinReport.eventId, reg.eventId));
   const claimed = new Map(all.filter((r) => r.orderNo).map((r) => [r.orderNo!, r]));
   const mine = all.filter((r) => r.regId === reg.id);
   const seen = new Set<string>();
-  const ok: { key: string; orderNo: string | null; qty: number; status: string; eraQty: number | null }[] = [];
+  const ok: { key: string; buyDate: string | null; orderNo: string | null; qty: number; status: string; eraQty: number | null }[] = [];
   const bad: { orderNo: string; qty: string; reason: string }[] = [];
   for (const x of rows) {
     const qty = Number(x.qtyRaw);
@@ -272,20 +288,22 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
       const d = claimed.get(k);
       if (d) reason = d.regId === reg.id ? '本團練場已回報過' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`;
     }
-    if (!reason && isSuffixKey(k) && mine.some((r) => r.qty === qty && (r.key === k || (r.orderNo ?? '').endsWith(k)))) reason = `本團練場已回報過 ${k}（${qty} 張）；若是另一筆訂單，請輸入完整訂單編號`;
+    if (!reason && isSuffixKey(k) && mine.some((r) => r.qty === qty && (r.key === k ? (r.buyDate ?? bd) === bd : (r.orderNo ?? '').endsWith(k) && (!bd || !r.orderNo || [null, bd].includes(orderDate({ orderNo: r.orderNo, soldAt: null })))))) {
+      reason = `本團練場已回報過 ${ymdLabel(bd)}${k}（${qty} 張）；若是另一筆訂單，請輸入完整訂單編號`;
+    }
     if (!reason) {
-      m = matchKey(k, qty, now, era, new Set(claimed.keys()));
+      m = matchKey(k, qty, now, era, new Set(claimed.keys()), isSuffixKey(k) ? bd : null);
       if (m.status === 'refunded') reason = '此訂單已退票';
       else if (m.status === 'mismatch') reason = isSuffixKey(k) ? `年代記錄後 ${k.length} 碼 ${k} 的訂單是 ${m.eraQty} 張。請確認張數；若不是這筆，請輸入完整訂單編號` : `張數不符（年代記錄為 ${m.eraQty} 張）`;
-      else if (m.status === 'ambiguous') reason = `有好幾筆訂單後 ${k.length} 碼都是 ${k}，請輸入完整訂單編號`;
+      else if (m.status === 'ambiguous') reason = `${bd ? '同一天' : ''}有好幾筆訂單後 ${k.length} 碼都是 ${k}，請輸入完整訂單編號`;
     }
     if (k) seen.add(`${k}|${qty}`);
     if (reason || !m) { bad.push({ orderNo: k, qty: x.qtyRaw, reason }); continue; }
-    ok.push({ key: k, orderNo: m.orderNo, qty, status: m.status, eraQty: m.eraQty });
+    ok.push({ key: k, buyDate: isSuffixKey(k) ? bd : null, orderNo: m.orderNo, qty, status: m.status, eraQty: m.eraQty });
     if (m.orderNo) claimed.set(m.orderNo, { regId: reg.id } as typeof all[number]);
   }
   if (ok.length) {
-    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, key: x.key, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
+    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, key: x.key, buyDate: x.buyDate, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
       status: x.status, eraQty: x.eraQty, checkedAt: x.status === 'ok' ? now : null, createdAt: now })));
   }
   const tot = await totalsOf(db, reg.id);
@@ -327,12 +345,13 @@ export async function fixOwnReport(db: Db, code: string, id: number, full: strin
   if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
   if (r.orderNo && r.status === 'ok') throw new BookingError('INVALID', '這筆已核對，不用再補。');
   if (isSuffixKey(r.key) && !no.endsWith(r.key)) throw new BookingError('INVALID', `完整編號的最後幾碼要是 ${r.key}。輸入錯了請刪除這筆再重新輸入。`);
+  if (isSuffixKey(r.key) && r.buyDate && ![null, r.buyDate].includes(orderDate({ orderNo: no, soldAt: null }))) throw new BookingError('INVALID', `這筆的購買日期是 ${ymdLabel(r.buyDate).trim()}，完整編號的日期不同。輸入錯了請刪除這筆再重新輸入。`);
   const [d] = await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, reg.eventId), eq(t.joinReport.orderNo, no)));
   if (d && d.id !== r.id) throw new BookingError('INVALID', d.regId === reg.id ? '本團練場已回報過這筆訂單' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`);
   const j = judge((await db.select().from(t.joinEra).where(and(eq(t.joinEra.eventId, reg.eventId), eq(t.joinEra.orderNo, no))))[0], r.qty);
   if (j.status === 'refunded') throw new BookingError('INVALID', '此訂單已退票');
   if (j.status === 'mismatch') throw new BookingError('INVALID', `張數不符（年代記錄為 ${j.eraQty} 張）`);
-  await db.update(t.joinReport).set({ key: no, orderNo: no, status: j.status, eraQty: j.eraQty, checkedAt: now }).where(eq(t.joinReport.id, r.id));
+  await db.update(t.joinReport).set({ key: no, buyDate: null, orderNo: no, status: j.status, eraQty: j.eraQty, checkedAt: now }).where(eq(t.joinReport.id, r.id));
   await db.insert(t.auditLog).values({ actor: `志工:${clean(who) || '?'}`, action: 'join_report_fix', target: `join_reg:${reg.id}`, detail: `${r.key} → ${no}` });
   return { orderNo: no, status: j.status };
 }
@@ -718,7 +737,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   return {
     settings, ...regState, usage,
     era: { count: e.n, refunded: e.refunded, updatedAt: e.at ? new Date(e.at).toISOString() : null },
-    reports: reports.map((x) => ({ id: x.r.id, regId: x.r.regId, venue: reg.get(x.r.regId)?.venueName ?? '', key: x.r.key, orderNo: x.r.orderNo, qty: x.r.qty, reporter: x.r.reporter, at: x.r.createdAt.toISOString(),
+    reports: reports.map((x) => ({ id: x.r.id, regId: x.r.regId, venue: reg.get(x.r.regId)?.venueName ?? '', key: x.r.key, buyDate: x.r.buyDate, orderNo: x.r.orderNo, qty: x.r.qty, reporter: x.r.reporter, at: x.r.createdAt.toISOString(),
       status: x.r.status, era: x.r.status === 'pending' ? '' : x.r.status === 'ambiguous' ? '後幾碼對到多筆' : x.r.status === 'mismatch' ? `年代記錄 ${x.r.eraQty ?? '?'} 張`
         : x.eraStatus === 'refunded' ? '已退票' : x.r.orderNo && x.eraQty === null ? '名單上已沒有' : '' })),
     slots: slots.map((x) => {
