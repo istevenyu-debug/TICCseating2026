@@ -75,6 +75,11 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
     <>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>1. 揪團回報連結（共用，不用註冊）</h3>
+        <div className="row" style={{ flexWrap: 'wrap', marginBottom: 6 }}>
+          <span className="small">即時看板（公開，只顯示群名）：</span>
+          <button className="btn small" onClick={() => copy(`${base}/join/board`)}>複製看板連結</button>
+          <a className="btn small" href="/join/board" target="_blank" rel="noreferrer">開啟看板</a>
+        </div>
         <p className="small muted" style={{ marginTop: 0 }}>這一條連結發到群票服務即可：負責人在這裡「建立新群」（自動生效，不用審核），志工點選群回報。舊的每群專屬回報連結仍可使用。</p>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <span className="mono" style={{ wordBreak: 'break-all' }}>{link}</span>

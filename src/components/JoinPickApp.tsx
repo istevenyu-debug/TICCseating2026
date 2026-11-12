@@ -112,6 +112,7 @@ export default function JoinPickApp({ code }: { code: string }) {
       <div className="card">
         <h1 style={{ margin: '0 0 4px' }}>揪團劃位・{page.venue}</h1>
         <div className="muted">{page.event.name}・{fmtDate(page.event.showAt)}・負責人 {page.headName}</div>
+        <a href="/join/board" className="small" style={{ display: 'inline-block', marginTop: 6 }}>📊 看劃位現況（大家選到哪裡）</a>
       </div>
 
       {msg && <div className={`note${msg.kind === 'err' ? ' err' : ''}`} style={{ marginBottom: 12 }}>{msg.text}</div>}

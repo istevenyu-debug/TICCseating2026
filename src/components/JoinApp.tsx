@@ -107,6 +107,7 @@ export default function JoinApp() {
       <div className="card">
         <h1 style={{ margin: '0 0 4px' }}>揪團回報・買 {menu.perSeat} 送 1</h1>
         <div className="muted">{menu.event.name}・{fmtDate(menu.event.showAt)}</div>
+        <a href="/join/board" className="small" style={{ display: 'inline-block', marginTop: 6 }}>📊 看即時看板（回報動態、劃位排序）</a>
       </div>
       <div className="note" style={{ margin: '12px 0' }}>
         <b>志工：</b>在下面打群名的幾個字，點選您的群，再填訂單編號後 4 碼與張數。<br />

@@ -119,7 +119,7 @@ export async function groupSubmit(db: Db, raw: unknown, ip = '', now = new Date(
         await db.insert(t.auditLog).values({ actor: 'public', action: 'join_group_create', target: `join_reg:${reg.id}`, detail: g.name });
         await mailHead(db, reg, 'join_group', `【${ev.name}】${g.headName} 您好，揪團群「${g.name}」已建立。`
           + `請把群名「${g.name}」告訴協助回報的志工：志工打開揪團回報連結${base ? `（${base}/join）` : ''}，點選「${g.name}」，填訂單編號後 4 碼與張數就可以回報。`
-          + `每 ${s.perSeat} 張核對通過＝1 個劃位序；回報截止後，劃位連結會寄到這個信箱。有疑義請洽${s.contact}`);
+          + `每 ${s.perSeat} 張核對通過＝1 個劃位序；回報截止後，劃位連結會寄到這個信箱。${base ? `即時看板：${base}/join/board 。` : ''}有疑義請洽${s.contact}`);
       }
     }
     const group = { id: reg.id, name: gs.find((y) => y.reg.id === reg!.id)?.name ?? x.group?.name ?? '', head: maskName(reg.headName) };

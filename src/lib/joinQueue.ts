@@ -512,10 +512,10 @@ async function regByPick(db: Db, code: string) {
   return r;
 }
 
-const GIFT_ZONE = { id: 1, name: '揪團贈席', color: '#ffd29d', gift: true };
+export const GIFT_ZONE = { id: 1, name: '揪團贈席', color: '#ffd29d', gift: true };
 
 /** 三樓座位（劃位頁用）：贈席空位可選，其餘只看 */
-async function pickSeats(db: Db | Tx, eventId: number) {
+export async function pickSeats(db: Db | Tx, eventId: number) {
   const rows = await db.select({
     id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code,
     status: t.eventSeat.status, usage: t.seatUsage.code,

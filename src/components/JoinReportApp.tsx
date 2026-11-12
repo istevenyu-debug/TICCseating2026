@@ -104,6 +104,7 @@ export default function JoinReportApp({ code, api: api0, bar }: { code?: string;
     <div className="card">
       <h1 style={{ margin: '0 0 4px' }}>揪團回報・{page.venue}</h1>
       <div className="muted">{page.event.name}・{fmtDate(page.event.showAt)}</div>
+      <a href="/join/board" className="small" style={{ display: 'inline-block', marginTop: 6 }}>📊 看即時看板（回報動態、劃位排序）</a>
       {bar}
     </div>
   );
