@@ -74,14 +74,15 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
   return (
     <>
       <div className="card">
-        <h3 style={{ marginTop: 0 }}>1. 登記</h3>
+        <h3 style={{ marginTop: 0 }}>1. 揪團回報連結（共用，不用註冊）</h3>
+        <p className="small muted" style={{ marginTop: 0 }}>這一條連結發到群票服務即可：負責人在這裡「建立新群」（自動生效，不用審核），志工點選群回報。舊的每群專屬回報連結仍可使用。</p>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <span className="mono" style={{ wordBreak: 'break-all' }}>{link}</span>
           <button className="btn small" onClick={() => copy(link)}>複製</button>
           <a className="btn small" href="/join" target="_blank" rel="noreferrer">開啟</a>
         </div>
-        <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={s.open} disabled={busy} onChange={(e) => set({ open: e.target.checked }, e.target.checked ? '已開放登記' : '已關閉登記')} />
-          <span><b>開放登記</b>{s.open ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
+        <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={s.open} disabled={busy} onChange={(e) => set({ open: e.target.checked }, e.target.checked ? '已開放建群' : '已關閉建群')} />
+          <span><b>開放建群</b><span className="small muted">（開賣前先讓負責人建群；開放回報時也能建群）</span>{s.open ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
         <label className="f" style={{ marginTop: 8, maxWidth: 420 }}>送出後顯示「資料有誤請聯絡＿＿」
           <input value={f.contact} maxLength={60} placeholder="例：群票服務" onChange={(e) => setF({ ...f, contact: e.target.value })} /></label>
       </div>
@@ -315,6 +316,16 @@ const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--wa
 function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg'] }) {
   const [open, setOpen] = useState<number | null>(null);
   const [showProv, setShowProv] = useState(false);
+  const [onlyBad, setOnlyBad] = useState(false);
+  const [find, setFind] = useState('');
+  const badRegs = new Set(j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous').map((x) => x.regId));
+  const others = (id: number) => j.totals.filter((x) => x.regId !== id).sort((a, b) => a.venue.localeCompare(b.venue, 'zh-Hant'));
+  const rename = (id: number, old: string) => { const n = window.prompt('新的群名稱', old)?.trim(); if (n && n !== old) act({ action: 'join.group.rename', id, name: n }, '已改名'); };
+  const merge = (id: number, name: string, into: string) => {
+    const to = j.totals.find((x) => String(x.regId) === into);
+    if (!to || !window.confirm(`把「${name}」的回報全部合併到「${to.venue}」？\n「${name}」會被移除（劃位序依回報時間重新計算）。`)) return;
+    act({ action: 'join.group.merge', id, into: to.regId }, `已合併到「${to.venue}」`); setOpen(null);
+  };
   const bad = j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous');
   const pend = j.reports.filter((x) => x.status === 'pending');
   const short = j.totals.filter((x) => x.short);
@@ -340,10 +351,14 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
       )}
       {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報和年代名單不一致（張數不符、已退票、或後幾碼對到多筆需補完整編號），已用紅字標出，不計入張數。請聯絡該團練場確認。</p>}
       {short.length > 0 && <p className="note warn small">鎖定後年代名單更新，{short.map((x) => x.venue).join('、')} 的已核對張數不夠目前的劃位序。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
-      {!j.totals.length ? <p className="muted small">還沒有核准的團練場。</p> : (
+      <div className="row" style={{ gap: 10, margin: '6px 0 8px', flexWrap: 'wrap' }}>
+        <input value={find} placeholder="找群名" style={{ maxWidth: 180 }} onChange={(e) => setFind(e.target.value)} />
+        <label className="check"><input type="checkbox" checked={onlyBad} onChange={(e) => setOnlyBad(e.target.checked)} /><span>只看有問題的（{badRegs.size} 群）</span></label>
+      </div>
+      {!j.totals.length ? <p className="muted small">還沒有群。</p> : (
         <div className="tbl"><table>
-          <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>負責人</th><th>訂單</th><th>已核對</th><th>待核對</th><th>劃位序</th><th>已選位</th></tr></thead>
-          <tbody>{[...j.totals].sort((a, b) => b.verified - a.verified || b.tickets - a.tickets).map((x) => (
+          <thead><tr><th style={{ textAlign: 'left' }}>群名稱</th><th>負責人</th><th>訂單</th><th>已核對</th><th>待核對</th><th>劃位序</th><th>已選位</th></tr></thead>
+          <tbody>{[...j.totals].filter((x) => (!onlyBad || badRegs.has(x.regId)) && (!find.trim() || x.venue.includes(find.trim()))).sort((a, b) => b.verified - a.verified || b.tickets - a.tickets).map((x) => (
             <tr key={x.regId} style={{ cursor: 'pointer', background: x.short ? '#fff4d6' : undefined }} onClick={() => setOpen(open === x.regId ? null : x.regId)}>
               <td>{open === x.regId ? '▼' : '▶'} {x.venue}</td><td>{x.headName}</td><td style={{ textAlign: 'center' }}>{x.orders}</td>
               <td style={{ textAlign: 'center' }}>{x.verified}{x.short && <span style={{ color: 'var(--red)' }}> ⚠</span>}</td><td style={{ textAlign: 'center', color: x.pending ? 'var(--warn)' : undefined }}>{x.pending}</td>
@@ -352,6 +367,15 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
           ))}</tbody>
         </table></div>
       )}
+      {open !== null && (() => { const g = j.totals.find((x) => x.regId === open); return g && (
+        <div className="row" style={{ gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <b>{g.venue}</b>
+          <button className="btn small" disabled={busy} onClick={() => rename(g.regId, g.venue)}>改群名</button>
+          {!j.locked && <select value="" disabled={busy} onChange={(e) => merge(g.regId, g.venue, e.target.value)} style={{ width: 'auto' }}>
+            <option value="">合併到…</option>{others(g.regId).map((o) => <option key={o.regId} value={o.regId}>{o.venue}</option>)}
+          </select>}
+        </div>
+      ); })()}
       {open !== null && (
         <div className="tbl" style={{ marginTop: 10 }}><table>
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th><th>時間</th><th /></tr></thead>
@@ -360,7 +384,10 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
               <td className="mono">{x.orderNo ?? `${x.buyDate ? `${+x.buyDate.slice(2, 4)}/${+x.buyDate.slice(4, 6)}・` : ''}${x.key}`}{x.orderNo && x.key !== x.orderNo && <div className="small muted">輸入 {x.key}</div>}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
               <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}{x.era && <div className="small">{x.era}</div>}</td>
               <td>{x.reporter}</td><td className="small">{tw(x.at)}</td>
-              <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button></td>
+              <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button>
+                {!j.locked && <select value="" disabled={busy} style={{ width: 'auto', marginTop: 4 }} onChange={(e) => { const to = j.totals.find((o) => String(o.regId) === e.target.value); if (to && window.confirm(`把這筆移到「${to.venue}」？`)) act({ action: 'join.report.move', id: x.id, to: to.regId }, `已移到「${to.venue}」`); }}>
+                  <option value="">移到…</option>{others(x.regId).map((o) => <option key={o.regId} value={o.regId}>{o.venue}</option>)}
+                </select>}</td>
             </tr>
           ))}</tbody>
         </table></div>

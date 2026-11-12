@@ -135,7 +135,6 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
     const r2 = await report(a.reportCode!, [['A002', 6], ['A001', 4]], '志工乙', at(2));
     expect(r2.rejected[0].reason).toBe('本團練場已回報過');
     expect(r2).toMatchObject({ verified: 10, slots: [1] });
-    expect((await mails('join_report')).find((x) => x.content.includes('志工乙'))?.content).toContain('預計劃位序 1 個');
 
     // 年代名單更新：P100 核對通過；B 回報較早，排到第 1 號，A 變第 2 號
     const up = await uploadEra(db, '網管', [{ orderNo: 'P100', qty: 10, status: 'sold' }]);

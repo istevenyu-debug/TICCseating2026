@@ -448,6 +448,7 @@ export const joinReport = pgTable('join_report', {
   buyDate: text('buy_date'), // 只輸入後幾碼時的購買日期 YYMMDD（預設回報當天，訂單編號 ER+YYMMDD+流水號）
   qty: integer('qty').notNull(),
   reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
+  device: text('device').notNull().default(''), // 送出的手機（共用連結：只有同一支手機能刪除、補編號）
   // 先收後核：pending 待核對 / ok 已核對 / mismatch 張數不符 / refunded 已退票 / ambiguous 後四碼對到多筆，需補完整編號
   status: text('status').notNull().default('pending'),
   eraQty: integer('era_qty'), // 核對時年代名單上的張數

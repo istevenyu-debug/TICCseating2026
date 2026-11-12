@@ -17,6 +17,7 @@ import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, ma
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
+import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
 import { changeSlotSeat, clearJoinTest, deleteReport, lockSlots, markSent, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
@@ -94,6 +95,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.paint'), kind: z.enum(['gift', 'era', 'sale']), seatIds: z.array(z.string().max(16)).min(1).max(800) }),
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000) }),
   z.object({ action: z.literal('join.report.delete'), id }),
+  z.object({ action: z.literal('join.group.rename'), id, name: z.string().max(60) }),
+  z.object({ action: z.literal('join.group.merge'), id, into: id }),
+  z.object({ action: z.literal('join.report.move'), id, to: id }),
   z.object({ action: z.literal('join.queue.skip') }),
   z.object({ action: z.literal('join.slot.restore'), id }),
   z.object({ action: z.literal('join.slot.void'), id, reason: z.string().max(100) }),
@@ -263,6 +267,9 @@ export async function POST(req: Request) {
       case 'join.paint': return paintFloor3(db, who, a.kind, a.seatIds);
       case 'join.era.upload': return uploadEra(db, who, a.rows);
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);
+      case 'join.group.rename': return renameGroup(db, who, a.id, a.name);
+      case 'join.group.merge': mustBeAdmin(); return mergeGroups(db, who, a.id, a.into);
+      case 'join.report.move': return moveReport(db, who, a.id, a.to);
       case 'join.queue.skip': { const r = await skipTurn(db, who); if (await tickQueue(db, joinBase(req))) dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.slot.restore': return restoreSlot(db, who, a.id);
       case 'join.slot.void': mustBeAdmin(); return voidSlot(db, who, a.id, a.reason);

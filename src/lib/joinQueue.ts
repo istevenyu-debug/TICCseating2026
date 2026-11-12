@@ -255,14 +255,15 @@ export const reportInput = z.object({
  * 送出回報（先收後核）：名單上已有的當下核對（張數不符、已退票擋下）；名單上還沒有的先收下為「待核對」。
  * 一定擋：空白、張數不對、同一次重複、任何團練場已回報過。
  */
-export async function submitReport(db: Db, code: string, raw: unknown, ip = '', now = new Date(), base = '') {
+export async function submitReport(db: Db, code: string, raw: unknown, ip = '', now = new Date(), base = '', device = '') {
   const p = reportInput.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料不完整');
   const reg = await regByReport(db, code);
   const s = await getJoinSettings(db);
   if (!s.reportOpen || await isLocked(db, reg.eventId)) throw new BookingError('SALE_CLOSED', '回報目前沒有開放。');
-  rateLimit(`rep:${code}`, now.getTime(), 60);
-  rateLimit(`repip:${ip}`, now.getTime(), 60);
+  // 共用連結：很多人同一個群、同一個網路位址，額度放寬；每支手機另外限制（joinGroup）
+  rateLimit(`rep:${code}`, now.getTime(), 600);
+  rateLimit(`repip:${ip}`, now.getTime(), 300);
   const rows = p.data.rows.map((x) => ({ orderNo: normOrderNo(String(x.orderNo)), qtyRaw: String(x.qty).trim() })).filter((x) => x.orderNo || x.qtyRaw);
   if (!rows.length) throw new BookingError('INVALID', '請輸入訂單編號與張數');
   // 購買日期：預設今天；可以改成之前的日期（晚報），不能是未來、不能超過 60 天前
@@ -303,18 +304,14 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
     if (m.orderNo) claimed.set(m.orderNo, { regId: reg.id } as typeof all[number]);
   }
   if (ok.length) {
-    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, key: x.key, buyDate: x.buyDate, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
+    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, key: x.key, buyDate: x.buyDate, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter, device: device.slice(0, 64),
       status: x.status, eraQty: x.eraQty, checkedAt: x.status === 'ok' ? now : null, createdAt: now })));
   }
   const tot = await totalsOf(db, reg.id);
   const num = await numbersOf(db, reg.eventId, reg.id, s.perSeat);
-  const venue = await venueName(db, reg);
+  // 每筆回報不再寄信給負責人（Gmail 每天約 500 封上限，留給劃位通知）；負責人看回報看板
   if (ok.length) {
-    const ev = await ev0(db);
     const okN = ok.filter((x) => x.status === 'ok').length;
-    await mailHead(db, reg, 'join_report', `【${ev.name}】${reg.headName} 您好，${p.data.reporter} 剛送出 ${ok.length} 筆訂單（已核對 ${okN} 筆、待核對 ${ok.length - okN} 筆）。`
-      + `${venue}目前已核對 ${tot.verified} 張、待核對 ${tot.pending} 張；預計劃位序 ${num.nos.length} 個${num.nos.length ? `（第 ${num.nos.join('、')} 號，名單更新時可能變動）` : ''}。`
-      + `${base && reg.reportCode ? `查看回報：${reportUrl(base, reg.reportCode)}` : ''}`);
     await db.insert(t.auditLog).values({ actor: `志工:${p.data.reporter}`, action: 'join_report', target: `join_reg:${reg.id}`, detail: JSON.stringify({ ok: ok.length, verified: okN, bad: bad.length }) });
   }
   return { accepted: ok.map((x) => ({ orderNo: x.orderNo ?? x.key, qty: x.qty, status: x.status })), rejected: bad, orders: tot.orders, verified: tot.verified, pending: tot.pending, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat) };

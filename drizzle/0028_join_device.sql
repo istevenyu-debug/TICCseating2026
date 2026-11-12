@@ -1,0 +1,1 @@
+ALTER TABLE "join_report" ADD COLUMN "device" text DEFAULT '' NOT NULL;

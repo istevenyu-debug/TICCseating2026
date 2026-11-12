@@ -183,9 +183,9 @@ export async function deleteVenue(db: Db, actor: string, id: number) {
 
 /* ---------- 公開登記（負責人 4 欄） ---------- */
 
-const phone = z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678'));
-const email = z.string().transform((s) => s.trim()).pipe(z.string().min(1, '請填寫 Email（連結會寄到這裡）').max(120).regex(emailRe, 'Email 格式不正確'));
-const personName = z.string().transform(clean).pipe(z.string().min(1, '請填寫負責人姓名').max(30, '姓名最多 30 字'));
+export const phone = z.string().transform(normalizePhone).pipe(z.string().regex(/^09\d{8}$/, '手機應為 09 開頭的 10 位數字，例如 0912-345-678'));
+export const email = z.string().transform((s) => s.trim()).pipe(z.string().min(1, '請填寫 Email（連結會寄到這裡）').max(120).regex(emailRe, 'Email 格式不正確'));
+export const personName = z.string().transform(clean).pipe(z.string().min(1, '請填寫負責人姓名').max(30, '姓名最多 30 字'));
 
 export const joinInput = z.object({
   venueId: z.number().int().positive().nullable().default(null),
@@ -317,11 +317,6 @@ export async function editReg(db: Db, actor: string, id: number, raw: unknown) {
   const x = p.data;
   if (x.email && !emailRe.test(x.email)) throw new BookingError('INVALID', 'Email 格式不正確');
   const r = await regOf(db, id);
-  if (r.status !== 'rejected') {
-    const [dup] = await db.select({ id: t.joinReg.id }).from(t.joinReg)
-      .where(and(eq(t.joinReg.eventId, r.eventId), ne(t.joinReg.status, 'rejected'), ne(t.joinReg.id, id), eq(t.joinReg.headPhone, x.headPhone)));
-    if (dup) throw new BookingError('INVALID', `手機 ${fmtPhone(x.headPhone)} 已在第 ${dup.id} 號登記`);
-  }
   await db.update(t.joinReg).set({ headName: x.headName, headPhone: x.headPhone, email: x.email, note: x.note }).where(eq(t.joinReg.id, id));
   await db.insert(t.auditLog).values({ actor, action: 'join_reg_edit', target: `join_reg:${id}`, detail: JSON.stringify({ from: [r.headName, r.headPhone, r.email], to: [x.headName, x.headPhone, x.email] }) });
   return true;
@@ -418,7 +413,7 @@ export async function joinRegState(db: Db, base: string) {
   return {
     venues: venues.sort(byName).map((v) => ({ id: v.id, name: v.name, active: v.active, regs: count(v.id), approved: count(v.id, 'approved') })),
     regs: regs.map((r) => ({
-      id: r.id, venueId: r.venueId, venueName: r.venueId ? vName.get(r.venueId) ?? '' : '', venueText: r.venueText,
+      id: r.id, venueId: r.venueId, venueName: r.venueId ? vName.get(r.venueId) ?? '' : r.venueText, venueText: r.venueText,
       headName: r.headName, headPhone: r.headPhone, email: r.email, status: r.status, reason: r.reason, note: r.note,
       createdAt: r.createdAt.toISOString(), decidedAt: r.decidedAt?.toISOString() ?? null, decidedBy: r.decidedBy,
       linksSentAt: r.linksSentAt?.toISOString() ?? null, pickSentAt: r.pickSentAt?.toISOString() ?? null,

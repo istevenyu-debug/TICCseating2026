@@ -7,10 +7,24 @@ type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
   orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
   today: string;
-  list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
+  list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null; mine?: boolean }[];
 };
 type Result = { accepted: { orderNo: string; qty: number; status: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
-type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
+export type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
+export type Page_ = Page;
+/** 頁面資料與送出的來源：每群專屬連結（/join/r/<code>）或共用連結選好的群（/join） */
+export type Api = {
+  load: () => Promise<Res<Page>>;
+  send: (b: { reporter: string; buyDate: string; rows: { orderNo: string; qty: string }[] }) => Promise<Res<Result>>;
+  del: (id: number, reporter: string) => Promise<Res<unknown>>;
+  fix: (id: number, orderNo: string, reporter: string) => Promise<Res<unknown>>;
+};
+const codeApi = (code: string): Api => ({
+  load: () => call<Page>(code),
+  send: (b) => call<Result>(code, b),
+  del: (id, reporter) => call(code, { action: 'delete', id, reporter }),
+  fix: (id, orderNo, reporter) => call(code, { action: 'fix', id, orderNo, reporter }),
+});
 type Row = { orderNo: string; qty: string; reason?: string };
 
 const NAME_KEY = 'join-reporter';
@@ -30,7 +44,8 @@ async function call<T>(code: string, body?: unknown): Promise<Res<T>> {
 }
 
 /** 志工回報：第一次輸入名字（手機記住），之後輸入年代訂單編號＋張數，整批送出 */
-export default function JoinReportApp({ code }: { code: string }) {
+export default function JoinReportApp({ code, api: api0, bar }: { code?: string; api?: Api; bar?: React.ReactNode }) {
+  const [api] = useState<Api>(() => api0 ?? codeApi(code ?? ''));
   const [page, setPage] = useState<Page | null>(null);
   const [err, setErr] = useState('');
   const [name, setName] = useState('');
@@ -44,7 +59,7 @@ export default function JoinReportApp({ code }: { code: string }) {
   const [last, setLast] = useState<Result | null>(null);
   const [showList, setShowList] = useState(true);
 
-  const load = () => call<Page>(code).then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
+  const load = () => api.load().then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
   useEffect(() => { const n = store.get(); setName(n); setEditName(!n); load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setRow = (i: number, v: Partial<Row>) => setRows(rows.map((r, k) => (k === i ? { ...r, ...v, reason: undefined } : r)));
@@ -54,7 +69,7 @@ export default function JoinReportApp({ code }: { code: string }) {
     const filled = rows.filter((r) => r.orderNo.trim() || r.qty.trim());
     if (!filled.length) { setErr('請輸入訂單編號與張數'); return; }
     setBusy(true); setErr('');
-    const r = await call<Result>(code, { reporter: name, buyDate, rows: filled.map((x) => ({ orderNo: x.orderNo, qty: x.qty })) });
+    const r = await api.send({ reporter: name, buyDate, rows: filled.map((x) => ({ orderNo: x.orderNo, qty: x.qty })) });
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     setLast(r.data);
@@ -67,7 +82,7 @@ export default function JoinReportApp({ code }: { code: string }) {
   async function remove(id: number, label: string) {
     if (!window.confirm(`刪除訂單 ${label}？（打錯時刪掉再重新輸入）`)) return;
     setBusy(true);
-    const r = await call<{ orderNo: string }>(code, { action: 'delete', id, reporter: name });
+    const r = await api.del(id, name);
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     setLast(null); load();
@@ -76,19 +91,20 @@ export default function JoinReportApp({ code }: { code: string }) {
   const [fixing, setFixing] = useState<Record<number, string>>({});
   async function fix(id: number) {
     setBusy(true);
-    const r = await call<{ orderNo: string; status: string }>(code, { action: 'fix', id, orderNo: fixing[id] ?? '', reporter: name });
+    const r = await api.fix(id, fixing[id] ?? '', name);
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     setErr(''); setFixing({ ...fixing, [id]: '' }); setLast(null); load();
   }
 
-  if (err && !page) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
+  if (err && !page) return <main className="wrap join">{bar}<div className="card"><p className="note err">{err}</p></div></main>;
   if (!page) return <main className="wrap join"><div className="card muted">載入中…</div></main>;
 
   const head = (
     <div className="card">
       <h1 style={{ margin: '0 0 4px' }}>揪團回報・{page.venue}</h1>
       <div className="muted">{page.event.name}・{fmtDate(page.event.showAt)}</div>
+      {bar}
     </div>
   );
   const summary = (
@@ -123,9 +139,9 @@ export default function JoinReportApp({ code }: { code: string }) {
                 <td style={{ textAlign: 'center' }}>{x.qty}</td>
                 <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
                 <td>{x.reporter}</td>
-                {page.open && <td><button type="button" className="btn small" disabled={busy} onClick={() => remove(x.id, x.orderNo ?? x.key)}>刪除</button></td>}
+                {page.open && <td>{x.mine !== false && <button type="button" className="btn small" disabled={busy} onClick={() => remove(x.id, x.orderNo ?? x.key)}>刪除</button>}</td>}
               </tr>
-              {page.open && x.status === 'ambiguous' && (
+              {page.open && x.status === 'ambiguous' && x.mine !== false && (
                 <tr><td colSpan={5} style={{ background: '#fff4f2' }}>
                   <div className="small" style={{ color: 'var(--red)', marginBottom: 4 }}>有好幾筆訂單後幾碼都是 {x.key}，請補上完整訂單編號：</div>
                   <div style={{ display: 'flex', gap: 6 }}>
