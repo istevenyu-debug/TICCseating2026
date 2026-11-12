@@ -8,10 +8,10 @@ import { ensureFloor3 } from '@/lib/floor';
 import { createVip } from '@/lib/vip';
 import { resetSales } from '@/lib/reset';
 import {
-  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, sendLinks, setJoinSettings, setRegVenue, submitJoin,
+  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  deleteReport, joinAdminState, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, deleteReport, joinAdminState, lockSlots, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -86,58 +86,144 @@ describe('揪團登記（負責人 4 欄）', () => {
     expect(await msg(mergeVenue(db, '網管', await venueId('竹北'), await venueId('新竹竹北')))).toContain('兩邊都有');
   });
 
-  it('寄出連結：Email 兩個連結；沒寄過的才寄；修改負責人可換 Email', async () => {
+  it('連結分開寄：核准後只寄回報連結（含先收後核說明）；鎖定劃位序後才寄劃位連結，只寄有劃位序的', async () => {
     const reg = await venueReg('台北木柵');
-    expect(await sendLinks(db, '網管', BASE)).toEqual({ sent: 1, noEmail: 0 });
+    const other = await venueReg('台北微風小棧');
+    expect(await sendLinks(db, '網管', BASE)).toEqual({ sent: 2, noEmail: 0 });
     expect(await sendLinks(db, '網管', BASE)).toEqual({ sent: 0, noEmail: 0 });
-    const [m] = await mails('join_links');
+    const m = (await mails('join_rlink')).find((x) => x.recipient === '台北木柵@example.com')!;
     expect(m.content).toContain(`${BASE}/join/r/${reg.reportCode}`);
-    expect(m.content).toContain(`${BASE}/join/p/${reg.pickCode}`);
+    expect(m.content).not.toContain('/join/p/');
+    expect(m.content).toContain('先收後核');
     await editReg(db, '網管', reg.id, { headName: '新負責人', headPhone: '0977123456', email: 'new@example.com' });
     expect(await sendLinks(db, '網管', BASE, [reg.id])).toEqual({ sent: 1, noEmail: 0 });
-    expect((await mails('join_links')).map((x) => x.recipient)).toEqual(['台北木柵@example.com', 'new@example.com']);
+    expect((await mails('join_rlink')).map((x) => x.recipient)).toContain('new@example.com');
+
+    expect(await msg(sendPickLinks(db, '網管', BASE))).toContain('還沒鎖定');
+    await eraList([['A1', 10]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await report(reg.reportCode!, [['A1', 10]]);
+    await lockSlots(db, '網管');
+    expect(await sendPickLinks(db, '網管', BASE)).toEqual({ sent: 1, noEmail: 0 });
+    expect(await sendPickLinks(db, '網管', BASE)).toEqual({ sent: 0, noEmail: 0 });
+    const [pm] = await mails('join_plink');
+    expect(pm.recipient).toBe('new@example.com');
+    expect(pm.content).toContain(`${BASE}/join/p/${reg.pickCode}`);
+    expect(pm.content).toContain('第 1 號');
+    expect((await db.select().from(t.joinReg).where(eq(t.joinReg.id, other.id)))[0].pickSentAt).toBeNull();
   });
 });
 
-describe('志工回報：送出當下核對年代名單，每 10 張一個劃位序', () => {
-  it('查無、張數不符、重複、已退票都擋下；正確的存起來並給劃位序；負責人收到 Email', async () => {
+describe('志工回報：先收後核，劃位序依回報時間，鎖定後確定', () => {
+  it('名單上有的當下核對；還沒有的先收「待核對」；上傳名單後自動核對；預計劃位序依回報時間', async () => {
     const a = await venueReg('台北木柵');
     const b = await venueReg('台北微風小棧');
-    await eraList([['A001', 4], ['A002', 6], ['A003', 3], ['B001', 2]]);
+    await eraList([['A001', 4], ['A002', 6]]);
     await uploadEra(db, '網管', [{ orderNo: 'R9', qty: 2, status: 'refunded' }]);
     expect(await msg(report(a.reportCode!, [['A001', 4]]))).toContain('沒有開放');
     await setJoinSettings(db, '網管', { reportOpen: true });
 
-    const r1 = await report(a.reportCode!, [[' a001 ', 4], ['A002', 5], ['ZZZ', 1], ['R9', 2], ['A001', 4], ['', 3]]);
-    expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4 }]);
-    expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', expect.stringContaining('查無此訂單'), '此訂單已退票', '這次重複輸入了', '請輸入訂單編號']);
-    expect(r1).toMatchObject({ tickets: 4, slots: [], next: 6 });
+    const r1 = await report(a.reportCode!, [[' a001 ', 4], ['A002', 5], ['ZZZ1', 1], ['R9', 2], ['A001', 4], ['', 3], ['我的訂單', 1]], '志工甲', T0);
+    expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4, status: 'ok' }, { orderNo: 'ZZZ1', qty: 1, status: 'pending' }]);
+    expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', '此訂單已退票', '這次重複輸入了', '請輸入訂單編號', '訂單編號只能有英文字母、數字']);
+    expect(r1).toMatchObject({ verified: 4, pending: 1, slots: [], next: 6 });
 
-    const r2 = await report(a.reportCode!, [['A002', 6], ['A001', 4]], '志工乙');
-    expect(r2.accepted).toHaveLength(1);
+    // B 先回報一張名單上還沒有的 10 張（待核對），A 之後湊滿 10 張已核對
+    const rb = await report(b.reportCode!, [['P100', 10]], '志工丙', at(1));
+    expect(rb).toMatchObject({ verified: 0, pending: 10, slots: [] });
+    expect((await report(b.reportCode!, [['A001', 4]], '志工丙', at(1))).rejected[0].reason).toContain('其他團練場');
+    const r2 = await report(a.reportCode!, [['A002', 6], ['A001', 4]], '志工乙', at(2));
     expect(r2.rejected[0].reason).toBe('本團練場已回報過');
-    expect(r2).toMatchObject({ tickets: 10, slots: [1], fresh: [1] });
-    expect((await report(b.reportCode!, [['A003', 3]])).rejected).toHaveLength(0);
-    expect((await report(b.reportCode!, [['A002', 6]])).rejected[0].reason).toBe('此訂單已由其他團練場回報');
+    expect(r2).toMatchObject({ verified: 10, slots: [1] });
+    expect((await mails('join_report')).find((x) => x.content.includes('志工乙'))?.content).toContain('預計劃位序 1 個');
 
-    const m = await mails('join_report');
-    expect(m.find((x) => x.content.includes('志工乙'))?.content).toContain('新取得第 1 號');
+    // 年代名單更新：P100 核對通過；B 回報較早，排到第 1 號，A 變第 2 號
+    const up = await uploadEra(db, '網管', [{ orderNo: 'P100', qty: 10, status: 'sold' }]);
+    expect(up).toMatchObject({ newlyVerified: 1, pending: 1 });
+    expect((await reportPage(db, b.reportCode!)).slots).toEqual([1]);
     const page = await reportPage(db, a.reportCode!);
-    expect(page).toMatchObject({ venue: '台北木柵', orders: 2, tickets: 10, slots: [1] });
-    expect(page.list.map((x) => x.reporter)).toEqual(['志工甲', '志工乙']);
+    expect(page).toMatchObject({ venue: '台北木柵', orders: 3, verified: 10, pending: 1, slots: [2], locked: false });
+    expect(page.list.map((x) => [x.orderNo, x.status])).toEqual([['A001', 'ok'], ['ZZZ1', 'pending'], ['A002', 'ok']]);
+
+    // 後來發現張數不符、退票：不計入
+    await uploadEra(db, '網管', [{ orderNo: 'ZZZ1', qty: 3, status: 'sold' }, { orderNo: 'P100', qty: 10, status: 'refunded' }]);
+    expect((await reportPage(db, a.reportCode!)).list.find((x) => x.orderNo === 'ZZZ1')).toMatchObject({ status: 'mismatch', eraQty: 3 });
+    expect(await reportPage(db, b.reportCode!)).toMatchObject({ verified: 0, bad: 1, slots: [] });
+    expect((await reportPage(db, a.reportCode!)).slots).toEqual([1]);
+    const st = await joinAdminState(db, BASE, at(3));
+    expect(st.locked).toBe(false);
+    expect(st.provisional.map((x) => x.venue)).toEqual(['台北木柵']);
   });
 
-  it('一筆跨過好幾個 10 張：一次給好幾個連續劃位序；刪回報不能讓劃位序不夠', async () => {
+  it('志工可刪自己打錯的；鎖定＝關閉回報、確定劃位序（待核對不算）；還沒開始劃位可解除鎖定', async () => {
+    const a = await venueReg('台北木柵');
+    const b = await venueReg('台北微風小棧');
+    await eraList([['A1', 10], ['B1', 10]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await report(b.reportCode!, [['B1', 10]], '丙', T0);
+    await report(a.reportCode!, [['A1', 10], ['TYPO1', 2], ['WAIT1', 10]], '甲', at(1));
+    expect(await msg(deleteOwnReport(db, a.reportCode!, 'NOPE', '甲'))).toContain('找不到');
+    await deleteOwnReport(db, a.reportCode!, 'typo1', '甲');
+    expect((await reportPage(db, a.reportCode!)).list.map((x) => x.orderNo)).toEqual(['A1', 'WAIT1']);
+    expect(await msg(deleteOwnReport(db, b.reportCode!, 'A1', '丙'))).toContain('找不到');
+    expect((await pickPage(db, a.pickCode!, at(2), BASE)).locked).toBe(false);
+
+    expect(await lockSlots(db, '網管', at(2))).toEqual({ slots: 2, venues: 2, notCounted: 1 });
+    expect(await msg(lockSlots(db, '網管'))).toContain('已經鎖定');
+    expect((await joinAdminState(db, BASE, at(2))).settings.reportOpen).toBe(false);
+    expect(await msg(report(a.reportCode!, [['X9', 1]]))).toContain('沒有開放');
+    expect(await msg(deleteOwnReport(db, a.reportCode!, 'WAIT1', '甲'))).toContain('截止');
+    expect((await slotsOf(b.id)).map((x) => x.no)).toEqual([1]);
+    expect((await slotsOf(a.id)).map((x) => x.no)).toEqual([2]);
+    // 鎖定後名單才核對通過：不會多給劃位序（重新整理頁面看到的是正式的）
+    await uploadEra(db, '網管', [{ orderNo: 'WAIT1', qty: 10, status: 'sold' }]);
+    expect(await reportPage(db, a.reportCode!)).toMatchObject({ locked: true, verified: 20, slots: [2] });
+    expect((await pickPage(db, a.pickCode!, at(3), BASE)).locked).toBe(true);
+    // 解除鎖定後重新鎖定：WAIT1 算進去
+    expect(await unlockSlots(db, '網管')).toEqual({ removed: 2 });
+    expect((await lockSlots(db, '網管')).slots).toBe(3);
+    await setJoinSettings(db, '網管', { pickOpen: true });
+    expect(await msg(unlockSlots(db, '網管'))).toContain('已經開始');
+  });
+
+  it('一筆跨過好幾個 10 張：給好幾個連續劃位序；鎖定後刪回報不能讓劃位序不夠、不能改每幾張', async () => {
     const a = await venueReg('台北木柵');
     await eraList([['BIG', 25], ['S1', 1]]);
     await setJoinSettings(db, '網管', { reportOpen: true });
-    expect((await report(a.reportCode!, [['BIG', 25]])).fresh).toEqual([1, 2]);
+    expect((await report(a.reportCode!, [['BIG', 25]])).slots).toEqual([1, 2]);
+    await setJoinSettings(db, '網管', { perSeat: 6 }); // 鎖定前可以改
+    expect((await reportPage(db, a.reportCode!)).slots).toEqual([1, 2, 3, 4]);
+    await setJoinSettings(db, '網管', { perSeat: 10 });
+    await report(a.reportCode!, [['S1', 1]]);
+    await lockSlots(db, '網管');
     const [rep] = await db.select().from(t.joinReport).where(eq(t.joinReport.orderNo, 'BIG'));
     expect(await msg(deleteReport(db, '網管', rep.id))).toContain('不夠');
-    await report(a.reportCode!, [['S1', 1]]);
     const [s1] = await db.select().from(t.joinReport).where(eq(t.joinReport.orderNo, 'S1'));
     await deleteReport(db, '網管', s1.id);
     expect(await msg(setJoinSettings(db, '網管', { perSeat: 5 }))).toContain('不能再改');
+  });
+
+  it('清除揪團測試資料：放回已選的贈席、清回報與名單；預設保留登記，勾選才連登記一起清', async () => {
+    const a = await venueReg('台北木柵');
+    await eraList([['T1', 10]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await report(a.reportCode!, [['T1', 10]]);
+    const seats = await giftSeats(3);
+    await lockSlots(db, '網管');
+    await sendPickLinks(db, '網管', BASE);
+    await setJoinSettings(db, '網管', { pickOpen: true });
+    await tickQueue(db, BASE, T0);
+    await submitPick(db, a.pickCode!, { seatIds: [seats[0]], repName: '王', repPhone: '0912345678' }, T0, BASE);
+    expect(await clearJoinTest(db, '網管')).toEqual({ slots: 1, seats: 1, reports: 1, era: 1, regs: 0 });
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
+    expect(es.status).toBe('free');
+    expect(es.usageId).toBeTruthy(); // 仍是揪團贈席
+    const st = await joinAdminState(db, BASE, T0);
+    expect(st.settings).toMatchObject({ reportOpen: false, pickOpen: false });
+    expect(st.regs.find((r) => r.id === a.id)).toMatchObject({ status: 'approved', pickSentAt: null });
+    expect(st.reports).toHaveLength(0);
+    expect((await clearJoinTest(db, '網管', true)).regs).toBe(1);
+    expect(await db.select().from(t.joinVenue)).toHaveLength(0);
   });
 });
 
@@ -153,6 +239,7 @@ describe('自動輪號劃位', () => {
     await report(b.reportCode!, [['B1', 10]]); // 第 3 號
     await report(c.reportCode!, [['C1', 10]]); // 第 4 號
     await report(d.reportCode!, [['D1', 10]]); // 第 5 號
+    await lockSlots(db, '網管');
     const seats = await giftSeats(12);
     return { a, b, c, d, seats };
   }
@@ -263,6 +350,7 @@ describe('備份', () => {
     await eraList([['A1', 10]]);
     await setJoinSettings(db, '網管', { reportOpen: true });
     await report(a.reportCode!, [['A1', 10]]);
+    await lockSlots(db, '網管');
     const b = await exportAll(db);
     expect(b.tables.join_slot).toHaveLength(1);
     const db2 = await createPgliteDb();

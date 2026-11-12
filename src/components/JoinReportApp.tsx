@@ -4,15 +4,19 @@ import { useEffect, useState } from 'react';
 import { fmtDate } from './JoinApp';
 
 type Page = {
-  event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; perSeat: number; contact: string;
-  orders: number; tickets: number; slots: number[]; next: number;
-  list: { orderNo: string; qty: number; reporter: string; at: string }[];
+  event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
+  orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
+  list: { orderNo: string; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
 };
-type Result = { accepted: { orderNo: string; qty: number }[]; rejected: { orderNo: string; qty: string; reason: string }[]; fresh: number[]; orders: number; tickets: number; slots: number[]; next: number };
+type Result = { accepted: { orderNo: string; qty: number; status: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
 type Row = { orderNo: string; qty: string; reason?: string };
 
 const NAME_KEY = 'join-reporter';
+const ST: Record<string, { text: string; color: string }> = {
+  pending: { text: '待核對', color: 'var(--warn)' }, ok: { text: '已核對 ✓', color: 'var(--ok)' },
+  mismatch: { text: '張數不符', color: 'var(--red)' }, refunded: { text: '已退票', color: 'var(--red)' },
+};
 const blank = (n = 3): Row[] => Array.from({ length: n }, () => ({ orderNo: '', qty: '' }));
 const tw = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 const store = { get: () => { try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; } }, set: (v: string) => { try { localStorage.setItem(NAME_KEY, v); } catch { /* 不能存也沒關係 */ } } };
@@ -34,7 +38,7 @@ export default function JoinReportApp({ code }: { code: string }) {
   const [rows, setRows] = useState<Row[]>(blank());
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<Result | null>(null);
-  const [showList, setShowList] = useState(false);
+  const [showList, setShowList] = useState(true);
 
   const load = () => call<Page>(code).then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
   useEffect(() => { const n = store.get(); setName(n); setEditName(!n); load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -56,6 +60,15 @@ export default function JoinReportApp({ code }: { code: string }) {
     window.scrollTo(0, 0);
   }
 
+  async function remove(orderNo: string) {
+    if (!window.confirm(`刪除訂單 ${orderNo}？（打錯時刪掉再重新輸入）`)) return;
+    setBusy(true);
+    const r = await call<{ orderNo: string }>(code, { action: 'delete', orderNo, reporter: name });
+    setBusy(false);
+    if (!r.ok) { setErr(r.message); return; }
+    setLast(null); load();
+  }
+
   if (err && !page) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
   if (!page) return <main className="wrap join"><div className="card muted">載入中…</div></main>;
 
@@ -68,16 +81,42 @@ export default function JoinReportApp({ code }: { code: string }) {
   const summary = (
     <div className="card" style={{ borderTop: '4px solid var(--accent)' }}>
       <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
-        <div className="stat"><b>{page.orders}</b><span>筆訂單</span></div>
-        <div className="stat"><b>{page.tickets}</b><span>張</span></div>
-        <div className="stat"><b style={{ color: 'var(--ok)' }}>{page.slots.length}</b><span>個劃位序</span></div>
+        <div className="stat"><b style={{ color: 'var(--ok)' }}>{page.verified}</b><span>張已核對</span></div>
+        <div className="stat"><b style={{ color: 'var(--warn)' }}>{page.pending}</b><span>張待核對</span></div>
+        <div className="stat"><b>{page.slots.length}</b><span>個劃位序</span></div>
       </div>
-      {page.slots.length > 0 && <p style={{ margin: '10px 0 0' }}>劃位序：<b>第 {page.slots.join('、')} 號</b></p>}
-      <p className="small muted" style={{ margin: '6px 0 0' }}>每 {page.perSeat} 張一個劃位序，再 {page.next} 張可取得下一個。</p>
+      {page.slots.length > 0 && <p style={{ margin: '10px 0 0' }}>{page.locked ? '劃位序（已確定）' : '目前預計劃位序'}：<b>第 {page.slots.join('、')} 號</b></p>}
+      <p className="small muted" style={{ margin: '6px 0 0' }}>每 {page.perSeat} 張已核對一個劃位序，再 {page.next} 張可多一個。</p>
+    </div>
+  );
+  const howto = (
+    <div className="note" style={{ margin: '12px 0' }}>
+      <b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。
+      <div style={{ marginTop: 4 }}>有疑義請洽 {page.contact}</div>
     </div>
   );
 
-  if (!page.open) return <main className="wrap join">{head}{summary}<div className="note" style={{ textAlign: 'center', padding: 16 }}>回報目前沒有開放。有問題請聯絡負責人{page.headName}。</div></main>;
+  const list = (
+    <div className="card" style={{ marginTop: 12 }}>
+      <button type="button" className="linkbtn" onClick={() => setShowList(!showList)}>{showList ? '▼' : '▶'} 已回報的訂單（{page.list.length}）</button>
+      {showList && page.list.length > 0 && (
+        <div className="tbl" style={{ marginTop: 8 }}><table>
+          <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th>{page.open && <th />}</tr></thead>
+          <tbody>{[...page.list].reverse().map((x) => (
+            <tr key={x.orderNo}>
+              <td className="mono">{x.orderNo}<div className="small muted">{tw(x.at)}</div></td>
+              <td style={{ textAlign: 'center' }}>{x.qty}</td>
+              <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
+              <td>{x.reporter}</td>
+              {page.open && <td><button type="button" className="btn small" disabled={busy} onClick={() => remove(x.orderNo)}>刪除</button></td>}
+            </tr>
+          ))}</tbody>
+        </table></div>
+      )}
+    </div>
+  );
+
+  if (!page.open) return <main className="wrap join">{head}{summary}<div className="note" style={{ textAlign: 'center', padding: 16 }}>{page.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}有疑義請洽 {page.contact}</div>{list}</main>;
 
   if (editName || !name) return (
     <main className="wrap join">
@@ -96,12 +135,13 @@ export default function JoinReportApp({ code }: { code: string }) {
       {head}
       {last && (
         <div className={`note${last.accepted.length ? '' : ' err'}`} style={{ marginBottom: 12 }}>
-          {last.accepted.length > 0 && <div><b>已收到 {last.accepted.length} 筆、{last.accepted.reduce((a, x) => a + x.qty, 0)} 張。</b></div>}
-          {last.fresh.length > 0 && <div style={{ color: 'var(--ok)', fontWeight: 700 }}>取得劃位序第 {last.fresh.join('、')} 號！</div>}
+          {last.accepted.length > 0 && <div><b>已收到 {last.accepted.length} 筆、{last.accepted.reduce((a, x) => a + x.qty, 0)} 張</b>
+            （已核對 {last.accepted.filter((x) => x.status === 'ok').length} 筆、待核對 {last.accepted.filter((x) => x.status === 'pending').length} 筆）。</div>}
           {last.rejected.length > 0 && <div>{last.rejected.length} 筆沒有收下，原因寫在下面，請修正後再送出。</div>}
         </div>
       )}
       {summary}
+      {howto}
       <form onSubmit={send} noValidate className="card" style={{ marginTop: 12 }}>
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 style={{ margin: 0 }}>輸入年代訂單</h2>
@@ -121,19 +161,10 @@ export default function JoinReportApp({ code }: { code: string }) {
         </div>
         <button type="button" className="btn" style={{ marginTop: 10, width: '100%' }} onClick={() => setRows([...rows, ...blank(1)])}>＋ 再一筆</button>
         {err && <p className="note err" style={{ margin: '10px 0 0' }}>{err}</p>}
-        <button className="btn pri" style={{ marginTop: 12, width: '100%', padding: 14, fontSize: 18 }} disabled={busy}>{busy ? '核對中…' : '送出'}</button>
-        <p className="small muted" style={{ margin: '8px 0 0' }}>送出時會立刻和年代名單核對。可以分很多次送。</p>
+        <button className="btn pri" style={{ marginTop: 12, width: '100%', padding: 14, fontSize: 18 }} disabled={busy}>{busy ? '送出中…' : '送出'}</button>
+        <p className="small muted" style={{ margin: '8px 0 0' }}>可以分很多次送。打錯的可在下方「已回報的訂單」刪除後重新輸入。</p>
       </form>
-
-      <div className="card" style={{ marginTop: 12 }}>
-        <button type="button" className="linkbtn" onClick={() => setShowList(!showList)}>{showList ? '▼' : '▶'} 已回報的訂單（{page.list.length}）</button>
-        {showList && (
-          <div className="tbl" style={{ marginTop: 8 }}><table>
-            <thead><tr><th>訂單編號</th><th>張數</th><th>填寫人</th><th>時間</th></tr></thead>
-            <tbody>{[...page.list].reverse().map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td><td>{x.reporter}</td><td className="small">{tw(x.at)}</td></tr>)}</tbody>
-          </table></div>
-        )}
-      </div>
+      {list}
     </main>
   );
 }

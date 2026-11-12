@@ -6,7 +6,7 @@ import { fmtDate } from './JoinApp';
 import { phoneProblem } from '@/lib/validation';
 
 type Page = {
-  event: { name: string; showAt: string }; venue: string; headName: string; tickets: number; now: string;
+  event: { name: string; showAt: string }; venue: string; headName: string; tickets: number; locked: boolean; now: string;
   settings: { pickOpen: boolean; paused: boolean; inHours: boolean; hourFrom: string; hourTo: string; turnMin: number; pickMin: number; pushBack: number; contact: string };
   current: { nos: number[]; venue: string; mine: boolean; deadline: string | null; seen: boolean } | null;
   queue: { no: number; venue: string; mine: boolean; status: string; misses: number; place: number }[];
@@ -142,7 +142,7 @@ export default function JoinPickApp({ code }: { code: string }) {
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>我的劃位序</h2>
-        {!page.mine.length ? <p className="muted" style={{ margin: 0 }}>還沒有劃位序。團練場每滿 10 張已核對的票，就會取得一個。目前 {page.tickets} 張。</p> : (
+        {!page.mine.length ? <p className="muted" style={{ margin: 0 }}>{page.locked ? `本團練場沒有劃位序（已核對 ${page.tickets} 張）。有疑義請洽 ${s.contact}` : `回報截止後才會確定劃位序。目前已核對 ${page.tickets} 張。`}</p> : (
           <div className="tbl"><table>
             <thead><tr><th>劃位序</th><th>狀態</th></tr></thead>
             <tbody>{page.mine.map((x) => <tr key={x.no}><td className="mono">第 {x.no} 號</td><td>{statusText(x, x.place)}</td></tr>)}</tbody>

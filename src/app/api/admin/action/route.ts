@@ -16,8 +16,8 @@ import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
 import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
-import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, renewPickCode, sendLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
-import { changeSlotSeat, deleteReport, markSent, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
+import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
+import { changeSlotSeat, clearJoinTest, deleteReport, lockSlots, markSent, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
@@ -87,6 +87,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.settings'), values: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.links.send'), ids: z.array(id).max(500).optional() }),
   z.object({ action: z.literal('join.reg.renew'), id }),
+  z.object({ action: z.literal('join.pick.send'), ids: z.array(id).max(500).optional() }),
+  z.object({ action: z.literal('join.lock') }),
+  z.object({ action: z.literal('join.unlock') }),
+  z.object({ action: z.literal('join.clear'), withRegs: z.boolean().optional() }),
   z.object({ action: z.literal('join.paint'), kind: z.enum(['gift', 'era', 'sale']), seatIds: z.array(z.string().max(16)).min(1).max(800) }),
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000) }),
   z.object({ action: z.literal('join.report.delete'), id }),
@@ -252,6 +256,10 @@ export async function POST(req: Request) {
       case 'join.settings': { mustBeAdmin(); const r = await setJoinSettings(db, who, a.values); if (await tickQueue(db, joinBase(req))) dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.links.send': { const r = await sendLinks(db, who, joinBase(req), a.ids); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.reg.renew': return renewPickCode(db, who, a.id);
+      case 'join.pick.send': { const r = await sendPickLinks(db, who, joinBase(req), a.ids); dispatchQueued(db).catch(() => undefined); return r; }
+      case 'join.lock': mustBeAdmin(); return lockSlots(db, who);
+      case 'join.unlock': mustBeAdmin(); return unlockSlots(db, who);
+      case 'join.clear': mustBeAdmin(); return clearJoinTest(db, who, !!a.withRegs);
       case 'join.paint': return paintFloor3(db, who, a.kind, a.seatIds);
       case 'join.era.upload': return uploadEra(db, who, a.rows);
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);

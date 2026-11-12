@@ -404,7 +404,8 @@ export const joinReg = pgTable('join_reg', {
   email: text('email').notNull().default(''), // 負責人 Email：回報連結、劃位連結、通知都寄到這裡
   reportCode: text('report_code'), // 團練場回報連結（負責人轉給志工）
   pickCode: text('pick_code'), // 負責人劃位連結（綁 Email，請勿轉傳）
-  linksSentAt: timestamp('links_sent_at', { withTimezone: true }),
+  linksSentAt: timestamp('links_sent_at', { withTimezone: true }), // 回報連結信寄出時間
+  pickSentAt: timestamp('pick_sent_at', { withTimezone: true }), // 劃位連結信寄出時間（劃位序鎖定後才寄）
   status: text('status').notNull().default('pending'), // pending 待審核 / approved 已核准 / rejected 已退回
   reason: text('reason').notNull().default(''), // 退回原因
   note: text('note').notNull().default(''), // 後台備註
@@ -444,6 +445,10 @@ export const joinReport = pgTable('join_report', {
   orderNo: text('order_no').notNull(),
   qty: integer('qty').notNull(),
   reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
+  // 先收後核：pending 待核對（名單上還沒有）/ ok 已核對 / mismatch 張數不符 / refunded 已退票
+  status: text('status').notNull().default('pending'),
+  eraQty: integer('era_qty'), // 核對時年代名單上的張數
+  checkedAt: timestamp('checked_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ order: uniqueIndex('join_report_order_idx').on(t.eventId, t.orderNo), byReg: index('join_report_reg_idx').on(t.regId) }));
 

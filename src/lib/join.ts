@@ -349,26 +349,54 @@ export async function renewPickCode(db: Db, actor: string, id: number) {
 export const reportUrl = (base: string, code: string) => `${base}/join/r/${code}`;
 export const pickUrl = (base: string, code: string) => `${base}/join/p/${code}`;
 
-/** 寄出連結：ids 沒給＝所有已核准、還沒寄過的。沒有 Email 的略過（後台可複製連結用 LINE 傳） */
+/** 寄出回報連結：ids 沒給＝所有已核准、還沒寄過的。沒有 Email 的略過（後台可複製連結用 LINE 傳）。劃位連結另外寄 */
 export async function sendLinks(db: Db, actor: string, base: string, ids?: number[], now = new Date()) {
   const ev = await ev0(db);
   if (!base) throw new BookingError('INVALID', '還不知道網站網址，請從正式網址開啟後台再試');
+  const s = await getJoinSettings(db);
   const regs = await db.select().from(t.joinReg).where(and(eq(t.joinReg.eventId, ev.id), eq(t.joinReg.status, 'approved'),
     ids?.length ? inArray(t.joinReg.id, ids) : undefined));
   const todo = regs.filter((r) => (ids?.length ? true : !r.linksSentAt));
   const vs = await db.select().from(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
   let sent = 0, noEmail = 0;
   for (const r of todo) {
-    if (!r.email || !r.reportCode || !r.pickCode) { noEmail++; continue; }
+    if (!r.email || !r.reportCode) { noEmail++; continue; }
     const venue = vs.find((v) => v.id === r.venueId)?.name ?? '';
-    const content = `【${ev.name}】${r.headName} 您好，感謝您擔任「${venue}」的揪團負責人。以下是兩條連結。`
-      + `回報連結（請轉給協助回報的志工）：${reportUrl(base, r.reportCode)}　`
-      + `劃位連結（只給您本人，請勿轉傳；輪到時用來選位）：${pickUrl(base, r.pickCode)}`;
-    await db.insert(t.notification).values({ channel: 'email', template: 'join_links', recipient: r.email, content });
+    const content = `【${ev.name}】${r.headName} 您好，感謝您擔任「${venue}」的揪團負責人。請把下面的回報連結轉給協助回報的志工：${reportUrl(base, r.reportCode)}　`
+      + `先收後核：志工輸入年代訂單編號與張數後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入；劃位序依回報時間排列，越早回報越前面。`
+      + `劃位連結會在劃位前另外寄給您。有疑義請洽${s.contact}。`;
+    await db.insert(t.notification).values({ channel: 'email', template: 'join_rlink', recipient: r.email, content });
     await db.update(t.joinReg).set({ linksSentAt: now }).where(eq(t.joinReg.id, r.id));
     sent++;
   }
   await db.insert(t.auditLog).values({ actor, action: 'join_links_send', target: `event:${ev.id}`, detail: JSON.stringify({ sent, noEmail }) });
+  return { sent, noEmail };
+}
+
+/** 寄出劃位連結：劃位序鎖定後才寄，只寄給有劃位序的團練場。ids 沒給＝還沒寄過的 */
+export async function sendPickLinks(db: Db, actor: string, base: string, ids?: number[], now = new Date()) {
+  const ev = await ev0(db);
+  if (!base) throw new BookingError('INVALID', '還不知道網站網址，請從正式網址開啟後台再試');
+  const s = await getJoinSettings(db);
+  const slots = await db.select({ regId: t.joinSlot.regId, no: t.joinSlot.no, status: t.joinSlot.status }).from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+  if (!slots.length) throw new BookingError('INVALID', '劃位序還沒鎖定，請先到「回報」按「鎖定劃位序」。');
+  const regs = await db.select().from(t.joinReg).where(and(eq(t.joinReg.eventId, ev.id), eq(t.joinReg.status, 'approved'),
+    ids?.length ? inArray(t.joinReg.id, ids) : undefined));
+  const vs = await db.select().from(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
+  let sent = 0, noEmail = 0;
+  for (const r of regs) {
+    const mine = slots.filter((x) => x.regId === r.id && x.status !== 'void').map((x) => x.no).sort((a, b) => a - b);
+    if (!mine.length || (!ids?.length && r.pickSentAt)) continue;
+    if (!r.email || !r.pickCode) { noEmail++; continue; }
+    const venue = vs.find((v) => v.id === r.venueId)?.name ?? '';
+    const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序已確定：第 ${mine.join('、')} 號，可選 ${mine.length} 席。`
+      + `劃位連結（只給您本人，請勿轉傳）：${pickUrl(base, r.pickCode)}　`
+      + `快輪到時、輪到時都會再寄信通知；輪到後請在 ${s.turnMin} 分鐘內打開。有疑義請洽${s.contact}。`;
+    await db.insert(t.notification).values({ channel: 'email', template: 'join_plink', recipient: r.email, content });
+    await db.update(t.joinReg).set({ pickSentAt: now }).where(eq(t.joinReg.id, r.id));
+    sent++;
+  }
+  await db.insert(t.auditLog).values({ actor, action: 'join_pick_links_send', target: `event:${ev.id}`, detail: JSON.stringify({ sent, noEmail }) });
   return { sent, noEmail };
 }
 
@@ -393,7 +421,7 @@ export async function joinRegState(db: Db, base: string) {
       id: r.id, venueId: r.venueId, venueName: r.venueId ? vName.get(r.venueId) ?? '' : '', venueText: r.venueText,
       headName: r.headName, headPhone: r.headPhone, email: r.email, status: r.status, reason: r.reason, note: r.note,
       createdAt: r.createdAt.toISOString(), decidedAt: r.decidedAt?.toISOString() ?? null, decidedBy: r.decidedBy,
-      linksSentAt: r.linksSentAt?.toISOString() ?? null,
+      linksSentAt: r.linksSentAt?.toISOString() ?? null, pickSentAt: r.pickSentAt?.toISOString() ?? null,
       reportUrl: r.reportCode && base ? reportUrl(base, r.reportCode) : '', pickUrl: r.pickCode && base ? pickUrl(base, r.pickCode) : '',
     })),
   };

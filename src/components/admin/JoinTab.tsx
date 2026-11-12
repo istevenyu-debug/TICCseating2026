@@ -37,12 +37,13 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
   return (
     <div>
       <div className="card">
-        <h2>十二、揪團贈票（銀區三樓・買十送一）</h2>
+        <h2>十二、揪團贈票（銀區三樓・每 {j.settings.perSeat} 張送 1 席）</h2>
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <div className="stat"><b>{n('approved')}</b><span>團練場（已核准）</span></div>
           <div className="stat"><b>{j.reports.length}</b><span>回報訂單</span></div>
-          <div className="stat"><b>{j.reports.reduce((a, x) => a + x.qty, 0)}</b><span>回報張數</span></div>
-          <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.slots.filter((x) => x.status !== 'void').length}</b><span>劃位序</span></div>
+          <div className="stat"><b>{j.reports.filter((x) => x.status === 'ok').reduce((a, x) => a + x.qty, 0)}</b><span>已核對張數</span></div>
+          <div className="stat"><b style={{ color: 'var(--warn)' }}>{j.reports.filter((x) => x.status === 'pending').reduce((a, x) => a + x.qty, 0)}</b><span>待核對張數</span></div>
+          <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.locked ? j.slots.filter((x) => x.status !== 'void').length : j.provisional.length}</b><span>{j.locked ? '劃位序（已鎖定）' : '劃位序（預計）'}</span></div>
           <div className="stat"><b>{done.length}</b><span>已選位</span></div>
           <div className="stat"><b>{j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length}</b><span>贈席空位</span></div>
         </div>
@@ -54,7 +55,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
       {sec === 'reg' && <Regs j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} copy={copy} unsent={unsentLinks} />}
       {sec === 'venue' && <Venues j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
       {sec === 'era' && <Era j={j} act={act} busy={busy} setMsg={setMsg} />}
-      {sec === 'report' && <Reports j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} />}
+      {sec === 'report' && <Reports j={j} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
       {sec === 'seats' && <Seats j={j} act={act} />}
       {sec === 'queue' && <Queue j={j} act={act} busy={busy} queue={queue} setMsg={setMsg} />}
       {sec === 'list' && <List j={j} act={act} busy={busy} done={done} setMsg={setMsg} />}
@@ -87,12 +88,13 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <h3 style={{ marginTop: 0 }}>2. 回報</h3>
         <label className="check"><input type="checkbox" checked={s.reportOpen} disabled={busy} onChange={(e) => set({ reportOpen: e.target.checked }, e.target.checked ? '已開放回報' : '已關閉回報')} />
           <span><b>開放回報</b>{s.reportOpen ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
-        <p className="small muted">開放前請先上傳年代名單：志工送出時會立刻核對。</p>
+        <p className="small muted">先收後核：年代名單上還沒有的訂單先收為「待核對」，每次上傳年代名單自動核對。回報截止時到「回報」按「鎖定劃位序」（會同時關閉回報）。</p>
         <label className="f" style={{ maxWidth: 200 }}>每幾張一個劃位序<input inputMode="numeric" value={f.perSeat} onChange={(e) => setF({ ...f, perSeat: e.target.value })} /></label>
       </div>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>3. 劃位排隊</h3>
-        <label className="check"><input type="checkbox" checked={s.pickOpen} disabled={busy} onChange={(e) => (!e.target.checked || window.confirm('開始劃位排隊？第 1 號會立刻收到「輪到您了」的 Email。')) && set({ pickOpen: e.target.checked }, e.target.checked ? '已開始劃位排隊' : '已停止劃位排隊')} />
+        {!j.locked && <p className="note warn small" style={{ marginTop: 0 }}>劃位序還沒鎖定，不能開始。</p>}
+        <label className="check"><input type="checkbox" checked={s.pickOpen} disabled={busy || (!j.locked && !s.pickOpen)} onChange={(e) => (!e.target.checked || window.confirm('開始劃位排隊？第 1 號會立刻收到「輪到您了」的 Email。')) && set({ pickOpen: e.target.checked }, e.target.checked ? '已開始劃位排隊' : '已停止劃位排隊')} />
           <span><b>開始劃位排隊</b>{s.pickOpen ? <span style={{ color: 'var(--ok)' }}>（進行中）</span> : <span className="muted">（未開始）</span>}</span></label>
         <label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={s.paused} disabled={busy} onChange={(e) => set({ paused: e.target.checked }, e.target.checked ? '已暫停' : '已繼續')} />
           <span><b>暫停</b>（不開始新的一輪；正在選的不計時）</span></label>
@@ -106,6 +108,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         </div>
         <p className="small muted">叫不到：第 1 次延後幾號、第 2 次排到最後、第 3 次暫停排隊（負責人按「我回來了」重新排到最後）。時段留白＝不限。</p>
       </div>
+      <ClearTest act={act} busy={busy} />
       <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim() }, '已儲存設定')}>儲存設定</button>
     </>
   );
@@ -127,14 +130,22 @@ function Regs({ j, act, busy, sure, confirm2, setMsg, copy, unsent }: { j: J; ac
   };
   const send = async (ids?: number[]) => {
     const r = await act({ action: 'join.links.send', ids }) as { sent: number; noEmail: number } | undefined;
-    if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結用 LINE 傳` : ''}` });
+    if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封回報連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結用 LINE 傳` : ''}` });
   };
+  const sendPick = async (ids?: number[]) => {
+    const r = await act({ action: 'join.pick.send', ids }) as { sent: number; noEmail: number } | undefined;
+    if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封劃位連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結傳給負責人` : ''}` });
+  };
+  const withSlot = new Set(j.slots.filter((x) => x.status !== 'void').map((x) => x.regId));
+  const unsentPick = j.regs.filter((r) => r.status === 'approved' && withSlot.has(r.id) && !r.pickSentAt).length;
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>登記審核</h3>
-      <p className="small muted" style={{ marginTop: 0 }}>一個團練場只能核准一位負責人。核准後按「寄出連結」：負責人收到回報連結（轉給志工）與劃位連結（本人用）。</p>
+      <p className="small muted" style={{ marginTop: 0 }}>一個團練場只能核准一位負責人。核准後按「寄出回報連結」（負責人轉給志工）。劃位序鎖定後，再按「寄出劃位連結」（負責人本人用，只寄給有劃位序的）。</p>
       {unsent > 0 && <button className="btn pri small" disabled={busy} onClick={() => confirm2('join-send-all', () => send())} style={{ marginBottom: 10 }}>
-        {sure === 'join-send-all' ? `再按一次：寄給 ${unsent} 位` : `寄出所有未寄的連結（${unsent} 位）`}</button>}
+        {sure === 'join-send-all' ? `再按一次：寄給 ${unsent} 位` : `寄出所有未寄的回報連結（${unsent} 位）`}</button>}
+      {j.locked && unsentPick > 0 && <button className="btn pri small" disabled={busy} onClick={() => confirm2('join-pick-all', () => sendPick())} style={{ marginBottom: 10, marginLeft: 6 }}>
+        {sure === 'join-pick-all' ? `再按一次：寄給 ${unsentPick} 位` : `寄出劃位連結（${unsentPick} 位有劃位序）`}</button>}
       <div className="row" style={{ flexWrap: 'wrap' }}>
         {(['pending', 'approved', 'rejected'] as const).map((s) => <button key={s} className={`btn small${view === s ? ' pri' : ''}`} onClick={() => setView(s)}>{STATUS[s]}（{n(s)}）</button>)}
         <input style={{ maxWidth: 200 }} placeholder="搜尋姓名、手機、團練場" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -178,14 +189,15 @@ function Regs({ j, act, busy, sure, confirm2, setMsg, copy, unsent }: { j: J; ac
               {r.status === 'approved' && (
                 <div className="small" style={{ marginTop: 6 }}>
                   <div>回報連結（給志工）：<button className="linkbtn" onClick={() => copy(r.reportUrl)}>複製</button>　劃位連結（負責人本人）：<button className="linkbtn" onClick={() => copy(r.pickUrl)}>複製</button></div>
-                  <div className="muted">{r.linksSentAt ? `連結信已寄 ${tw(r.linksSentAt)}` : '連結信還沒寄'}</div>
+                  <div className="muted">{r.linksSentAt ? `回報連結已寄 ${tw(r.linksSentAt)}` : '回報連結還沒寄'}・{r.pickSentAt ? `劃位連結已寄 ${tw(r.pickSentAt)}` : '劃位連結還沒寄'}</div>
                 </div>
               )}
               <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
                 {r.status === 'pending' && <button className="btn pri small" disabled={busy || !r.venueId} title={r.venueId ? '' : '先指定團練場'} onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'approved' }, '已核准')}>核准</button>}
                 {r.status === 'pending' && <button className="btn small" disabled={busy} onClick={() => reject(r)}>退回</button>}
-                {r.status === 'approved' && <button className="btn small" disabled={busy || !r.email} onClick={() => send([r.id])}>{r.linksSentAt ? '重寄連結' : '寄出連結'}</button>}
-                {r.status === 'approved' && <button className="btn small" disabled={busy} onClick={() => confirm2(`join-renew-${r.id}`, () => act({ action: 'join.reg.renew', id: r.id }, '已換新的劃位連結，請重寄連結'))}>{sure === `join-renew-${r.id}` ? '再按一次（舊連結失效）' : '換劃位連結'}</button>}
+                {r.status === 'approved' && <button className="btn small" disabled={busy || !r.email} onClick={() => send([r.id])}>{r.linksSentAt ? '重寄回報連結' : '寄出回報連結'}</button>}
+                {r.status === 'approved' && j.locked && withSlot.has(r.id) && <button className="btn small" disabled={busy || !r.email} onClick={() => sendPick([r.id])}>{r.pickSentAt ? '重寄劃位連結' : '寄出劃位連結'}</button>}
+                {r.status === 'approved' && <button className="btn small" disabled={busy} onClick={() => confirm2(`join-renew-${r.id}`, () => act({ action: 'join.reg.renew', id: r.id }, '已換新的劃位連結，請重寄劃位連結'))}>{sure === `join-renew-${r.id}` ? '再按一次（舊連結失效）' : '換劃位連結'}</button>}
                 {r.status !== 'pending' && <button className="btn small" disabled={busy} onClick={() => act({ action: 'join.reg.decide', id: r.id, status: 'pending' }, '已改回待審核')}>改回待審核</button>}
                 <button className="btn small" disabled={busy} onClick={() => setEdit({ id: r.id, headName: r.headName, headPhone: r.headPhone, email: r.email, note: r.note })}>修改</button>
                 {r.status === 'rejected' && <button className="btn small" disabled={busy} onClick={() => confirm2(`join-del-${r.id}`, () => act({ action: 'join.reg.delete', id: r.id }, '已刪除'))}>{sure === `join-del-${r.id}` ? '再按一次刪除' : '刪除'}</button>}
@@ -283,8 +295,8 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
               <div className="tbl"><table><thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th></tr></thead>
                 <tbody>{rows.slice(0, 5).map((r, i) => { const x = toRow(r); return <tr key={i}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>; })}</tbody></table></div>
               <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={async () => {
-                const r = await act({ action: 'join.era.upload', rows: rows.map(toRow) }) as { rows: number; added: number; changed: number; refunded: number } | undefined;
-                if (r) { setGrid(null); setMsg({ kind: 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}` }); }
+                const r = await act({ action: 'join.era.upload', rows: rows.map(toRow) }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number } | undefined;
+                if (r) { setGrid(null); setMsg({ kind: r.mismatch || r.refundedReports ? 'warn' : 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}。回報核對：新通過 ${r.newlyVerified} 筆、仍待核對 ${r.pending} 筆${r.mismatch ? `、張數不符 ${r.mismatch} 筆` : ''}${r.refundedReports ? `、已退票 ${r.refundedReports} 筆` : ''}` }); }
               }}>上傳 {rows.length} 筆</button>
             </>
           )}
@@ -295,35 +307,80 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
 }
 
 /* ---------- 回報 ---------- */
-function Reports({ j, act, busy, sure, confirm2 }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2'] }) {
+const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--warn)'], ok: ['已核對', 'var(--ok)'], mismatch: ['張數不符', 'var(--red)'], refunded: ['已退票', 'var(--red)'] };
+function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg'] }) {
   const [open, setOpen] = useState<number | null>(null);
-  const odd = j.reports.filter((x) => x.era);
+  const [showProv, setShowProv] = useState(false);
+  const bad = j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded');
+  const pend = j.reports.filter((x) => x.status === 'pending');
+  const short = j.totals.filter((x) => x.short);
+  const lock = async () => {
+    const msg = `鎖定劃位序？\n・回報會同時關閉\n・目前預計的 ${j.provisional.length} 個劃位序會確定下來${pend.length ? `\n・還有 ${pend.length} 筆「待核對」不會算進去（建議先上傳最新年代名單）` : ''}`;
+    if (!window.confirm(msg)) return;
+    const r = await act({ action: 'join.lock' }) as { slots: number; venues: number; notCounted: number } | undefined;
+    if (r) setMsg({ kind: r.notCounted ? 'warn' : 'ok', text: `已鎖定 ${r.slots} 個劃位序（${r.venues} 個團練場）${r.notCounted ? `；${r.notCounted} 筆待核對沒有算進去` : ''}。下一步：到「登記審核」寄出劃位連結。` });
+  };
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>各團練場回報</h3>
-      {odd.length > 0 && <p className="note warn small">年代名單更新後，有 {odd.length} 筆回報和名單不一致（退票或張數變少），已用黃色標出。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
+      <div className="note small" style={{ marginBottom: 10 }}>
+        {j.locked ? <><b style={{ color: 'var(--ok)' }}>劃位序已鎖定</b>（{j.slots.filter((x) => x.status !== 'void').length} 個）。
+          {!j.slots.some((x) => x.status !== 'wait') && !j.settings.pickOpen && <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => confirm2('join-unlock', () => act({ action: 'join.unlock' }, '已解除鎖定，回報仍關閉；需要時到「設定」重新開放'))}>{sure === 'join-unlock' ? '再按一次解除' : '解除鎖定'}</button>}</>
+          : <>預計 <b>{j.provisional.length}</b> 個劃位序（依回報時間、只算已核對）。待核對 {pend.length} 筆。
+            <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy || !j.provisional.length} onClick={lock}>鎖定劃位序（回報截止）</button>
+            {j.provisional.length > 0 && <button className="linkbtn" style={{ marginLeft: 8 }} onClick={() => setShowProv(!showProv)}>{showProv ? '收起' : '看預計順序'}</button>}</>}
+      </div>
+      {showProv && !j.locked && (
+        <div className="tbl" style={{ marginBottom: 10 }}><table><thead><tr><th>號碼</th><th style={{ textAlign: 'left' }}>團練場</th><th>滿額時間</th></tr></thead>
+          <tbody>{j.provisional.map((x) => <tr key={x.no}><td style={{ textAlign: 'center' }}>{x.no}</td><td>{x.venue}</td><td className="small">{tw(x.at)}</td></tr>)}</tbody></table></div>
+      )}
+      {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報和年代名單不一致（張數不符或已退票），已用紅字標出，不計入張數。請聯絡該團練場確認。</p>}
+      {short.length > 0 && <p className="note warn small">鎖定後年代名單更新，{short.map((x) => x.venue).join('、')} 的已核對張數不夠目前的劃位序。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
       {!j.totals.length ? <p className="muted small">還沒有核准的團練場。</p> : (
         <div className="tbl"><table>
-          <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>負責人</th><th>訂單</th><th>張數</th><th>核對後</th><th>劃位序</th><th>已選位</th></tr></thead>
-          <tbody>{j.totals.sort((a, b) => b.tickets - a.tickets).map((x) => (
+          <thead><tr><th style={{ textAlign: 'left' }}>團練場</th><th>負責人</th><th>訂單</th><th>已核對</th><th>待核對</th><th>劃位序</th><th>已選位</th></tr></thead>
+          <tbody>{[...j.totals].sort((a, b) => b.verified - a.verified || b.tickets - a.tickets).map((x) => (
             <tr key={x.regId} style={{ cursor: 'pointer', background: x.short ? '#fff4d6' : undefined }} onClick={() => setOpen(open === x.regId ? null : x.regId)}>
-              <td>{open === x.regId ? '▼' : '▶'} {x.venue}</td><td>{x.headName}</td><td style={{ textAlign: 'center' }}>{x.orders}</td><td style={{ textAlign: 'center' }}>{x.tickets}</td>
-              <td style={{ textAlign: 'center' }}>{x.verified}{x.short && <span style={{ color: 'var(--red)' }}> ⚠</span>}</td><td style={{ textAlign: 'center' }}>{x.slots}</td><td style={{ textAlign: 'center' }}>{x.done}</td>
+              <td>{open === x.regId ? '▼' : '▶'} {x.venue}</td><td>{x.headName}</td><td style={{ textAlign: 'center' }}>{x.orders}</td>
+              <td style={{ textAlign: 'center' }}>{x.verified}{x.short && <span style={{ color: 'var(--red)' }}> ⚠</span>}</td><td style={{ textAlign: 'center', color: x.pending ? 'var(--warn)' : undefined }}>{x.pending}</td>
+              <td style={{ textAlign: 'center' }}>{x.slots}{!j.locked && x.slots ? <span className="muted small">（預計）</span> : null}</td><td style={{ textAlign: 'center' }}>{x.done}</td>
             </tr>
           ))}</tbody>
         </table></div>
       )}
       {open !== null && (
         <div className="tbl" style={{ marginTop: 10 }}><table>
-          <thead><tr><th>訂單編號</th><th>張數</th><th>填寫人</th><th>時間</th><th>名單</th><th /></tr></thead>
+          <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th><th>時間</th><th /></tr></thead>
           <tbody>{j.reports.filter((x) => x.regId === open).map((x) => (
-            <tr key={x.id} style={x.era ? { background: '#fff4d6' } : undefined}>
-              <td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td><td>{x.reporter}</td><td className="small">{tw(x.at)}</td><td className="small">{x.era || '相符'}</td>
+            <tr key={x.id}>
+              <td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
+              <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}{x.era && <div className="small">{x.era}</div>}</td>
+              <td>{x.reporter}</td><td className="small">{tw(x.at)}</td>
               <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button></td>
             </tr>
           ))}</tbody>
         </table></div>
       )}
+    </div>
+  );
+}
+
+/* ---------- 清除揪團測試資料 ---------- */
+function ClearTest({ act, busy }: { act: Act; busy: boolean }) {
+  const [withRegs, setWithRegs] = useState(false);
+  const go = () => {
+    const what = `回報、年代名單、劃位序、已選的贈席${withRegs ? '，以及登記與團練場清單' : ''}`;
+    if (!window.confirm(`清除揪團測試資料？\n會刪除：${what}。\n三樓座位設定（贈席／年代售出）保留。\n只能在正式開始前使用！`)) return;
+    const typed = window.prompt('確定要清除，請輸入「清除」兩個字', '');
+    if (typed?.trim() !== '清除') return;
+    act({ action: 'join.clear', withRegs }, '已清除揪團測試資料');
+  };
+  return (
+    <div className="card" style={{ borderLeft: '4px solid var(--red)' }}>
+      <h3 style={{ marginTop: 0 }}>清除揪團測試資料</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>老大在年代後台測試購買、試回報後使用。只清揪團，不影響一般售票與二樓。正式回報開始後請勿使用。</p>
+      <label className="check"><input type="checkbox" checked={withRegs} onChange={(e) => setWithRegs(e.target.checked)} /><span>連登記與團練場清單一起清除（通常不用勾）</span></label>
+      <button className="btn small" style={{ marginTop: 8, color: 'var(--red)' }} disabled={busy} onClick={go}>清除揪團測試資料</button>
     </div>
   );
 }

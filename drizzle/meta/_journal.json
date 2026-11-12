@@ -176,6 +176,13 @@
       "when": 1794312311255,
       "tag": "0024_join_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1794445323668,
+      "tag": "0025_join_verify_later",
+      "breakpoints": true
     }
   ]
 }

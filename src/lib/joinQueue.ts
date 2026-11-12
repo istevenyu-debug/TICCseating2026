@@ -32,7 +32,15 @@ export const eraInput = z.array(z.object({
   status: z.enum(['sold', 'refunded']),
 })).min(1, '名單是空的').max(50000);
 
-/** 上傳年代名單：同一訂單編號以新的為準（張數、已售／已退） */
+/** 依年代名單判定一筆回報：pending 名單上還沒有 / ok 相符 / mismatch 張數不符 / refunded 已退票 */
+export function judge(e: { qty: number; status: string } | undefined | null, qty: number) {
+  if (!e) return { status: 'pending' as const, eraQty: null as number | null };
+  if (e.status !== 'sold') return { status: 'refunded' as const, eraQty: e.qty };
+  return { status: e.qty === qty ? 'ok' as const : 'mismatch' as const, eraQty: e.qty };
+}
+export const REPORT_STATUS: Record<string, string> = { pending: '待核對', ok: '已核對', mismatch: '張數不符', refunded: '已退票' };
+
+/** 上傳年代名單：同一訂單編號以新的為準（張數、已售／已退），然後重新核對所有回報 */
 export async function uploadEra(db: Db, actor: string, raw: unknown, now = new Date()) {
   const p = eraInput.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '名單格式不正確');
@@ -54,32 +62,96 @@ export async function uploadEra(db: Db, actor: string, raw: unknown, now = new D
     });
   }
   const refunded = rows.filter((r) => r.status === 'refunded').length;
-  await db.insert(t.auditLog).values({ actor, action: 'join_era_upload', target: `event:${ev.id}`, detail: JSON.stringify({ rows: rows.length, added, changed, refunded }) });
-  return { rows: rows.length, added, changed, refunded };
+  const check = await recheckReports(db, ev.id, now);
+  await db.insert(t.auditLog).values({ actor, action: 'join_era_upload', target: `event:${ev.id}`, detail: JSON.stringify({ rows: rows.length, added, changed, refunded, ...check }) });
+  return { rows: rows.length, added, changed, refunded, ...check };
+}
+
+/** 先收後核：用目前的年代名單重新核對所有回報 */
+export async function recheckReports(db: Db, eventId: number, now = new Date()) {
+  const reps = await db.select({ r: t.joinReport, eqty: t.joinEra.qty, estatus: t.joinEra.status }).from(t.joinReport)
+    .leftJoin(t.joinEra, and(eq(t.joinEra.eventId, t.joinReport.eventId), eq(t.joinEra.orderNo, t.joinReport.orderNo)))
+    .where(eq(t.joinReport.eventId, eventId));
+  const n = { verified: 0, pending: 0, mismatch: 0, refundedReports: 0, newlyVerified: 0 };
+  for (const x of reps) {
+    const j = judge(x.eqty === null ? null : { qty: x.eqty, status: x.estatus ?? 'sold' }, x.r.qty);
+    if (j.status === 'ok') n.verified++; else if (j.status === 'pending') n.pending++; else if (j.status === 'mismatch') n.mismatch++; else n.refundedReports++;
+    if (j.status !== x.r.status || j.eraQty !== x.r.eraQty) {
+      if (j.status === 'ok' && x.r.status !== 'ok') n.newlyVerified++;
+      await db.update(t.joinReport).set({ status: j.status, eraQty: j.eraQty, checkedAt: now }).where(eq(t.joinReport.id, x.r.id));
+    }
+  }
+  return n;
 }
 
 /* ---------- 合計與劃位序 ---------- */
 
+/** 團練場合計：全部回報、已核對、待核對、不計入；已鎖定的劃位序 */
 async function totalsOf(db: Db | Tx, regId: number) {
-  const [r] = await db.select({ orders: sql<number>`count(*)::int`, tickets: sql<number>`coalesce(sum(${t.joinReport.qty}), 0)::int` })
-    .from(t.joinReport).where(eq(t.joinReport.regId, regId));
+  const reps = await db.select({ qty: t.joinReport.qty, status: t.joinReport.status }).from(t.joinReport).where(eq(t.joinReport.regId, regId));
+  const sum = (st?: string) => reps.filter((x) => !st || x.status === st).reduce((a, x) => a + x.qty, 0);
   const slots = await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.regId, regId), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no));
-  return { orders: r.orders, tickets: r.tickets, slots };
+  return { orders: reps.length, tickets: sum(), verified: sum('ok'), pending: sum('pending'), bad: reps.filter((x) => x.status === 'mismatch' || x.status === 'refunded').length, slots };
 }
 
-/** 依合計補發劃位序（只增不減）。回傳新拿到的序號 */
-async function awardSlots(tx: Tx, eventId: number, regId: number, perSeat: number, now: Date) {
-  const { tickets, slots } = await totalsOf(tx, regId);
-  const want = Math.floor(tickets / perSeat);
-  const fresh: number[] = [];
-  for (let i = slots.length; i < want; i++) {
-    const [m] = await tx.select({ no: sql<number>`coalesce(max(${t.joinSlot.no}), 0)::int`, pos: sql<number>`coalesce(max(${t.joinSlot.pos}), 0)` })
-      .from(t.joinSlot).where(eq(t.joinSlot.eventId, eventId));
-    const no = m.no + 1;
-    await tx.insert(t.joinSlot).values({ eventId, regId, no, pos: Math.max(Number(m.pos), m.no) + 1, earnedAt: now });
-    fresh.push(no);
+export async function isLocked(db: Db | Tx, eventId: number) {
+  const [x] = await db.select({ id: t.joinSlot.id }).from(t.joinSlot).where(eq(t.joinSlot.eventId, eventId)).limit(1);
+  return !!x;
+}
+
+/**
+ * 預計劃位序：只算已核對的張數，依「回報時間」排。
+ * 每個團練場的已核對張數累計每跨過 perSeat，就在那一筆回報的時間取得一個；全場依時間先後編號。
+ */
+export async function provisionalSlots(db: Db | Tx, eventId: number, perSeat: number) {
+  const approved = new Set((await db.select({ id: t.joinReg.id }).from(t.joinReg).where(and(eq(t.joinReg.eventId, eventId), eq(t.joinReg.status, 'approved')))).map((r) => r.id));
+  const reps = await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, eventId), eq(t.joinReport.status, 'ok'))).orderBy(asc(t.joinReport.createdAt), asc(t.joinReport.id));
+  const sum = new Map<number, number>();
+  const out: { regId: number; at: Date; no: number }[] = [];
+  for (const r of reps) {
+    if (!approved.has(r.regId)) continue;
+    const before = sum.get(r.regId) ?? 0, after = before + r.qty;
+    sum.set(r.regId, after);
+    for (let k = Math.floor(before / perSeat) + 1; k <= Math.floor(after / perSeat); k++) out.push({ regId: r.regId, at: r.createdAt, no: out.length + 1 });
   }
-  return fresh;
+  return out;
+}
+
+/** 某團練場的劃位序：鎖定後是正式的，鎖定前是預計的 */
+async function numbersOf(db: Db | Tx, eventId: number, regId: number, perSeat: number) {
+  const locked = await isLocked(db, eventId);
+  const nos = locked ? (await totalsOf(db, regId)).slots.map((x) => x.no) : (await provisionalSlots(db, eventId, perSeat)).filter((x) => x.regId === regId).map((x) => x.no);
+  return { locked, nos };
+}
+
+/** 鎖定劃位序：關閉回報，把預計劃位序寫成正式的（待核對的不計入）。之後才寄劃位連結 */
+export async function lockSlots(db: Db, actor: string, now = new Date()) {
+  const ev = await ev0(db);
+  const s = await getJoinSettings(db);
+  return db.transaction(async (tx) => {
+    if (await isLocked(tx, ev.id)) throw new BookingError('INVALID', '劃位序已經鎖定了。');
+    const prov = await provisionalSlots(tx, ev.id, s.perSeat);
+    if (!prov.length) throw new BookingError('INVALID', '還沒有任何劃位序（已核對的張數不夠）。');
+    for (const x of prov) await tx.insert(t.joinSlot).values({ eventId: ev.id, regId: x.regId, no: x.no, pos: x.no, earnedAt: x.at });
+    await tx.insert(t.appSetting).values({ key: 'join.reportOpen', value: '0' }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: '0' } });
+    const [pend] = await tx.select({ n: sql<number>`count(*)::int` }).from(t.joinReport).where(and(eq(t.joinReport.eventId, ev.id), ne(t.joinReport.status, 'ok')));
+    await tx.insert(t.auditLog).values({ actor, action: 'join_lock', target: `event:${ev.id}`, detail: JSON.stringify({ slots: prov.length, notCounted: pend.n, at: now.toISOString() }) });
+    return { slots: prov.length, venues: new Set(prov.map((x) => x.regId)).size, notCounted: pend.n };
+  });
+}
+
+/** 解除鎖定：只有還沒開始劃位時可以（例如要再補一次年代名單） */
+export async function unlockSlots(db: Db, actor: string) {
+  const ev = await ev0(db);
+  const s = await getJoinSettings(db);
+  return db.transaction(async (tx) => {
+    const slots = await tx.select().from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+    if (!slots.length) throw new BookingError('INVALID', '劃位序還沒鎖定。');
+    if (s.pickOpen || slots.some((x) => x.status !== 'wait' || x.misses > 0)) throw new BookingError('INVALID', '已經開始劃位，不能解除鎖定。');
+    await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+    await tx.insert(t.auditLog).values({ actor, action: 'join_unlock', target: `event:${ev.id}`, detail: String(slots.length) });
+    return { removed: slots.length };
+  });
 }
 
 /* ---------- 志工回報 ---------- */
@@ -95,18 +167,19 @@ async function venueName(db: Db | Tx, r: Reg) {
   return v?.name ?? '';
 }
 
-/** 回報頁：團練場、合計、已回報的訂單 */
+/** 回報頁：團練場、合計（已核對／待核對）、劃位序（預計或正式）、已回報的訂單與狀態 */
 export async function reportPage(db: Db, code: string) {
   const r = await regByReport(db, code);
   const ev = await ev0(db);
   const s = await getJoinSettings(db);
   const tot = await totalsOf(db, r.id);
+  const num = await numbersOf(db, ev.id, r.id, s.perSeat);
   const list = await db.select().from(t.joinReport).where(eq(t.joinReport.regId, r.id)).orderBy(asc(t.joinReport.id));
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: await venueName(db, r), headName: r.headName,
-    open: s.reportOpen, perSeat: s.perSeat, contact: s.contact,
-    orders: tot.orders, tickets: tot.tickets, slots: tot.slots.map((x) => x.no), next: s.perSeat - (tot.tickets % s.perSeat),
-    list: list.map((x) => ({ orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString() })),
+    open: s.reportOpen && !num.locked, locked: num.locked, perSeat: s.perSeat, contact: s.contact,
+    orders: tot.orders, verified: tot.verified, pending: tot.pending, bad: tot.bad, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat),
+    list: list.map((x) => ({ orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty })),
   };
 }
 
@@ -115,13 +188,16 @@ export const reportInput = z.object({
   rows: z.array(z.object({ orderNo: z.string().max(60).default(''), qty: z.union([z.number(), z.string()]).default('') })).min(1).max(50, '一次最多 50 筆'),
 });
 
-/** 送出回報：逐筆核對年代名單；正確的存起來、不對的退回說明。合計跨過 10、20… 立刻給劃位序 */
+/**
+ * 送出回報（先收後核）：名單上已有的當下核對（張數不符、已退票擋下）；名單上還沒有的先收下為「待核對」。
+ * 一定擋：空白、張數不對、同一次重複、任何團練場已回報過。
+ */
 export async function submitReport(db: Db, code: string, raw: unknown, ip = '', now = new Date(), base = '') {
   const p = reportInput.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料不完整');
   const reg = await regByReport(db, code);
   const s = await getJoinSettings(db);
-  if (!s.reportOpen) throw new BookingError('SALE_CLOSED', '回報目前沒有開放。');
+  if (!s.reportOpen || await isLocked(db, reg.eventId)) throw new BookingError('SALE_CLOSED', '回報目前沒有開放。');
   rateLimit(`rep:${code}`, now.getTime(), 60);
   rateLimit(`repip:${ip}`, now.getTime(), 60);
   const rows = p.data.rows.map((x) => ({ orderNo: normOrderNo(String(x.orderNo)), qtyRaw: String(x.qty).trim() })).filter((x) => x.orderNo || x.qtyRaw);
@@ -130,50 +206,90 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
   const era = new Map((nos.length ? await db.select().from(t.joinEra).where(and(eq(t.joinEra.eventId, reg.eventId), inArray(t.joinEra.orderNo, nos))) : []).map((e) => [e.orderNo, e]));
   const done = new Map((nos.length ? await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, reg.eventId), inArray(t.joinReport.orderNo, nos))) : []).map((e) => [e.orderNo, e]));
   const seen = new Set<string>();
-  const ok: { orderNo: string; qty: number }[] = [];
+  const ok: { orderNo: string; qty: number; status: string; eraQty: number | null }[] = [];
   const bad: { orderNo: string; qty: string; reason: string }[] = [];
   for (const x of rows) {
     const qty = Number(x.qtyRaw);
     const e = era.get(x.orderNo);
     const d = done.get(x.orderNo);
+    const j = judge(e, qty);
     const reason = !x.orderNo ? '請輸入訂單編號'
       : !/^\d+$/.test(x.qtyRaw) || qty < 1 || qty > 100 ? '張數請填 1 以上的數字'
-        : seen.has(x.orderNo) ? '這次重複輸入了'
-          : d ? (d.regId === reg.id ? '本團練場已回報過' : '此訂單已由其他團練場回報')
-            : !e ? '查無此訂單，請確認號碼；剛購買的請等名單更新後再回報'
-              : e.status !== 'sold' ? '此訂單已退票'
-                : e.qty !== qty ? `張數不符（年代記錄為 ${e.qty} 張）` : '';
+        : !/^[0-9A-Z_/-]{2,40}$/.test(x.orderNo) ? '訂單編號只能有英文字母、數字'
+          : seen.has(x.orderNo) ? '這次重複輸入了'
+            : d ? (d.regId === reg.id ? '本團練場已回報過' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`)
+              : j.status === 'refunded' ? '此訂單已退票'
+                : j.status === 'mismatch' ? `張數不符（年代記錄為 ${e!.qty} 張）` : '';
     if (x.orderNo) seen.add(x.orderNo);
-    if (reason) bad.push({ orderNo: x.orderNo, qty: x.qtyRaw, reason }); else ok.push({ orderNo: x.orderNo, qty });
+    if (reason) bad.push({ orderNo: x.orderNo, qty: x.qtyRaw, reason }); else ok.push({ orderNo: x.orderNo, qty, status: j.status, eraQty: j.eraQty });
   }
-  const fresh = ok.length ? await db.transaction(async (tx) => {
-    await tx.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter, createdAt: now })));
-    return awardSlots(tx, reg.eventId, reg.id, s.perSeat, now);
-  }) : [];
+  if (ok.length) {
+    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
+      status: x.status, eraQty: x.eraQty, checkedAt: x.status === 'ok' ? now : null, createdAt: now })));
+  }
   const tot = await totalsOf(db, reg.id);
+  const num = await numbersOf(db, reg.eventId, reg.id, s.perSeat);
   const venue = await venueName(db, reg);
   if (ok.length) {
     const ev = await ev0(db);
-    const q = ok.reduce((a, x) => a + x.qty, 0);
-    await mailHead(db, reg, 'join_report', `【${ev.name}】${reg.headName} 您好，${p.data.reporter} 剛送出 ${ok.length} 筆訂單、${q} 張。`
-      + `${venue}目前合計 ${tot.orders} 筆、${tot.tickets} 張，已取得劃位序 ${tot.slots.length} 個${tot.slots.length ? `（第 ${tot.slots.map((x) => x.no).join('、')} 號）` : ''}。`
-      + `${fresh.length ? `這次新取得第 ${fresh.join('、')} 號。` : ''}${base && reg.reportCode ? `查看回報：${reportUrl(base, reg.reportCode)}` : ''}`);
-    await db.insert(t.auditLog).values({ actor: `志工:${p.data.reporter}`, action: 'join_report', target: `join_reg:${reg.id}`, detail: JSON.stringify({ ok: ok.length, bad: bad.length, fresh }) });
+    const okN = ok.filter((x) => x.status === 'ok').length;
+    await mailHead(db, reg, 'join_report', `【${ev.name}】${reg.headName} 您好，${p.data.reporter} 剛送出 ${ok.length} 筆訂單（已核對 ${okN} 筆、待核對 ${ok.length - okN} 筆）。`
+      + `${venue}目前已核對 ${tot.verified} 張、待核對 ${tot.pending} 張；預計劃位序 ${num.nos.length} 個${num.nos.length ? `（第 ${num.nos.join('、')} 號，名單更新時可能變動）` : ''}。`
+      + `${base && reg.reportCode ? `查看回報：${reportUrl(base, reg.reportCode)}` : ''}`);
+    await db.insert(t.auditLog).values({ actor: `志工:${p.data.reporter}`, action: 'join_report', target: `join_reg:${reg.id}`, detail: JSON.stringify({ ok: ok.length, verified: okN, bad: bad.length }) });
   }
-  return { accepted: ok, rejected: bad, fresh, orders: tot.orders, tickets: tot.tickets, slots: tot.slots.map((x) => x.no), next: s.perSeat - (tot.tickets % s.perSeat) };
+  return { accepted: ok.map((x) => ({ orderNo: x.orderNo, qty: x.qty, status: x.status })), rejected: bad, orders: tot.orders, verified: tot.verified, pending: tot.pending, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat) };
 }
 
-/** 後台刪一筆回報（例如打錯）。會讓劃位序不夠時不能刪 */
+/** 志工刪除自己團練場的一筆回報（打錯時）。只在回報開放、還沒鎖定時 */
+export async function deleteOwnReport(db: Db, code: string, orderNo: string, who = '') {
+  const reg = await regByReport(db, code);
+  const s = await getJoinSettings(db);
+  if (!s.reportOpen || await isLocked(db, reg.eventId)) throw new BookingError('SALE_CLOSED', '回報已經截止，不能再刪除。有疑義請洽' + s.contact);
+  const no = normOrderNo(orderNo);
+  const [r] = await db.delete(t.joinReport).where(and(eq(t.joinReport.regId, reg.id), eq(t.joinReport.orderNo, no))).returning();
+  if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
+  await db.insert(t.auditLog).values({ actor: `志工:${clean(who) || '?'}`, action: 'join_report_self_delete', target: `join_reg:${reg.id}`, detail: `${r.orderNo} × ${r.qty}（${REPORT_STATUS[r.status] ?? r.status}）` });
+  return { orderNo: r.orderNo };
+}
+
+/** 後台刪一筆回報（例如打錯）。鎖定後會讓劃位序不夠時不能刪 */
 export async function deleteReport(db: Db, actor: string, id: number) {
   const s = await getJoinSettings(db);
   return db.transaction(async (tx) => {
     const [r] = await tx.select().from(t.joinReport).where(eq(t.joinReport.id, id));
     if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
-    const { tickets, slots } = await totalsOf(tx, r.regId);
-    if (Math.floor((tickets - r.qty) / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後張數不夠 ${slots.length} 個劃位序。請先取消這個團練場最後的劃位序，再刪除。`);
+    const { verified, slots } = await totalsOf(tx, r.regId);
+    const after = verified - (r.status === 'ok' ? r.qty : 0);
+    if (slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這個團練場最後的劃位序，再刪除。`);
     await tx.delete(t.joinReport).where(eq(t.joinReport.id, id));
     await tx.insert(t.auditLog).values({ actor, action: 'join_report_delete', target: `join_reg:${r.regId}`, detail: `${r.orderNo} × ${r.qty}` });
     return true;
+  });
+}
+
+/** 清除揪團測試資料：回報、劃位序（放回已選的座位）、年代名單，並關閉回報與劃位。withRegs：連登記、團練場一起清 */
+export async function clearJoinTest(db: Db, actor: string, withRegs = false) {
+  const ev = await ev0(db);
+  return db.transaction(async (tx) => {
+    const seats = (await tx.select({ id: t.joinSlot.seatId }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), sql`${t.joinSlot.seatId} is not null`))).map((x) => x.id!);
+    if (seats.length) await tx.update(t.eventSeat).set({ status: 'free', orderId: null, version: sql`${t.eventSeat.version} + 1` }).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seats), sql`${t.eventSeat.orderId} is null`));
+    const slots = await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id)).returning({ id: t.joinSlot.id });
+    const reps = await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id)).returning({ id: t.joinReport.id });
+    const era = await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id)).returning({ no: t.joinEra.orderNo });
+    let regs = 0;
+    if (withRegs) {
+      regs = (await tx.delete(t.joinReg).where(eq(t.joinReg.eventId, ev.id)).returning({ id: t.joinReg.id })).length;
+      await tx.delete(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
+    } else {
+      await tx.update(t.joinReg).set({ pickSentAt: null }).where(eq(t.joinReg.eventId, ev.id));
+    }
+    for (const k of ['join.reportOpen', 'join.pickOpen', 'join.paused']) {
+      await tx.insert(t.appSetting).values({ key: k, value: '0' }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: '0' } });
+    }
+    const detail = { slots: slots.length, seats: seats.length, reports: reps.length, era: era.length, regs };
+    await tx.insert(t.auditLog).values({ actor, action: 'join_clear_test', target: `event:${ev.id}`, detail: JSON.stringify(detail) });
+    return detail;
   });
 }
 
@@ -321,7 +437,7 @@ export async function pickPage(db: Db, code: string, now = new Date(), base = ''
   // 輪到我、第一次打開：開始算選位時間
   await db.update(t.joinSlot).set({ seenAt: now }).where(and(eq(t.joinSlot.regId, me.id), eq(t.joinSlot.status, 'turn'), sql`${t.joinSlot.seenAt} is null`));
   const all = await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no));
-  const regs = await regsById(db, [...new Set(all.map((x) => x.regId))]);
+  const regs = await regsById(db, [...new Set([me.id, ...all.map((x) => x.regId)])]);
   const vs = await db.select().from(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
   const vn = (regId: number) => { const r = regs.get(regId); return (r?.venueId ? vs.find((v) => v.id === r.venueId)?.name : r?.venueText) ?? ''; };
   const seats = await pickSeats(db, ev.id);
@@ -335,7 +451,7 @@ export async function pickPage(db: Db, code: string, now = new Date(), base = ''
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: vn(me.id), headName: me.headName,
     settings: { pickOpen: s.pickOpen, paused: s.paused, inHours: inHours(s, now), hourFrom: s.hourFrom, hourTo: s.hourTo, turnMin: s.turnMin, pickMin: s.pickMin, pushBack: s.pushBack, contact: s.contact },
-    now: now.toISOString(), tickets: tot.tickets,
+    now: now.toISOString(), tickets: tot.verified, locked: all.length > 0,
     current: turn.length ? { nos: turn.map((x) => x.no), venue: vn(turn[0].regId), mine: mineTurn, deadline: deadlineOf(s, turn[0])?.toISOString() ?? null, seen: !!turn[0].seenAt } : null,
     queue: queue.map((x) => ({ no: x.no, venue: vn(x.regId), mine: x.regId === me.id, status: x.status, misses: x.misses, place: waitIdx.get(x.id) ?? -1 })),
     board: all.map((x) => ({ no: x.no, venue: vn(x.regId), mine: x.regId === me.id, status: x.status, misses: x.misses, seat: x.seatId ? label.get(x.seatId) ?? '' : '' })),
@@ -486,7 +602,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   const settings = await getJoinSettings(db);
   const regState = await joinRegState(db, base);
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], slots: [], seats: [], usage: { gift: 0, era: 0 }, totals: [], current: null, inHours: true };
+  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], slots: [], seats: [], usage: { gift: 0, era: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[] };
   await tickQueue(db, base, now);
   const usage = await joinUsages(db, ev.id);
   const [e] = await db.select({ n: sql<number>`count(*)::int`, refunded: sql<number>`count(*) filter (where ${t.joinEra.status} = 'refunded')::int`, at: sql<Date | null>`max(${t.joinEra.updatedAt})` })
@@ -502,27 +618,32 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   const seats = seatRows.map((s) => ({ id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, block: s.block, code: s.code, row: rowKey(s), label: seatLabel(s), zoneId: s.zoneId, usageId: s.usageId, status: s.status, orderId: s.orderId, bundle: s.bundle, installed: true }));
   const label = new Map(seats.map((s) => [s.id, s]));
   const reg = new Map(regState.regs.map((r) => [r.id, r]));
+  const locked = slots.length > 0;
+  const prov = locked ? [] : await provisionalSlots(db, ev.id, settings.perSeat);
   const totals = regState.regs.filter((r) => r.status === 'approved').map((r) => {
     const mine = reports.filter((x) => x.r.regId === r.id);
     const tickets = mine.reduce((a, x) => a + x.r.qty, 0);
-    const ok = mine.filter((x) => x.eraStatus === 'sold' && x.eraQty === x.r.qty).reduce((a, x) => a + x.r.qty, 0);
+    const ok = mine.filter((x) => x.r.status === 'ok').reduce((a, x) => a + x.r.qty, 0);
+    const pending = mine.filter((x) => x.r.status === 'pending').reduce((a, x) => a + x.r.qty, 0);
     const sl = slots.filter((x) => x.regId === r.id && x.status !== 'void');
-    return { regId: r.id, venue: r.venueName, headName: r.headName, orders: mine.length, tickets, verified: ok, slots: sl.length, done: sl.filter((x) => x.status === 'done').length,
-      short: Math.floor(ok / settings.perSeat) < sl.length }; // 年代名單更新後（退票、張數變少）劃位序比張數多
+    return { regId: r.id, venue: r.venueName, headName: r.headName, orders: mine.length, tickets, verified: ok, pending,
+      slots: locked ? sl.length : prov.filter((x) => x.regId === r.id).length, done: sl.filter((x) => x.status === 'done').length,
+      short: locked && Math.floor(ok / settings.perSeat) < sl.length }; // 鎖定後年代名單更新（退票、張數變少）劃位序比張數多
   });
   const active = slots.filter((x) => x.status === 'turn');
   return {
     settings, ...regState, usage,
     era: { count: e.n, refunded: e.refunded, updatedAt: e.at ? new Date(e.at).toISOString() : null },
     reports: reports.map((x) => ({ id: x.r.id, regId: x.r.regId, venue: reg.get(x.r.regId)?.venueName ?? '', orderNo: x.r.orderNo, qty: x.r.qty, reporter: x.r.reporter, at: x.r.createdAt.toISOString(),
-      era: x.eraStatus === 'refunded' ? '已退票' : x.eraQty === null ? '名單上已沒有' : x.eraQty !== x.r.qty ? `年代記錄 ${x.eraQty} 張` : '' })),
+      status: x.r.status, era: x.r.status === 'pending' ? '' : x.eraStatus === 'refunded' ? '已退票' : x.eraQty === null ? '名單上已沒有' : x.eraQty !== x.r.qty ? `年代記錄 ${x.eraQty} 張` : '' })),
     slots: slots.map((x) => {
       const r = reg.get(x.regId); const st = x.seatId ? label.get(x.seatId) : undefined;
       return { id: x.id, no: x.no, regId: x.regId, venue: r?.venueName ?? '', headName: r?.headName ?? '', status: x.status, pos: x.pos, misses: x.misses,
         seatId: x.seatId, seat: st?.label ?? '', rowNo: st ? st.row : null, seatNo: st?.no ?? '', repName: x.repName, repPhone: x.repPhone,
         pickedAt: x.pickedAt?.toISOString() ?? null, sentAt: x.sentAt?.toISOString() ?? null, earnedAt: x.earnedAt.toISOString() };
     }),
-    seats, totals, inHours: inHours(settings, now),
+    seats, totals, inHours: inHours(settings, now), locked,
+    provisional: prov.map((x) => ({ no: x.no, venue: reg.get(x.regId)?.venueName ?? '', at: x.at.toISOString() })),
     current: active.length ? { nos: active.map((x) => x.no), venue: reg.get(active[0].regId)?.venueName ?? '', deadline: deadlineOf(settings, active[0])?.toISOString() ?? null, seen: !!active[0].seenAt } : null,
   };
 }
