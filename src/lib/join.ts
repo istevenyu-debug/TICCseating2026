@@ -363,7 +363,7 @@ export async function sendLinks(db: Db, actor: string, base: string, ids?: numbe
     if (!r.email || !r.reportCode) { noEmail++; continue; }
     const venue = vs.find((v) => v.id === r.venueId)?.name ?? '';
     const content = `【${ev.name}】${r.headName} 您好，感謝您擔任「${venue}」的揪團負責人。請把下面的回報連結轉給協助回報的志工：${reportUrl(base, r.reportCode)}　`
-      + `先收後核：志工輸入年代訂單編號與張數後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入；劃位序依回報時間排列，越早回報越前面。`
+      + `先收後核：志工輸入年代訂單編號（「-」前面最後 4 碼即可，例如 ER2611120000109-1 輸入 0109）與張數後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入；劃位序依回報時間排列，越早回報越前面。`
       + `劃位連結會在劃位前另外寄給您。有疑義請洽${s.contact}。`;
     await db.insert(t.notification).values({ channel: 'email', template: 'join_rlink', recipient: r.email, content });
     await db.update(t.joinReg).set({ linksSentAt: now }).where(eq(t.joinReg.id, r.id));

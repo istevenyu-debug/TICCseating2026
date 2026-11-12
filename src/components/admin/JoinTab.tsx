@@ -254,7 +254,7 @@ function Venues({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy
 /* ---------- 年代名單 ---------- */
 function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: Props['setMsg'] }) {
   const [grid, setGrid] = useState<string[][] | null>(null);
-  const [cols, setCols] = useState<EraCols>({ head: 0, no: -1, qty: -1, status: -1, floor: -1, row: -1 });
+  const [cols, setCols] = useState<EraCols>({ head: 0, no: -1, qty: -1, status: -1, floor: -1, row: -1, date: -1, time: -1 });
   const [silver, setSilver] = useState(true);
   async function onFile(file: File) {
     try {
@@ -299,8 +299,8 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
               <div className="tbl"><table><thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th></tr></thead>
                 <tbody>{rows.slice(0, 5).map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>)}</tbody></table></div>
               <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={async () => {
-                const r = await act({ action: 'join.era.upload', rows }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number } | undefined;
-                if (r) { setGrid(null); setMsg({ kind: r.mismatch || r.refundedReports ? 'warn' : 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}。回報核對：新通過 ${r.newlyVerified} 筆、仍待核對 ${r.pending} 筆${r.mismatch ? `、張數不符 ${r.mismatch} 筆` : ''}${r.refundedReports ? `、已退票 ${r.refundedReports} 筆` : ''}` }); }
+                const r = await act({ action: 'join.era.upload', rows }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number; ambiguous: number } | undefined;
+                if (r) { setGrid(null); setMsg({ kind: r.mismatch || r.refundedReports || r.ambiguous ? 'warn' : 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}。回報核對：新通過 ${r.newlyVerified} 筆、仍待核對 ${r.pending} 筆${r.mismatch ? `、張數不符 ${r.mismatch} 筆` : ''}${r.refundedReports ? `、已退票 ${r.refundedReports} 筆` : ''}${r.ambiguous ? `、需補完整編號 ${r.ambiguous} 筆（已寄信請負責人補）` : ''}` }); }
               }}>上傳 {rows.length} 筆</button>
             </>
           )}
@@ -311,11 +311,11 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
 }
 
 /* ---------- 回報 ---------- */
-const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--warn)'], ok: ['已核對', 'var(--ok)'], mismatch: ['張數不符', 'var(--red)'], refunded: ['已退票', 'var(--red)'] };
+const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--warn)'], ok: ['已核對', 'var(--ok)'], mismatch: ['張數不符', 'var(--red)'], refunded: ['已退票', 'var(--red)'], ambiguous: ['需補完整編號', 'var(--red)'] };
 function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg'] }) {
   const [open, setOpen] = useState<number | null>(null);
   const [showProv, setShowProv] = useState(false);
-  const bad = j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded');
+  const bad = j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous');
   const pend = j.reports.filter((x) => x.status === 'pending');
   const short = j.totals.filter((x) => x.short);
   const lock = async () => {
@@ -338,7 +338,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
         <div className="tbl" style={{ marginBottom: 10 }}><table><thead><tr><th>號碼</th><th style={{ textAlign: 'left' }}>團練場</th><th>滿額時間</th></tr></thead>
           <tbody>{j.provisional.map((x) => <tr key={x.no}><td style={{ textAlign: 'center' }}>{x.no}</td><td>{x.venue}</td><td className="small">{tw(x.at)}</td></tr>)}</tbody></table></div>
       )}
-      {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報和年代名單不一致（張數不符或已退票），已用紅字標出，不計入張數。請聯絡該團練場確認。</p>}
+      {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報和年代名單不一致（張數不符、已退票、或後幾碼對到多筆需補完整編號），已用紅字標出，不計入張數。請聯絡該團練場確認。</p>}
       {short.length > 0 && <p className="note warn small">鎖定後年代名單更新，{short.map((x) => x.venue).join('、')} 的已核對張數不夠目前的劃位序。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
       {!j.totals.length ? <p className="muted small">還沒有核准的團練場。</p> : (
         <div className="tbl"><table>
@@ -357,7 +357,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th><th>時間</th><th /></tr></thead>
           <tbody>{j.reports.filter((x) => x.regId === open).map((x) => (
             <tr key={x.id}>
-              <td className="mono">{x.orderNo}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
+              <td className="mono">{x.orderNo ?? x.key}{x.orderNo && x.key !== x.orderNo && <div className="small muted">輸入 {x.key}</div>}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
               <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}{x.era && <div className="small">{x.era}</div>}</td>
               <td>{x.reporter}</td><td className="small">{tw(x.at)}</td>
               <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button></td>

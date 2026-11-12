@@ -1,6 +1,6 @@
 import { getDb } from '@/db/client';
 import { clientIp, handle, originOf, readJson } from '@/lib/api';
-import { deleteOwnReport, reportPage, submitReport } from '@/lib/joinQueue';
+import { deleteOwnReport, fixOwnReport, reportPage, submitReport } from '@/lib/joinQueue';
 import { dispatchQueued } from '@/lib/notify';
 
 export const dynamic = 'force-dynamic';
@@ -11,12 +11,13 @@ export async function GET(_req: Request, { params }: { params: { code: string } 
   return handle(async () => reportPage(await getDb(), params.code));
 }
 
-/** 送出一批訂單編號＋張數；或刪除自己團練場的一筆（打錯時） */
+/** 送出一批訂單編號（後 4 碼即可）＋張數；或刪除自己團練場的一筆、補上完整編號 */
 export async function POST(req: Request, { params }: { params: { code: string } }) {
   return handle(async () => {
     const db = await getDb();
-    const body = await readJson(req) as { action?: string; orderNo?: string; reporter?: string };
-    if (body?.action === 'delete') return deleteOwnReport(db, params.code, String(body.orderNo ?? ''), String(body.reporter ?? ''));
+    const body = await readJson(req) as { action?: string; id?: number; orderNo?: string; reporter?: string };
+    if (body?.action === 'delete') return deleteOwnReport(db, params.code, Number(body.id), String(body.reporter ?? ''));
+    if (body?.action === 'fix') return fixOwnReport(db, params.code, Number(body.id), String(body.orderNo ?? ''), String(body.reporter ?? ''));
     const r = await submitReport(db, params.code, body, clientIp(req), new Date(), base(req));
     dispatchQueued(db).catch(() => undefined); // 回饋信給負責人，不讓志工等
     return r;

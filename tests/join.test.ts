@@ -11,7 +11,7 @@ import {
   addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, deleteReport, joinAdminState, lockSlots, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -125,7 +125,7 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
 
     const r1 = await report(a.reportCode!, [[' a001 ', 4], ['A002', 5], ['ZZZ1', 1], ['R9', 2], ['A001', 4], ['', 3], ['我的訂單', 1]], '志工甲', T0);
     expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4, status: 'ok' }, { orderNo: 'ZZZ1', qty: 1, status: 'pending' }]);
-    expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', '此訂單已退票', '這次重複輸入了', '請輸入訂單編號', '訂單編號只能有英文字母、數字']);
+    expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', '此訂單已退票', '這次重複輸入了', '請輸入訂單編號（後 4 碼即可）', '訂單編號只能有英文字母、數字']);
     expect(r1).toMatchObject({ verified: 4, pending: 1, slots: [], next: 6 });
 
     // B 先回報一張名單上還沒有的 10 張（待核對），A 之後湊滿 10 張已核對
@@ -162,17 +162,18 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
     await setJoinSettings(db, '網管', { reportOpen: true });
     await report(b.reportCode!, [['B1', 10]], '丙', T0);
     await report(a.reportCode!, [['A1', 10], ['TYPO1', 2], ['WAIT1', 10]], '甲', at(1));
-    expect(await msg(deleteOwnReport(db, a.reportCode!, 'NOPE', '甲'))).toContain('找不到');
-    await deleteOwnReport(db, a.reportCode!, 'typo1', '甲');
-    expect((await reportPage(db, a.reportCode!)).list.map((x) => x.orderNo)).toEqual(['A1', 'WAIT1']);
-    expect(await msg(deleteOwnReport(db, b.reportCode!, 'A1', '丙'))).toContain('找不到');
+    const idOf = async (code: string, no: string) => (await reportPage(db, code)).list.find((x) => x.key === no)!.id;
+    expect(await msg(deleteOwnReport(db, a.reportCode!, 99999, '甲'))).toContain('找不到');
+    await deleteOwnReport(db, a.reportCode!, await idOf(a.reportCode!, 'TYPO1'), '甲');
+    expect((await reportPage(db, a.reportCode!)).list.map((x) => x.key)).toEqual(['A1', 'WAIT1']);
+    expect(await msg(deleteOwnReport(db, b.reportCode!, await idOf(a.reportCode!, 'A1'), '丙'))).toContain('找不到');
     expect((await pickPage(db, a.pickCode!, at(2), BASE)).locked).toBe(false);
 
     expect(await lockSlots(db, '網管', at(2))).toEqual({ slots: 2, venues: 2, notCounted: 1 });
     expect(await msg(lockSlots(db, '網管'))).toContain('已經鎖定');
     expect((await joinAdminState(db, BASE, at(2))).settings.reportOpen).toBe(false);
     expect(await msg(report(a.reportCode!, [['X9', 1]]))).toContain('沒有開放');
-    expect(await msg(deleteOwnReport(db, a.reportCode!, 'WAIT1', '甲'))).toContain('截止');
+    expect(await msg(deleteOwnReport(db, a.reportCode!, await idOf(a.reportCode!, 'WAIT1'), '甲'))).toContain('截止');
     expect((await slotsOf(b.id)).map((x) => x.no)).toEqual([1]);
     expect((await slotsOf(a.id)).map((x) => x.no)).toEqual([2]);
     // 鎖定後名單才核對通過：不會多給劃位序（重新整理頁面看到的是正式的）
@@ -361,5 +362,72 @@ describe('備份', () => {
     const db3 = await createPgliteDb();
     await importAll(db3, old);
     expect(await db3.select().from(t.joinSlot)).toHaveLength(0);
+  });
+});
+
+describe('志工只輸入訂單編號後 4 碼', () => {
+  const era = (rows: [string, number, string?][]) =>
+    uploadEra(db, '網管', rows.map(([orderNo, qty, soldAt]) => ({ orderNo, qty, status: 'sold' as const, soldAt: soldAt ?? null })));
+
+  it('名單上只有一筆對得到：當下核對並記下完整編號；票號 -1、完整編號也可以', async () => {
+    const a = await venueReg('台北木柵');
+    await era([['ER2611120000109', 6], ['ER2611120000108', 1], ['ER2611120000222', 2]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    const r = await report(a.reportCode!, [['0109', 6], ['er2611120000108-1', 1], ['109', 1], ['0222', 3]]);
+    expect(r.accepted).toEqual([{ orderNo: 'ER2611120000109', qty: 6, status: 'ok' }, { orderNo: 'ER2611120000108', qty: 1, status: 'ok' }]);
+    expect(r.rejected.map((x) => x.reason)).toEqual(['請輸入「-」前面最後 4 個數字（或完整訂單編號）', '年代記錄後 4 碼 0222 的訂單是 2 張。請確認張數；若不是這筆，請輸入完整訂單編號']);
+    expect((await reportPage(db, a.reportCode!)).list[0]).toMatchObject({ key: '0109', orderNo: 'ER2611120000109', status: 'ok' });
+    // 同一筆再報：後 4 碼、完整編號都擋
+    expect((await report(a.reportCode!, [['0109', 6]])).rejected[0].reason).toContain('本團練場已回報過 0109');
+    expect((await report(a.reportCode!, [['ER2611120000109', 6]])).rejected[0].reason).toBe('本團練場已回報過');
+  });
+
+  it('名單上有兩筆後 4 碼、張數都一樣：請他輸入完整編號', async () => {
+    const a = await venueReg('台北木柵');
+    await era([['ER2611120000109', 2], ['ER2611130000109', 2]]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    const r = await report(a.reportCode!, [['0109', 2]]);
+    expect(r.rejected[0].reason).toBe('有好幾筆訂單後 4 碼都是 0109，請輸入完整訂單編號');
+    expect((await report(a.reportCode!, [['ER2611130000109', 2]])).accepted[0].status).toBe('ok');
+    // 本團練場已有一筆 …0109 × 2：後 4 碼再報會被當成重複，要用完整編號
+    expect((await report(a.reportCode!, [['0109', 2]])).rejected[0].reason).toContain('本團練場已回報過 0109');
+    expect((await report(a.reportCode!, [['ER2611120000109', 2]])).accepted[0]).toMatchObject({ orderNo: 'ER2611120000109', status: 'ok' });
+  });
+
+  it('先收後核：上傳名單時依回報先後認領；回報之後才賣出的不算；撞號的標「需補完整編號」並寄信，補上後保留回報時間', async () => {
+    const a = await venueReg('台北木柵');
+    const b = await venueReg('台北微風小棧');
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    const T = (h: number, m = 0) => new Date(Date.UTC(2026, 10, 13, h - 8, m));
+    await report(a.reportCode!, [['0109', 6], ['0300', 2]], '甲', T(10));
+    await report(b.reportCode!, [['0109', 6], ['0500', 3]], '丙', T(11)); // 允許兩個團練場都報 0109
+    await report(b.reportCode!, [['0777', 1]], '丙', T(9));
+    expect((await reportPage(db, a.reportCode!)).list.map((x) => x.status)).toEqual(['pending', 'pending']);
+    const up = await era([
+      ['ER2611130000109', 6, '2026-11-13T09:50:00+08:00'], // 甲 10:00 報、丙 11:00 報 → 甲先認領
+      ['ER2611130010109', 6, '2026-11-13T10:30:00+08:00'], // 10:30 才賣：甲不能拿，丙可以
+      ['ER2611130000300', 2, '2026-11-13T09:00:00+08:00'], ['ER2611120000300', 2, '2026-11-12T15:00:00+08:00'], // 撞號
+      ['ER2611130000500', 3, '2026-11-13T12:00:00+08:00'], // 回報之後才賣出：不算
+      ['ER2611130000777', 1, '2026-11-13T09:04:00+08:00'], // 9:00 報、9:04 賣：5 分鐘誤差內
+    ]);
+    expect(up).toMatchObject({ newlyVerified: 3, ambiguous: 1, pending: 1 });
+    const pa = await reportPage(db, a.reportCode!);
+    expect(pa.list.map((x) => [x.key, x.orderNo, x.status])).toEqual([['0109', 'ER2611130000109', 'ok'], ['0300', null, 'ambiguous']]);
+    const pb = await reportPage(db, b.reportCode!);
+    expect(pb.list.map((x) => [x.key, x.orderNo, x.status])).toEqual([['0109', 'ER2611130010109', 'ok'], ['0500', null, 'pending'], ['0777', 'ER2611130000777', 'ok']]);
+    const [fm] = await mails('join_fix');
+    expect(fm.recipient).toBe('台北木柵@example.com');
+    expect(fm.content).toContain('0300');
+    // 再上傳一次不重寄
+    await era([['ER2611130000109', 6]]);
+    expect(await mails('join_fix')).toHaveLength(1);
+
+    const id = pa.list[1].id;
+    expect(await msg(fixOwnReport(db, a.reportCode!, id, '0300', '甲'))).toContain('完整訂單編號');
+    expect(await msg(fixOwnReport(db, a.reportCode!, id, 'ER2611130000301', '甲'))).toContain('要是 0300');
+    expect(await fixOwnReport(db, a.reportCode!, id, 'er2611120000300', '甲')).toEqual({ orderNo: 'ER2611120000300', status: 'ok' });
+    const after = (await reportPage(db, a.reportCode!)).list[1];
+    expect(after).toMatchObject({ key: 'ER2611120000300', status: 'ok' });
+    expect(after.at).toBe(T(10).toISOString());
   });
 });

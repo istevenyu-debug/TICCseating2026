@@ -434,6 +434,7 @@ export const joinEra = pgTable('join_era', {
   orderNo: text('order_no').notNull(),
   qty: integer('qty').notNull(),
   status: text('status').notNull().default('sold'), // sold 已售 / refunded 已退
+  soldAt: timestamp('sold_at', { withTimezone: true }), // 年代售出時間（用來排除回報之後才賣出的同後四碼訂單）
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ pk: primaryKey({ columns: [t.eventId, t.orderNo] }) }));
 
@@ -442,10 +443,11 @@ export const joinReport = pgTable('join_report', {
   id: serial('id').primaryKey(),
   eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
   regId: integer('reg_id').notNull().references(() => joinReg.id, { onDelete: 'cascade' }),
-  orderNo: text('order_no').notNull(),
+  key: text('key').notNull().default(''), // 志工輸入的（後 4 碼以上的數字，或完整訂單編號）
+  orderNo: text('order_no'), // 對到的完整訂單編號；還沒對到（待核對、需補完整編號）時是 null
   qty: integer('qty').notNull(),
   reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
-  // 先收後核：pending 待核對（名單上還沒有）/ ok 已核對 / mismatch 張數不符 / refunded 已退票
+  // 先收後核：pending 待核對 / ok 已核對 / mismatch 張數不符 / refunded 已退票 / ambiguous 後四碼對到多筆，需補完整編號
   status: text('status').notNull().default('pending'),
   eraQty: integer('era_qty'), // 核對時年代名單上的張數
   checkedAt: timestamp('checked_at', { withTimezone: true }),

@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { fmtDate } from './JoinApp';
 
 type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
   orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
-  list: { orderNo: string; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
+  list: { id: number; key: string; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null }[];
 };
 type Result = { accepted: { orderNo: string; qty: number; status: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
@@ -15,7 +15,7 @@ type Row = { orderNo: string; qty: string; reason?: string };
 const NAME_KEY = 'join-reporter';
 const ST: Record<string, { text: string; color: string }> = {
   pending: { text: '待核對', color: 'var(--warn)' }, ok: { text: '已核對 ✓', color: 'var(--ok)' },
-  mismatch: { text: '張數不符', color: 'var(--red)' }, refunded: { text: '已退票', color: 'var(--red)' },
+  mismatch: { text: '張數不符', color: 'var(--red)' }, refunded: { text: '已退票', color: 'var(--red)' }, ambiguous: { text: '需補完整編號', color: 'var(--red)' },
 };
 const blank = (n = 3): Row[] => Array.from({ length: n }, () => ({ orderNo: '', qty: '' }));
 const tw = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -60,13 +60,22 @@ export default function JoinReportApp({ code }: { code: string }) {
     window.scrollTo(0, 0);
   }
 
-  async function remove(orderNo: string) {
-    if (!window.confirm(`刪除訂單 ${orderNo}？（打錯時刪掉再重新輸入）`)) return;
+  async function remove(id: number, label: string) {
+    if (!window.confirm(`刪除訂單 ${label}？（打錯時刪掉再重新輸入）`)) return;
     setBusy(true);
-    const r = await call<{ orderNo: string }>(code, { action: 'delete', orderNo, reporter: name });
+    const r = await call<{ orderNo: string }>(code, { action: 'delete', id, reporter: name });
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     setLast(null); load();
+  }
+
+  const [fixing, setFixing] = useState<Record<number, string>>({});
+  async function fix(id: number) {
+    setBusy(true);
+    const r = await call<{ orderNo: string; status: string }>(code, { action: 'fix', id, orderNo: fixing[id] ?? '', reporter: name });
+    setBusy(false);
+    if (!r.ok) { setErr(r.message); return; }
+    setErr(''); setFixing({ ...fixing, [id]: '' }); setLast(null); load();
   }
 
   if (err && !page) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
@@ -91,7 +100,8 @@ export default function JoinReportApp({ code }: { code: string }) {
   );
   const howto = (
     <div className="note" style={{ margin: '12px 0' }}>
-      <b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。
+      <b>訂單編號只要輸入後 4 碼：</b>「-」前面的最後 4 個數字，例如 ER2611120000109-1 → 輸入 <b>0109</b>。若有別筆訂單後 4 碼相同，系統會請您補上完整編號。
+      <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。</div>
       <div style={{ marginTop: 4 }}>有疑義請洽 {page.contact}</div>
     </div>
   );
@@ -103,13 +113,24 @@ export default function JoinReportApp({ code }: { code: string }) {
         <div className="tbl" style={{ marginTop: 8 }}><table>
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th>{page.open && <th />}</tr></thead>
           <tbody>{[...page.list].reverse().map((x) => (
-            <tr key={x.orderNo}>
-              <td className="mono">{x.orderNo}<div className="small muted">{tw(x.at)}</div></td>
-              <td style={{ textAlign: 'center' }}>{x.qty}</td>
-              <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
-              <td>{x.reporter}</td>
-              {page.open && <td><button type="button" className="btn small" disabled={busy} onClick={() => remove(x.orderNo)}>刪除</button></td>}
-            </tr>
+            <Fragment key={x.id}>
+              <tr>
+                <td className="mono">{x.orderNo ?? x.key}{x.orderNo && x.orderNo !== x.key && <div className="small muted">輸入 {x.key}</div>}<div className="small muted">{tw(x.at)}</div></td>
+                <td style={{ textAlign: 'center' }}>{x.qty}</td>
+                <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
+                <td>{x.reporter}</td>
+                {page.open && <td><button type="button" className="btn small" disabled={busy} onClick={() => remove(x.id, x.orderNo ?? x.key)}>刪除</button></td>}
+              </tr>
+              {page.open && x.status === 'ambiguous' && (
+                <tr><td colSpan={5} style={{ background: '#fff4f2' }}>
+                  <div className="small" style={{ color: 'var(--red)', marginBottom: 4 }}>有好幾筆訂單後幾碼都是 {x.key}，請補上完整訂單編號：</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input value={fixing[x.id] ?? ''} placeholder="例：ER2611120000109" autoCapitalize="characters" style={{ flex: 1, minWidth: 0 }} onChange={(e) => setFixing({ ...fixing, [x.id]: e.target.value })} />
+                    <button type="button" className="btn pri small" disabled={busy || !(fixing[x.id] ?? '').trim()} onClick={() => fix(x.id)}>補上</button>
+                  </div>
+                </td></tr>
+              )}
+            </Fragment>
           ))}</tbody>
         </table></div>
       )}
@@ -148,10 +169,10 @@ export default function JoinReportApp({ code }: { code: string }) {
           <span className="small muted">填寫人：{name}（<button type="button" className="linkbtn" onClick={() => { setNameDraft(name); setEditName(true); }}>更換</button>）</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: '6px 8px', marginTop: 10, alignItems: 'center' }}>
-          <span className="small muted">訂單編號</span><span className="small muted">張數</span>
+          <span className="small muted">訂單編號（後 4 碼即可）</span><span className="small muted">張數</span>
           {rows.map((r, i) => (
             <div key={i} style={{ display: 'contents' }}>
-              <input value={r.orderNo} maxLength={40} autoCapitalize="characters" aria-label={`第 ${i + 1} 筆訂單編號`}
+              <input value={r.orderNo} maxLength={40} autoCapitalize="characters" placeholder={i === 0 ? '例：0109' : undefined} aria-label={`第 ${i + 1} 筆訂單編號`}
                 className={r.reason ? 'need' : undefined} onChange={(e) => setRow(i, { orderNo: e.target.value })} />
               <input value={r.qty} inputMode="numeric" maxLength={3} aria-label={`第 ${i + 1} 筆張數`}
                 className={r.reason ? 'need' : undefined} onChange={(e) => setRow(i, { qty: e.target.value.replace(/\D/g, '') })} />

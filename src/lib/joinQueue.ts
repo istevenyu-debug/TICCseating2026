@@ -31,6 +31,7 @@ export const eraInput = z.array(z.object({
   orderNo: z.string().max(60),
   qty: z.number().int().min(0).max(1000),
   status: z.enum(['sold', 'refunded']),
+  soldAt: z.string().datetime({ offset: true }).nullish(),
 })).min(1, '名單是空的').max(50000);
 
 /** 依年代名單判定一筆回報：pending 名單上還沒有 / ok 相符 / mismatch 張數不符 / refunded 已退票 */
@@ -39,15 +40,46 @@ export function judge(e: { qty: number; status: string } | undefined | null, qty
   if (e.status !== 'sold') return { status: 'refunded' as const, eraQty: e.qty };
   return { status: e.qty === qty ? 'ok' as const : 'mismatch' as const, eraQty: e.qty };
 }
-export const REPORT_STATUS: Record<string, string> = { pending: '待核對', ok: '已核對', mismatch: '張數不符', refunded: '已退票' };
+export const REPORT_STATUS: Record<string, string> = { pending: '待核對', ok: '已核對', mismatch: '張數不符', refunded: '已退票', ambiguous: '需補完整編號' };
+
+/** 志工可只輸入訂單編號「-」前面的最後 4 碼（純數字 4 碼以上＝後幾碼；有英文字母＝完整編號） */
+export const isSuffixKey = (k: string) => /^\d{4,}$/.test(k);
+/** 售出時間要在回報之前（給 5 分鐘誤差：年代只到分鐘） */
+const SOLD_GRACE = 5 * 60 * 1000;
+type EraRec = { orderNo: string; qty: number; status: string; soldAt: Date | null };
+export type Match = { status: 'pending' | 'ok' | 'mismatch' | 'refunded' | 'ambiguous'; orderNo: string | null; eraQty: number | null; cands: number };
+
+/**
+ * 依志工輸入找年代訂單。完整編號：直接對。後幾碼：在「回報前已售出、還沒被別人對走」的訂單裡找結尾相同的。
+ *  - 張數相同的只有一筆 → 對到（已核對；那筆已退 → 已退票）
+ *  - 張數相同的有好幾筆 → 需補完整編號
+ *  - 沒有張數相同的：只有一筆後幾碼相同 → 張數不符（不認領）；好幾筆 → 需補完整編號；沒有 → 待核對
+ */
+export function matchKey(key: string, qty: number, at: Date, era: Map<string, EraRec>, claimed: Set<string>): Match {
+  if (!isSuffixKey(key)) { const j = judge(era.get(key), qty); return { ...j, orderNo: key, cands: era.has(key) ? 1 : 0 }; }
+  const limit = at.getTime() + SOLD_GRACE;
+  const cands = [...era.values()].filter((e) => e.orderNo.endsWith(key) && !claimed.has(e.orderNo) && (!e.soldAt || e.soldAt.getTime() <= limit));
+  const same = cands.filter((e) => e.qty === qty);
+  const sold = same.filter((e) => e.status === 'sold');
+  if (sold.length === 1) return { status: 'ok', orderNo: sold[0].orderNo, eraQty: sold[0].qty, cands: cands.length };
+  if (sold.length > 1) return { status: 'ambiguous', orderNo: null, eraQty: null, cands: cands.length };
+  if (same.length === 1) return { status: 'refunded', orderNo: same[0].orderNo, eraQty: same[0].qty, cands: cands.length };
+  if (cands.length === 1) return { status: 'mismatch', orderNo: null, eraQty: cands[0].qty, cands: 1 };
+  if (cands.length > 1) return { status: 'ambiguous', orderNo: null, eraQty: null, cands: cands.length };
+  return { status: 'pending', orderNo: null, eraQty: null, cands: 0 };
+}
+
+async function eraMap(db: Db | Tx, eventId: number) {
+  return new Map((await db.select().from(t.joinEra).where(eq(t.joinEra.eventId, eventId))).map((e) => [e.orderNo, e as EraRec]));
+}
 
 /** 上傳年代名單：同一訂單編號以新的為準（張數、已售／已退），然後重新核對所有回報 */
 export async function uploadEra(db: Db, actor: string, raw: unknown, now = new Date()) {
   const p = eraInput.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '名單格式不正確');
   const ev = await ev0(db);
-  const map = new Map<string, { qty: number; status: 'sold' | 'refunded' }>();
-  for (const r of p.data) { const no = normOrderNo(r.orderNo); if (no) map.set(no, { qty: r.qty, status: r.status }); }
+  const map = new Map<string, { qty: number; status: 'sold' | 'refunded'; soldAt: Date | null }>();
+  for (const r of p.data) { const no = normOrderNo(r.orderNo); if (no) map.set(no, { qty: r.qty, status: r.status, soldAt: r.soldAt ? new Date(r.soldAt) : null }); }
   if (!map.size) throw new BookingError('INVALID', '名單裡沒有訂單編號');
   const nos = [...map.keys()];
   const have = new Map<string, typeof t.joinEra.$inferSelect>();
@@ -59,27 +91,44 @@ export async function uploadEra(db: Db, actor: string, raw: unknown, now = new D
   for (const r of rows) { const h = have.get(r.orderNo); if (!h) added++; else if (h.qty !== r.qty || h.status !== r.status) changed++; }
   for (let i = 0; i < rows.length; i += 500) {
     await db.insert(t.joinEra).values(rows.slice(i, i + 500)).onConflictDoUpdate({
-      target: [t.joinEra.eventId, t.joinEra.orderNo], set: { qty: sql`excluded.qty`, status: sql`excluded.status`, updatedAt: sql`excluded.updated_at` },
+      target: [t.joinEra.eventId, t.joinEra.orderNo], set: { qty: sql`excluded.qty`, status: sql`excluded.status`, soldAt: sql`coalesce(excluded.sold_at, ${t.joinEra.soldAt})`, updatedAt: sql`excluded.updated_at` },
     });
   }
   const refunded = rows.filter((r) => r.status === 'refunded').length;
-  const check = await recheckReports(db, ev.id, now);
+  const check = await recheckReports(db, ev.id, now, true);
   await db.insert(t.auditLog).values({ actor, action: 'join_era_upload', target: `event:${ev.id}`, detail: JSON.stringify({ rows: rows.length, added, changed, refunded, ...check }) });
   return { rows: rows.length, added, changed, refunded, ...check };
 }
 
-/** 先收後核：用目前的年代名單重新核對所有回報 */
-export async function recheckReports(db: Db, eventId: number, now = new Date()) {
-  const reps = await db.select({ r: t.joinReport, eqty: t.joinEra.qty, estatus: t.joinEra.status }).from(t.joinReport)
-    .leftJoin(t.joinEra, and(eq(t.joinEra.eventId, t.joinReport.eventId), eq(t.joinEra.orderNo, t.joinReport.orderNo)))
-    .where(eq(t.joinReport.eventId, eventId));
-  const n = { verified: 0, pending: 0, mismatch: 0, refundedReports: 0, newlyVerified: 0 };
-  for (const x of reps) {
-    const j = judge(x.eqty === null ? null : { qty: x.eqty, status: x.estatus ?? 'sold' }, x.r.qty);
-    if (j.status === 'ok') n.verified++; else if (j.status === 'pending') n.pending++; else if (j.status === 'mismatch') n.mismatch++; else n.refundedReports++;
-    if (j.status !== x.r.status || j.eraQty !== x.r.eraQty) {
-      if (j.status === 'ok' && x.r.status !== 'ok') n.newlyVerified++;
-      await db.update(t.joinReport).set({ status: j.status, eraQty: j.eraQty, checkedAt: now }).where(eq(t.joinReport.id, x.r.id));
+/**
+ * 先收後核：用目前的年代名單重新核對所有回報。
+ * 已對到訂單的照那筆核對；還沒對到的（只輸入後幾碼）依回報先後重新找。新出現「需補完整編號」時寄信給負責人。
+ */
+export async function recheckReports(db: Db, eventId: number, now = new Date(), notify = false) {
+  const era = await eraMap(db, eventId);
+  const reps = await db.select().from(t.joinReport).where(eq(t.joinReport.eventId, eventId)).orderBy(asc(t.joinReport.createdAt), asc(t.joinReport.id));
+  const claimed = new Set(reps.filter((r) => r.orderNo).map((r) => r.orderNo!));
+  const n = { verified: 0, pending: 0, mismatch: 0, refundedReports: 0, ambiguous: 0, newlyVerified: 0 };
+  const fix = new Map<number, string[]>();
+  for (const r of reps) {
+    let m: Match;
+    if (r.orderNo) { const j = judge(era.get(r.orderNo), r.qty); m = { ...j, orderNo: r.orderNo, cands: 1 }; }
+    else { m = matchKey(r.key, r.qty, r.createdAt, era, claimed); if (m.orderNo) claimed.add(m.orderNo); }
+    if (m.status === 'ok') n.verified++; else if (m.status === 'pending') n.pending++; else if (m.status === 'mismatch') n.mismatch++; else if (m.status === 'ambiguous') n.ambiguous++; else n.refundedReports++;
+    if (m.status !== r.status || m.eraQty !== r.eraQty || m.orderNo !== r.orderNo) {
+      if (m.status === 'ok' && r.status !== 'ok') n.newlyVerified++;
+      if (m.status === 'ambiguous' && r.status !== 'ambiguous') fix.set(r.regId, [...(fix.get(r.regId) ?? []), `後 ${r.key.length} 碼 ${r.key}（${r.qty} 張）`]);
+      await db.update(t.joinReport).set({ status: m.status, eraQty: m.eraQty, orderNo: m.orderNo, checkedAt: now }).where(eq(t.joinReport.id, r.id));
+    }
+  }
+  if (notify && fix.size) {
+    const ev = await ev0(db);
+    const s = await getJoinSettings(db);
+    for (const [regId, items] of fix) {
+      const [reg] = await db.select().from(t.joinReg).where(eq(t.joinReg.id, regId));
+      if (!reg || reg.status !== 'approved') continue;
+      await mailHead(db, reg, 'join_fix', `【${ev.name}】${reg.headName} 您好，年代名單上有好幾筆訂單的後幾碼相同，下列回報需要補上完整訂單編號才能核對：${items.join('、')}。`
+        + `請志工打開回報連結，在「已回報的訂單」那一筆輸入完整編號（例如 ER2611120000109）。有疑義請洽${s.contact}`);
     }
   }
   return n;
@@ -92,7 +141,7 @@ async function totalsOf(db: Db | Tx, regId: number) {
   const reps = await db.select({ qty: t.joinReport.qty, status: t.joinReport.status }).from(t.joinReport).where(eq(t.joinReport.regId, regId));
   const sum = (st?: string) => reps.filter((x) => !st || x.status === st).reduce((a, x) => a + x.qty, 0);
   const slots = await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.regId, regId), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no));
-  return { orders: reps.length, tickets: sum(), verified: sum('ok'), pending: sum('pending'), bad: reps.filter((x) => x.status === 'mismatch' || x.status === 'refunded').length, slots };
+  return { orders: reps.length, tickets: sum(), verified: sum('ok'), pending: sum('pending'), bad: reps.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous').length, slots };
 }
 
 export async function isLocked(db: Db | Tx, eventId: number) {
@@ -180,7 +229,7 @@ export async function reportPage(db: Db, code: string) {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: await venueName(db, r), headName: r.headName,
     open: s.reportOpen && !num.locked, locked: num.locked, perSeat: s.perSeat, contact: s.contact,
     orders: tot.orders, verified: tot.verified, pending: tot.pending, bad: tot.bad, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat),
-    list: list.map((x) => ({ orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty })),
+    list: list.map((x) => ({ id: x.id, key: x.key, orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty })),
   };
 }
 
@@ -203,29 +252,40 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
   rateLimit(`repip:${ip}`, now.getTime(), 60);
   const rows = p.data.rows.map((x) => ({ orderNo: normOrderNo(String(x.orderNo)), qtyRaw: String(x.qty).trim() })).filter((x) => x.orderNo || x.qtyRaw);
   if (!rows.length) throw new BookingError('INVALID', '請輸入訂單編號與張數');
-  const nos = rows.map((x) => x.orderNo).filter(Boolean);
-  const era = new Map((nos.length ? await db.select().from(t.joinEra).where(and(eq(t.joinEra.eventId, reg.eventId), inArray(t.joinEra.orderNo, nos))) : []).map((e) => [e.orderNo, e]));
-  const done = new Map((nos.length ? await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, reg.eventId), inArray(t.joinReport.orderNo, nos))) : []).map((e) => [e.orderNo, e]));
+  const era = await eraMap(db, reg.eventId);
+  const all = await db.select().from(t.joinReport).where(eq(t.joinReport.eventId, reg.eventId));
+  const claimed = new Map(all.filter((r) => r.orderNo).map((r) => [r.orderNo!, r]));
+  const mine = all.filter((r) => r.regId === reg.id);
   const seen = new Set<string>();
-  const ok: { orderNo: string; qty: number; status: string; eraQty: number | null }[] = [];
+  const ok: { key: string; orderNo: string | null; qty: number; status: string; eraQty: number | null }[] = [];
   const bad: { orderNo: string; qty: string; reason: string }[] = [];
   for (const x of rows) {
     const qty = Number(x.qtyRaw);
-    const e = era.get(x.orderNo);
-    const d = done.get(x.orderNo);
-    const j = judge(e, qty);
-    const reason = !x.orderNo ? '請輸入訂單編號'
+    const k = x.orderNo;
+    let reason = !k ? '請輸入訂單編號（後 4 碼即可）'
       : !/^\d+$/.test(x.qtyRaw) || qty < 1 || qty > 100 ? '張數請填 1 以上的數字'
-        : !/^[0-9A-Z_/-]{2,40}$/.test(x.orderNo) ? '訂單編號只能有英文字母、數字'
-          : seen.has(x.orderNo) ? '這次重複輸入了'
-            : d ? (d.regId === reg.id ? '本團練場已回報過' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`)
-              : j.status === 'refunded' ? '此訂單已退票'
-                : j.status === 'mismatch' ? `張數不符（年代記錄為 ${e!.qty} 張）` : '';
-    if (x.orderNo) seen.add(x.orderNo);
-    if (reason) bad.push({ orderNo: x.orderNo, qty: x.qtyRaw, reason }); else ok.push({ orderNo: x.orderNo, qty, status: j.status, eraQty: j.eraQty });
+        : !/^[0-9A-Z_/-]{2,40}$/.test(k) ? '訂單編號只能有英文字母、數字'
+          : /^\d{1,3}$/.test(k) ? '請輸入「-」前面最後 4 個數字（或完整訂單編號）'
+            : seen.has(`${k}|${qty}`) ? '這次重複輸入了' : '';
+    let m: Match | null = null;
+    if (!reason && !isSuffixKey(k)) {
+      const d = claimed.get(k);
+      if (d) reason = d.regId === reg.id ? '本團練場已回報過' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`;
+    }
+    if (!reason && isSuffixKey(k) && mine.some((r) => r.qty === qty && (r.key === k || (r.orderNo ?? '').endsWith(k)))) reason = `本團練場已回報過 ${k}（${qty} 張）；若是另一筆訂單，請輸入完整訂單編號`;
+    if (!reason) {
+      m = matchKey(k, qty, now, era, new Set(claimed.keys()));
+      if (m.status === 'refunded') reason = '此訂單已退票';
+      else if (m.status === 'mismatch') reason = isSuffixKey(k) ? `年代記錄後 ${k.length} 碼 ${k} 的訂單是 ${m.eraQty} 張。請確認張數；若不是這筆，請輸入完整訂單編號` : `張數不符（年代記錄為 ${m.eraQty} 張）`;
+      else if (m.status === 'ambiguous') reason = `有好幾筆訂單後 ${k.length} 碼都是 ${k}，請輸入完整訂單編號`;
+    }
+    if (k) seen.add(`${k}|${qty}`);
+    if (reason || !m) { bad.push({ orderNo: k, qty: x.qtyRaw, reason }); continue; }
+    ok.push({ key: k, orderNo: m.orderNo, qty, status: m.status, eraQty: m.eraQty });
+    if (m.orderNo) claimed.set(m.orderNo, { regId: reg.id } as typeof all[number]);
   }
   if (ok.length) {
-    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
+    await db.insert(t.joinReport).values(ok.map((x) => ({ eventId: reg.eventId, regId: reg.id, key: x.key, orderNo: x.orderNo, qty: x.qty, reporter: p.data.reporter,
       status: x.status, eraQty: x.eraQty, checkedAt: x.status === 'ok' ? now : null, createdAt: now })));
   }
   const tot = await totalsOf(db, reg.id);
@@ -239,19 +299,42 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
       + `${base && reg.reportCode ? `查看回報：${reportUrl(base, reg.reportCode)}` : ''}`);
     await db.insert(t.auditLog).values({ actor: `志工:${p.data.reporter}`, action: 'join_report', target: `join_reg:${reg.id}`, detail: JSON.stringify({ ok: ok.length, verified: okN, bad: bad.length }) });
   }
-  return { accepted: ok.map((x) => ({ orderNo: x.orderNo, qty: x.qty, status: x.status })), rejected: bad, orders: tot.orders, verified: tot.verified, pending: tot.pending, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat) };
+  return { accepted: ok.map((x) => ({ orderNo: x.orderNo ?? x.key, qty: x.qty, status: x.status })), rejected: bad, orders: tot.orders, verified: tot.verified, pending: tot.pending, slots: num.nos, next: s.perSeat - (tot.verified % s.perSeat) };
+}
+
+async function ownOpen(db: Db, code: string) {
+  const reg = await regByReport(db, code);
+  const s = await getJoinSettings(db);
+  if (!s.reportOpen || await isLocked(db, reg.eventId)) throw new BookingError('SALE_CLOSED', '回報已經截止，不能再修改。有疑義請洽' + s.contact);
+  return { reg, s };
 }
 
 /** 志工刪除自己團練場的一筆回報（打錯時）。只在回報開放、還沒鎖定時 */
-export async function deleteOwnReport(db: Db, code: string, orderNo: string, who = '') {
-  const reg = await regByReport(db, code);
-  const s = await getJoinSettings(db);
-  if (!s.reportOpen || await isLocked(db, reg.eventId)) throw new BookingError('SALE_CLOSED', '回報已經截止，不能再刪除。有疑義請洽' + s.contact);
-  const no = normOrderNo(orderNo);
-  const [r] = await db.delete(t.joinReport).where(and(eq(t.joinReport.regId, reg.id), eq(t.joinReport.orderNo, no))).returning();
+export async function deleteOwnReport(db: Db, code: string, id: number, who = '') {
+  const { reg } = await ownOpen(db, code);
+  const [r] = await db.delete(t.joinReport).where(and(eq(t.joinReport.regId, reg.id), eq(t.joinReport.id, Number(id) || 0))).returning();
   if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
-  await db.insert(t.auditLog).values({ actor: `志工:${clean(who) || '?'}`, action: 'join_report_self_delete', target: `join_reg:${reg.id}`, detail: `${r.orderNo} × ${r.qty}（${REPORT_STATUS[r.status] ?? r.status}）` });
-  return { orderNo: r.orderNo };
+  await db.insert(t.auditLog).values({ actor: `志工:${clean(who) || '?'}`, action: 'join_report_self_delete', target: `join_reg:${reg.id}`, detail: `${r.orderNo ?? r.key} × ${r.qty}（${REPORT_STATUS[r.status] ?? r.status}）` });
+  return { orderNo: r.orderNo ?? r.key };
+}
+
+/** 志工補上完整訂單編號（後幾碼對到多筆、或還沒對到時）。保留原本的回報時間 */
+export async function fixOwnReport(db: Db, code: string, id: number, full: string, who = '', now = new Date()) {
+  const { reg, s } = await ownOpen(db, code);
+  const no = normOrderNo(full);
+  if (!no || isSuffixKey(no) || !/^[0-9A-Z_/-]{4,40}$/.test(no)) throw new BookingError('INVALID', '請輸入完整訂單編號（含英文字母，例如 ER2611120000109）');
+  const [r] = await db.select().from(t.joinReport).where(and(eq(t.joinReport.regId, reg.id), eq(t.joinReport.id, Number(id) || 0)));
+  if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
+  if (r.orderNo && r.status === 'ok') throw new BookingError('INVALID', '這筆已核對，不用再補。');
+  if (isSuffixKey(r.key) && !no.endsWith(r.key)) throw new BookingError('INVALID', `完整編號的最後幾碼要是 ${r.key}。輸入錯了請刪除這筆再重新輸入。`);
+  const [d] = await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, reg.eventId), eq(t.joinReport.orderNo, no)));
+  if (d && d.id !== r.id) throw new BookingError('INVALID', d.regId === reg.id ? '本團練場已回報過這筆訂單' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`);
+  const j = judge((await db.select().from(t.joinEra).where(and(eq(t.joinEra.eventId, reg.eventId), eq(t.joinEra.orderNo, no))))[0], r.qty);
+  if (j.status === 'refunded') throw new BookingError('INVALID', '此訂單已退票');
+  if (j.status === 'mismatch') throw new BookingError('INVALID', `張數不符（年代記錄為 ${j.eraQty} 張）`);
+  await db.update(t.joinReport).set({ key: no, orderNo: no, status: j.status, eraQty: j.eraQty, checkedAt: now }).where(eq(t.joinReport.id, r.id));
+  await db.insert(t.auditLog).values({ actor: `志工:${clean(who) || '?'}`, action: 'join_report_fix', target: `join_reg:${reg.id}`, detail: `${r.key} → ${no}` });
+  return { orderNo: no, status: j.status };
 }
 
 /** 後台刪一筆回報（例如打錯）。鎖定後會讓劃位序不夠時不能刪 */
@@ -264,7 +347,7 @@ export async function deleteReport(db: Db, actor: string, id: number) {
     const after = verified - (r.status === 'ok' ? r.qty : 0);
     if (slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這個團練場最後的劃位序，再刪除。`);
     await tx.delete(t.joinReport).where(eq(t.joinReport.id, id));
-    await tx.insert(t.auditLog).values({ actor, action: 'join_report_delete', target: `join_reg:${r.regId}`, detail: `${r.orderNo} × ${r.qty}` });
+    await tx.insert(t.auditLog).values({ actor, action: 'join_report_delete', target: `join_reg:${r.regId}`, detail: `${r.orderNo ?? r.key} × ${r.qty}` });
     return true;
   });
 }
@@ -635,8 +718,9 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   return {
     settings, ...regState, usage,
     era: { count: e.n, refunded: e.refunded, updatedAt: e.at ? new Date(e.at).toISOString() : null },
-    reports: reports.map((x) => ({ id: x.r.id, regId: x.r.regId, venue: reg.get(x.r.regId)?.venueName ?? '', orderNo: x.r.orderNo, qty: x.r.qty, reporter: x.r.reporter, at: x.r.createdAt.toISOString(),
-      status: x.r.status, era: x.r.status === 'pending' ? '' : x.eraStatus === 'refunded' ? '已退票' : x.eraQty === null ? '名單上已沒有' : x.eraQty !== x.r.qty ? `年代記錄 ${x.eraQty} 張` : '' })),
+    reports: reports.map((x) => ({ id: x.r.id, regId: x.r.regId, venue: reg.get(x.r.regId)?.venueName ?? '', key: x.r.key, orderNo: x.r.orderNo, qty: x.r.qty, reporter: x.r.reporter, at: x.r.createdAt.toISOString(),
+      status: x.r.status, era: x.r.status === 'pending' ? '' : x.r.status === 'ambiguous' ? '後幾碼對到多筆' : x.r.status === 'mismatch' ? `年代記錄 ${x.r.eraQty ?? '?'} 張`
+        : x.eraStatus === 'refunded' ? '已退票' : x.r.orderNo && x.eraQty === null ? '名單上已沒有' : '' })),
     slots: slots.map((x) => {
       const r = reg.get(x.regId); const st = x.seatId ? label.get(x.seatId) : undefined;
       return { id: x.id, no: x.no, regId: x.regId, venue: r?.venueName ?? '', headName: r?.headName ?? '', status: x.status, pos: x.pos, misses: x.misses,
