@@ -42,6 +42,7 @@ export default function JoinApp() {
   const [err, setErr] = useState('');
   const [group, setGroup] = useState<Group | null>(null);
   const [ready, setReady] = useState(false);
+  const [last, setLast] = useState<Group | null>(null);
   const [q, setQ] = useState('');
   const [pick, setPick] = useState<Group | null>(null);
   const [creating, setCreating] = useState(false);
@@ -53,11 +54,12 @@ export default function JoinApp() {
 
   const load = () => req<Menu>('/api/join').then((r) => (r.ok ? setMenu(r.data) : setErr(r.message)));
   useEffect(() => {
-    try { const g = JSON.parse(ls.get(KEY) || 'null') as Group | null; if (g?.id) setGroup(g); } catch { /* 忽略 */ }
+    // 不直接進入上次的群：先問「繼續回報到 ○○？」，避免共用的手機、電腦帶錯群
+    try { const g = JSON.parse(ls.get(KEY) || 'null') as Group | null; if (g?.id) setLast(g); } catch { /* 忽略 */ }
     setReady(true); load();
   }, []);
 
-  const choose = (g: Group | null) => { ls.set(KEY, g ? JSON.stringify(g) : ''); setGroup(g); setPick(null); setClash(null); setQ(''); if (!g) load(); window.scrollTo(0, 0); };
+  const choose = (g: Group | null) => { ls.set(KEY, g ? JSON.stringify(g) : ''); setLast(g ?? last); setGroup(g); setPick(null); setClash(null); setQ(''); if (!g) load(); window.scrollTo(0, 0); };
 
   const api = useMemo<Api | null>(() => {
     if (!group) return null;
@@ -119,6 +121,13 @@ export default function JoinApp() {
 
       {!creating && (
         <div className="card">
+          {last && menu.groups.some((g) => g.id === last.id) && (
+            <div className="note" style={{ marginTop: 0, marginBottom: 14 }}>
+              這支手機上次回報到「<b>{menu.groups.find((g) => g.id === last.id)!.name}</b>」（負責人 {menu.groups.find((g) => g.id === last.id)!.head}）
+              <button type="button" className="btn pri" style={{ width: '100%', marginTop: 8, padding: 12 }} onClick={() => choose(menu.groups.find((g) => g.id === last.id)!)}>繼續回報到這一群</button>
+              <button type="button" className="linkbtn small" style={{ marginTop: 6 }} onClick={() => { ls.set(KEY, ''); setLast(null); }}>不是，我要選別的群</button>
+            </div>
+          )}
           <h2 style={{ marginTop: 0 }}>回報到哪一群？</h2>
           <input value={q} placeholder="打群名的幾個字，例：大安" onChange={(e) => { setQ(e.target.value); setPick(null); }} autoFocus />
           {qq && !hits.length && <p className="small muted">找不到「{q}」。{menu.createOpen && '如果是新的群，請負責人按下面「建立新群」。'}</p>}
