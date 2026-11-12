@@ -49,6 +49,7 @@ export default function JoinApp() {
   const [busy, setBusy] = useState(false);
   const [clash, setClash] = useState<Clash | null>(null);
   const [made, setMade] = useState('');
+  const [suggest, setSuggest] = useState('');
 
   const load = () => req<Menu>('/api/join').then((r) => (r.ok ? setMenu(r.data) : setErr(r.message)));
   useEffect(() => {
@@ -77,7 +78,7 @@ export default function JoinApp() {
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
     if (r.data.clash) { setClash(r.data.clash); return; }
-    if (r.data.group) { setMade(r.data.created ? r.data.group.name : ''); setCreating(false); choose(r.data.group); }
+    if (r.data.group) { setMade(r.data.created ? r.data.group.name : ''); setSuggest(g.headName.trim()); setCreating(false); choose(r.data.group); }
   }
 
   if (!ready) return null;
@@ -88,11 +89,11 @@ export default function JoinApp() {
         {made === group.name && <div className="small" style={{ color: 'var(--ok)', fontWeight: 700, marginBottom: 4 }}>✓ 已建立「{group.name}」。請把群名告訴志工：打開同一條連結、點選「{group.name}」就能回報。</div>}
         <div className="row" style={{ justifyContent: 'space-between', gap: 8 }}>
           <span>回報到：<b style={{ fontSize: '1.1em' }}>{group.name}</b> <span className="small muted">（負責人 {group.head}）</span></span>
-          <button type="button" className="linkbtn small" onClick={() => { setMade(''); choose(null); }}>換一群</button>
+          <button type="button" className="linkbtn small" onClick={() => { setMade(''); setSuggest(''); choose(null); }}>換一群</button>
         </div>
       </div>
     );
-    return <JoinReportApp key={group.id} api={api} bar={bar} />;
+    return <JoinReportApp key={group.id} api={api} bar={bar} suggestName={suggest || undefined} />;
   }
 
   if (err && !menu) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
@@ -154,7 +155,7 @@ export default function JoinApp() {
             <div className="note err" style={{ marginTop: 10 }}>
               「<b>{clash.name}</b>」已由 {clash.head}（手機 …{clash.phoneTail}）建立。
               {clash.mine.length > 0 && <div style={{ marginTop: 8 }}>{clash.mine.map((m) => (
-                <button key={m.id} type="button" className="btn pri" style={{ width: '100%', marginTop: 6 }} onClick={() => { setCreating(false); choose({ id: m.id, name: m.name, head: f.headName.slice(0, 1) + '○○' }); }}>您的群是「{m.name}」，改回報到這一群</button>
+                <button key={m.id} type="button" className="btn pri" style={{ width: '100%', marginTop: 6 }} onClick={() => { setCreating(false); setSuggest(f.headName.trim()); choose({ id: m.id, name: m.name, head: f.headName.slice(0, 1) + '○○' }); }}>您的群是「{m.name}」，改回報到這一群</button>
               ))}</div>}
               <div style={{ marginTop: 8 }}>・<b>是同一群</b>：請回上一頁，從清單點選「{clash.name}」。</div>
               <div>・<b>不同群</b>：<button type="button" className="btn pri small" disabled={busy} onClick={() => { setF({ ...f, name: clash.suggest }); create(clash.suggest); }}>改用「{clash.suggest}」建立</button></div>

@@ -44,7 +44,7 @@ async function call<T>(code: string, body?: unknown): Promise<Res<T>> {
 }
 
 /** 志工回報：第一次輸入名字（手機記住），之後輸入年代訂單編號＋張數，整批送出 */
-export default function JoinReportApp({ code, api: api0, bar }: { code?: string; api?: Api; bar?: React.ReactNode }) {
+export default function JoinReportApp({ code, api: api0, bar, suggestName }: { code?: string; api?: Api; bar?: React.ReactNode; suggestName?: string }) {
   const [api] = useState<Api>(() => api0 ?? codeApi(code ?? ''));
   const [page, setPage] = useState<Page | null>(null);
   const [err, setErr] = useState('');
@@ -60,7 +60,12 @@ export default function JoinReportApp({ code, api: api0, bar }: { code?: string;
   const [showList, setShowList] = useState(true);
 
   const load = () => api.load().then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
-  useEffect(() => { const n = store.get(); setName(n); setEditName(!n); load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const n = store.get();
+    // 剛建群的負責人：先帶入負責人姓名，可修改後按確定
+    if (suggestName) { setName(''); setNameDraft(suggestName); setEditName(true); } else { setName(n); setEditName(!n); }
+    load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setRow = (i: number, v: Partial<Row>) => setRows(rows.map((r, k) => (k === i ? { ...r, ...v, reason: undefined } : r)));
 
@@ -165,7 +170,7 @@ export default function JoinReportApp({ code, api: api0, bar }: { code?: string;
       {head}
       <form className="card" onSubmit={(e) => { e.preventDefault(); const n = nameDraft.trim(); if (!n) return; store.set(n); setName(n); setEditName(false); }}>
         <h2 style={{ marginTop: 0 }}>請輸入您的名字</h2>
-        <p className="small muted" style={{ marginTop: 0 }}>只要輸入一次，這支手機會記住。負責人會看到是誰回報的。</p>
+        <p className="small muted" style={{ marginTop: 0 }}>{suggestName && nameDraft === suggestName ? '已帶入負責人姓名，不是您本人請修改。' : ''}只要輸入一次，這支手機會記住。負責人會看到是誰回報的。</p>
         <input value={nameDraft} maxLength={20} autoFocus placeholder="例：王小明" onChange={(e) => setNameDraft(e.target.value)} />
         <button className="btn pri" style={{ marginTop: 12, width: '100%', padding: 12 }} disabled={!nameDraft.trim()}>確定</button>
       </form>
