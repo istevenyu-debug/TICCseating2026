@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { joinAdminState } from '@/lib/joinQueue';
 import AdminMap, { type SeatLook } from './AdminMap';
+import { eraRows, guessCols, type EraCols } from '@/lib/eraParse';
 
 type J = Awaited<ReturnType<typeof joinAdminState>>;
 type Reg = J['regs'][number];
@@ -253,26 +254,24 @@ function Venues({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy
 /* ---------- 年代名單 ---------- */
 function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: Props['setMsg'] }) {
   const [grid, setGrid] = useState<string[][] | null>(null);
-  const [cols, setCols] = useState({ head: 0, no: -1, qty: -1, status: -1 });
-  const guess = (row: string[], words: string[]) => row.findIndex((c) => words.some((w) => c.includes(w)));
+  const [cols, setCols] = useState<EraCols>({ head: 0, no: -1, qty: -1, status: -1, floor: -1, row: -1 });
+  const [silver, setSilver] = useState(true);
   async function onFile(file: File) {
     try {
       const X = await import('xlsx');
       const wb = X.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
       const g = X.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' }).slice(0, 50001).map((r) => r.map((c) => String(c ?? '').trim()));
-      const head = Math.max(0, g.findIndex((r) => r.some((c) => /訂單|編號|單號/.test(c))));
-      const h = g[head] ?? [];
-      setCols({ head, no: guess(h, ['訂單', '編號', '單號']), qty: guess(h, ['張', '數量']), status: guess(h, ['狀態', '退']) });
+      setCols(guessCols(g));
       setGrid(g);
     } catch { setMsg({ kind: 'err', text: '讀不到這個檔案。請用 Excel（.xlsx／.xls）或 .csv。' }); }
   }
-  const rows = grid ? grid.slice(cols.head + 1).filter((r) => cols.no >= 0 && r[cols.no]) : [];
-  const toRow = (r: string[]) => ({ orderNo: r[cols.no], qty: Number(String(r[cols.qty] ?? '').replace(/\D/g, '')) || 0, status: cols.status >= 0 && /退|取消|作廢/.test(r[cols.status] ?? '') ? 'refunded' : 'sold' });
+  const parsed = useMemo(() => (grid ? eraRows(grid, cols, silver) : null), [grid, cols, silver]);
+  const rows = parsed?.rows ?? [];
   const header = grid?.[cols.head] ?? [];
-  const pickCol = (k: 'no' | 'qty' | 'status', label: string, optional = false) => (
+  const pickCol = (k: 'no' | 'qty' | 'status' | 'floor' | 'row', label: string, none?: string) => (
     <label className="f">{label}
       <select value={cols[k]} onChange={(e) => setCols({ ...cols, [k]: Number(e.target.value) })}>
-        <option value={-1}>{optional ? '（沒有，全部算已售）' : '請選欄位'}</option>
+        <option value={-1}>{none ?? '請選欄位'}</option>
         {header.map((h, i) => <option key={i} value={i}>{`第 ${i + 1} 欄${h ? `：${h}` : ''}`}</option>)}
       </select>
     </label>
@@ -281,21 +280,26 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
     <div className="card">
       <h3 style={{ marginTop: 0 }}>年代名單</h3>
       <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後更新 {tw(j.era.updatedAt)}</p>
-      <p className="small muted">只需要：訂單編號、張數、狀態（已售／已退）。同一訂單以新上傳的為準，可以重複上傳。</p>
+      <p className="small muted">可直接上傳年代「售出明細」（一列一張票，訂單編號 ER…-1、-2 會自動合計成一筆訂單）。小計、合計列自動略過。同一訂單以新上傳的為準，可以重複上傳。</p>
       <label className="btn pri small">選擇年代名單檔案<input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
-      {grid && (
+      {grid && parsed && (
         <div style={{ marginTop: 12 }}>
           <div className="fields" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))' }}>
             <label className="f">標題在第幾列<input inputMode="numeric" value={cols.head + 1} onChange={(e) => setCols({ ...cols, head: Math.max(0, Number(e.target.value) - 1 || 0) })} /></label>
-            {pickCol('no', '訂單編號')}{pickCol('qty', '張數')}{pickCol('status', '狀態（含「退」字＝已退）', true)}
+            {pickCol('no', '訂單編號')}
+            {pickCol('qty', '張數', '（沒有：一列一張票，自動合計）')}
+            {pickCol('status', '狀態（含「退」字＝已退）', '（沒有，全部算已售）')}
+            {pickCol('floor', '樓層', '（沒有）')}
+            {pickCol('row', '排', '（沒有）')}
           </div>
-          {cols.no >= 0 && cols.qty >= 0 && (
+          {parsed.canSilver && <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={silver} onChange={(e) => setSilver(e.target.checked)} /><span>只算銀區（3 樓第 13–27 排）</span></label>}
+          {cols.no >= 0 && (
             <>
-              <p className="small" style={{ marginBottom: 4 }}>共 {rows.length} 筆，前 5 筆預覽：</p>
+              <p className="small" style={{ marginBottom: 4 }}>整理後 <b>{rows.length}</b> 筆訂單、<b>{parsed.tickets}</b> 張{parsed.perTicket ? '（一列一張票合計）' : ''}{parsed.outside ? `；不在銀區 ${parsed.outside} 張不計` : ''}。前 5 筆預覽：</p>
               <div className="tbl"><table><thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th></tr></thead>
-                <tbody>{rows.slice(0, 5).map((r, i) => { const x = toRow(r); return <tr key={i}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>; })}</tbody></table></div>
+                <tbody>{rows.slice(0, 5).map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>)}</tbody></table></div>
               <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={async () => {
-                const r = await act({ action: 'join.era.upload', rows: rows.map(toRow) }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number } | undefined;
+                const r = await act({ action: 'join.era.upload', rows }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number } | undefined;
                 if (r) { setGrid(null); setMsg({ kind: r.mismatch || r.refundedReports ? 'warn' : 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}。回報核對：新通過 ${r.newlyVerified} 筆、仍待核對 ${r.pending} 筆${r.mismatch ? `、張數不符 ${r.mismatch} 筆` : ''}${r.refundedReports ? `、已退票 ${r.refundedReports} 筆` : ''}` }); }
               }}>上傳 {rows.length} 筆</button>
             </>

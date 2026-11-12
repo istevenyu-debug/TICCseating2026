@@ -21,8 +21,9 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Slot = typeof t.joinSlot.$inferSelect;
 type Reg = typeof t.joinReg.$inferSelect;
 
-/** 訂單編號：去空白、全形轉半形、英文大寫 */
-export const normOrderNo = (s: string) => s.replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\s　]/g, '').toUpperCase();
+/** 訂單編號：去空白、全形轉半形、英文大寫；去掉每張票的「-1、-2」尾碼（年代票號 ER2611120000109-1 → 訂單 ER2611120000109） */
+export const normOrderNo = (s: string) => s.replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[\s　]/g, '').toUpperCase()
+  .replace(/^(.{6,})-\d{1,3}$/, '$1');
 
 /* ---------- 年代名單 ---------- */
 
