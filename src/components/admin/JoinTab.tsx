@@ -1,9 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { joinAdminState } from '@/lib/joinQueue';
 import AdminMap, { type SeatLook } from './AdminMap';
-import { eraRows, guessCols, type EraCols } from '@/lib/eraParse';
+import { eraRows, guessCols, parsePrices, type EraCols, type EraRow } from '@/lib/eraParse';
 
 type J = Awaited<ReturnType<typeof joinAdminState>>;
 type Reg = J['regs'][number];
@@ -67,7 +67,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
 /* ---------- 設定 ---------- */
 function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean; base: string; copy: (s: string) => void }) {
   const s = j.settings;
-  const [f, setF] = useState({ contact: s.contact, perSeat: String(s.perSeat), turnMin: String(s.turnMin), pickMin: String(s.pickMin), pushBack: String(s.pushBack), notifyAhead: String(s.notifyAhead), hourFrom: s.hourFrom, hourTo: s.hourTo });
+  const [f, setF] = useState({ contact: s.contact, perSeat: String(s.perSeat), turnMin: String(s.turnMin), pickMin: String(s.pickMin), pushBack: String(s.pushBack), notifyAhead: String(s.notifyAhead), hourFrom: s.hourFrom, hourTo: s.hourTo, silverPrices: s.silverPrices });
   const set = (values: Record<string, unknown>, ok: string) => act({ action: 'join.settings', values }, ok);
   const link = `${base}/join`;
   const num = (k: keyof typeof f) => Number(f[k]);
@@ -96,7 +96,11 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <label className="check"><input type="checkbox" checked={s.reportOpen} disabled={busy} onChange={(e) => set({ reportOpen: e.target.checked }, e.target.checked ? '已開放回報' : '已關閉回報')} />
           <span><b>開放回報</b>{s.reportOpen ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
         <p className="small muted">先收後核：年代名單上還沒有的訂單先收為「待核對」，每次上傳年代名單自動核對。回報截止時到「回報」按「鎖定劃位序」（會同時關閉回報）。</p>
-        <label className="f" style={{ maxWidth: 200 }}>每幾張一個劃位序<input inputMode="numeric" value={f.perSeat} onChange={(e) => setF({ ...f, perSeat: e.target.value })} /></label>
+        <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
+          <label className="f" style={{ maxWidth: 200 }}>每幾張一個劃位序<input inputMode="numeric" value={f.perSeat} onChange={(e) => setF({ ...f, perSeat: e.target.value })} /></label>
+          <label className="f" style={{ maxWidth: 260 }}>銀區票價（逗號分開）<input value={f.silverPrices} placeholder="3000,2550" onChange={(e) => setF({ ...f, silverPrices: e.target.value })} /></label>
+        </div>
+        <p className="small muted" style={{ margin: 0 }}>年代名單只算 3 樓、售價是這些數字的票；其他票價、其他樓層不計贈票，志工回報時會看到「非銀區」與原因。</p>
       </div>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>3. 劃位排隊</h3>
@@ -116,7 +120,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <p className="small muted">叫不到：第 1 次延後幾號、第 2 次排到最後、第 3 次暫停排隊（負責人按「我回來了」重新排到最後）。時段留白＝不限。</p>
       </div>
       <ClearTest act={act} busy={busy} />
-      <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim() }, '已儲存設定')}>儲存設定</button>
+      <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim(), silverPrices: f.silverPrices.trim() }, '已儲存設定')}>儲存設定</button>
     </>
   );
 }
@@ -258,23 +262,49 @@ function Venues({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy
 }
 
 /* ---------- 年代名單 ---------- */
+type UpRes = { rows: number; added: number; changed: number; refunded: number; outside: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number; ambiguous: number; outsideReports: number; early: number; notfound: number; dateFixed: number; newIssues: number; mailed: number };
+function upText(r: UpRes, outsideNote: string) {
+  const bad = [r.mismatch && `張數不符 ${r.mismatch}`, r.outsideReports && `非銀區 ${r.outsideReports}`, r.refundedReports && `已退票 ${r.refundedReports}`, r.ambiguous && `需補完整編號 ${r.ambiguous}`,
+    r.early && `回報早於購買 ${r.early}`, r.notfound && `找不到訂單 ${r.notfound}`].filter(Boolean).join('、');
+  return `已上傳 ${r.rows} 筆訂單（新增 ${r.added}、更新 ${r.changed}${r.outside ? `；整筆非銀區 ${r.outside}` : ''}）${outsideNote ? `。不計贈票的票：${outsideNote}` : ''}。`
+    + `回報核對：新通過 ${r.newlyVerified} 筆${r.dateFixed ? `（自動更正日期 ${r.dateFixed}）` : ''}、仍待核對 ${r.pending} 筆${bad ? `；需修正：${bad}` : ''}${r.mailed ? `。已寄信通知 ${r.mailed} 位負責人` : ''}`;
+}
+const ERA_BADGE: Record<string, [string, string]> = { ok: ['已核對', 'var(--ok)'], pending: ['待核對', 'var(--warn)'] };
 function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: Props['setMsg'] }) {
   const [grid, setGrid] = useState<string[][] | null>(null);
-  const [cols, setCols] = useState<EraCols>({ head: 0, no: -1, qty: -1, status: -1, floor: -1, row: -1, date: -1, time: -1 });
+  const [cols, setCols] = useState<EraCols>({ head: 0, no: -1, qty: -1, status: -1, floor: -1, row: -1, date: -1, time: -1, price: -1 });
   const [silver, setSilver] = useState(true);
+  const [last, setLast] = useState<{ text: string; warn: boolean } | null>(null);
+  const [show, setShow] = useState<'all' | 'free' | 'other'>('all');
+  const [more, setMore] = useState(100);
+  const prices = parsePrices(j.settings.silverPrices);
+  async function upload(rows: EraRow[], outsideNote: string) {
+    const r = await act({ action: 'join.era.upload', rows }) as UpRes | undefined;
+    if (!r) return false;
+    setGrid(null);
+    const text = upText(r, outsideNote);
+    const warn = !!(r.mismatch || r.refundedReports || r.ambiguous || r.outsideReports || r.early || r.notfound);
+    setLast({ text, warn });
+    setMsg({ kind: warn ? 'warn' : 'ok', text });
+    return true;
+  }
   async function onFile(file: File) {
     try {
       const X = await import('xlsx');
       const wb = X.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
       const g = X.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' }).slice(0, 50001).map((r) => r.map((c) => String(c ?? '').trim()));
-      setCols(guessCols(g));
+      const c = guessCols(g);
+      const p = eraRows(g, c, true, prices);
+      // 欄位都認得（訂單編號、張數或一列一張票、能判斷銀區）→ 選了檔案就直接上傳，不用再按
+      if (c.no >= 0 && p.rows.length && p.canSilver && (p.perTicket || c.qty >= 0)) { if (await upload(p.rows, p.outsideNote)) return; }
+      setCols(c);
       setGrid(g);
     } catch { setMsg({ kind: 'err', text: '讀不到這個檔案。請用 Excel（.xlsx／.xls）或 .csv。' }); }
   }
-  const parsed = useMemo(() => (grid ? eraRows(grid, cols, silver) : null), [grid, cols, silver]);
+  const parsed = useMemo(() => (grid ? eraRows(grid, cols, silver, prices) : null), [grid, cols, silver, prices.join()]);
   const rows = parsed?.rows ?? [];
   const header = grid?.[cols.head] ?? [];
-  const pickCol = (k: 'no' | 'qty' | 'status' | 'floor' | 'row', label: string, none?: string) => (
+  const pickCol = (k: 'no' | 'qty' | 'status' | 'floor' | 'row' | 'price', label: string, none?: string) => (
     <label className="f">{label}
       <select value={cols[k]} onChange={(e) => setCols({ ...cols, [k]: Number(e.target.value) })}>
         <option value={-1}>{none ?? '請選欄位'}</option>
@@ -282,34 +312,59 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
       </select>
     </label>
   );
+  const list = j.eraList.filter((x) => show === 'all' || (show === 'free' ? !x.group : x.otherQty > 0));
+  const unclaimed = j.eraList.filter((x) => !x.group && x.qty > 0 && x.status === 'sold');
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>年代名單</h3>
-      <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後更新 {tw(j.era.updatedAt)}</p>
-      <p className="small muted">可直接上傳年代「售出明細」（一列一張票，訂單編號 ER…-1、-2 會自動合計成一筆訂單）。小計、合計列自動略過。同一訂單以新上傳的為準，可以重複上傳。</p>
-      <label className="btn pri small">選擇年代名單檔案<input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
+      <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後上傳 {tw(j.era.updatedAt)}</p>
+      <p className="small muted">直接選年代「售出明細」檔案，<b>選了就自動上傳並核對</b>（欄位認不出來時才需要手動對欄位、按上傳）。只算 3 樓、售價 {prices.join('、')} 的票（在「設定」可改）；其他票價、其他樓層記為「不計贈票」，志工回報時會看到原因。同一訂單以新上傳的為準，可以重複上傳。</p>
+      <label className="btn pri">選擇年代名單檔案（自動上傳）<input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
+      {last && <p className={`note small ${last.warn ? 'warn' : 'ok'}`} style={{ marginTop: 10 }}>{last.text}{last.warn ? '。有問題的請到「回報」勾「只看有問題的」查看。' : ''}</p>}
       {grid && parsed && (
         <div style={{ marginTop: 12 }}>
+          <p className="note warn" style={{ fontSize: 16, fontWeight: 700 }}>⚠️ 欄位沒有全部認出來，<u>還沒上傳</u>。請確認下面的欄位，再按最下面的「上傳」。</p>
           <div className="fields" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))' }}>
             <label className="f">標題在第幾列<input inputMode="numeric" value={cols.head + 1} onChange={(e) => setCols({ ...cols, head: Math.max(0, Number(e.target.value) - 1 || 0) })} /></label>
             {pickCol('no', '訂單編號')}
             {pickCol('qty', '張數', '（沒有：一列一張票，自動合計）')}
             {pickCol('status', '狀態（含「退」字＝已退）', '（沒有，全部算已售）')}
             {pickCol('floor', '樓層', '（沒有）')}
+            {pickCol('price', '售價', '（沒有）')}
             {pickCol('row', '排', '（沒有）')}
           </div>
-          {parsed.canSilver && <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={silver} onChange={(e) => setSilver(e.target.checked)} /><span>只算銀區（3 樓第 13–27 排）</span></label>}
+          {parsed.canSilver ? <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={silver} onChange={(e) => setSilver(e.target.checked)} /><span>只算銀區（3 樓、售價 {prices.join('、')}）</span></label>
+            : <p className="note warn small">找不到「樓層」與「售價」（或「排」）欄位，無法判斷銀區：上傳後<b>所有票都會算</b>。</p>}
           {cols.no >= 0 && (
             <>
-              <p className="small" style={{ marginBottom: 4 }}>整理後 <b>{rows.length}</b> 筆訂單、<b>{parsed.tickets}</b> 張{parsed.perTicket ? '（一列一張票合計）' : ''}{parsed.outside ? `；不在銀區 ${parsed.outside} 張不計` : ''}。前 5 筆預覽：</p>
-              <div className="tbl"><table><thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th></tr></thead>
-                <tbody>{rows.slice(0, 5).map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>)}</tbody></table></div>
-              <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={async () => {
-                const r = await act({ action: 'join.era.upload', rows }) as { rows: number; added: number; changed: number; refunded: number; newlyVerified: number; pending: number; mismatch: number; refundedReports: number; ambiguous: number } | undefined;
-                if (r) { setGrid(null); setMsg({ kind: r.mismatch || r.refundedReports || r.ambiguous ? 'warn' : 'ok', text: `已上傳 ${r.rows} 筆：新增 ${r.added}、更新 ${r.changed}${r.refunded ? `、其中已退 ${r.refunded}` : ''}。回報核對：新通過 ${r.newlyVerified} 筆、仍待核對 ${r.pending} 筆${r.mismatch ? `、張數不符 ${r.mismatch} 筆` : ''}${r.refundedReports ? `、已退票 ${r.refundedReports} 筆` : ''}${r.ambiguous ? `、需補完整編號 ${r.ambiguous} 筆（已寄信請負責人補）` : ''}` }); }
-              }}>上傳 {rows.length} 筆</button>
+              <p className="small" style={{ marginBottom: 4 }}>整理後 <b>{rows.length}</b> 筆訂單、銀區 <b>{parsed.tickets}</b> 張{parsed.perTicket ? '（一列一張票合計）' : ''}{parsed.outside ? `；不計贈票 ${parsed.outside} 張（${parsed.outsideNote}）` : ''}。前 5 筆預覽：</p>
+              <div className="tbl"><table><thead><tr><th>訂單編號</th><th>銀區張數</th><th>不計</th><th>狀態</th></tr></thead>
+                <tbody>{rows.slice(0, 5).map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td className="small">{x.otherNote}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>)}</tbody></table></div>
+              <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={() => upload(rows, parsed.outsideNote)}>上傳 {rows.length} 筆</button>
             </>
           )}
+        </div>
+      )}
+      {j.eraList.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <h4 style={{ margin: '0 0 6px' }}>已上傳的訂單（{j.eraList.length} 筆；還沒有群回報的銀區訂單 {unclaimed.length} 筆、{unclaimed.reduce((a, x) => a + x.qty, 0)} 張）</h4>
+          <div className="row" style={{ gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+            {([['all', '全部'], ['free', '還沒有群回報'], ['other', '有不計贈票的票']] as const).map(([k, l]) => <button key={k} className={`btn small${show === k ? ' pri' : ''}`} onClick={() => setShow(k)}>{l}</button>)}
+          </div>
+          <div className="tbl"><table>
+            <thead><tr><th style={{ textAlign: 'left' }}>訂單編號</th><th>售出</th><th>銀區</th><th>不計贈票</th><th style={{ textAlign: 'left' }}>回報的群</th></tr></thead>
+            <tbody>{list.slice(0, more).map((x) => {
+              const b = ERA_BADGE[x.reportStatus];
+              return (
+                <tr key={x.orderNo}>
+                  <td className="mono small">{x.orderNo}{x.status === 'refunded' && <span style={{ color: 'var(--red)' }}>（已退）</span>}</td>
+                  <td className="small">{tw(x.soldAt)}</td><td style={{ textAlign: 'center' }}>{x.qty}</td><td className="small">{x.otherNote}</td>
+                  <td className="small">{x.group ? <>{x.group} <span style={{ color: b?.[1] ?? 'var(--red)' }}>{b?.[0] ?? '需修正'}</span></> : <span className="muted">無人回報</span>}</td>
+                </tr>
+              );
+            })}</tbody>
+          </table></div>
+          {list.length > more && <button className="btn small" style={{ marginTop: 6 }} onClick={() => setMore(more + 200)}>看更多（還有 {list.length - more} 筆）</button>}
         </div>
       )}
     </div>
@@ -317,13 +372,15 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
 }
 
 /* ---------- 回報 ---------- */
-const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--warn)'], ok: ['已核對', 'var(--ok)'], mismatch: ['張數不符', 'var(--red)'], refunded: ['已退票', 'var(--red)'], ambiguous: ['需補完整編號', 'var(--red)'] };
+const RST: Record<string, [string, string]> = { pending: ['待核對', 'var(--warn)'], ok: ['已核對', 'var(--ok)'], mismatch: ['張數不符', 'var(--red)'], refunded: ['已退票', 'var(--red)'], ambiguous: ['需補完整編號', 'var(--red)'],
+  outside: ['非銀區', 'var(--red)'], early: ['回報早於購買', 'var(--red)'], notfound: ['找不到訂單', 'var(--red)'] };
+const RED = new Set(['mismatch', 'refunded', 'ambiguous', 'outside', 'early', 'notfound']);
 function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; busy: boolean; sure: string | null; confirm2: Props['confirm2']; setMsg: Props['setMsg'] }) {
   const [open, setOpen] = useState<number | null>(null);
   const [showProv, setShowProv] = useState(false);
   const [onlyBad, setOnlyBad] = useState(false);
   const [find, setFind] = useState('');
-  const badRegs = new Set(j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous').map((x) => x.regId));
+  const badRegs = new Set(j.reports.filter((x) => RED.has(x.status)).map((x) => x.regId));
   const others = (id: number) => j.totals.filter((x) => x.regId !== id).sort((a, b) => a.venue.localeCompare(b.venue, 'zh-Hant'));
   const rename = (id: number, old: string) => { const n = window.prompt('新的群名稱', old)?.trim(); if (n && n !== old) act({ action: 'join.group.rename', id, name: n }, '已改名'); };
   const merge = (id: number, name: string, into: string) => {
@@ -331,7 +388,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
     if (!to || !window.confirm(`把「${name}」的回報全部合併到「${to.venue}」？\n「${name}」會被移除（劃位序依回報時間重新計算）。`)) return;
     act({ action: 'join.group.merge', id, into: to.regId }, `已合併到「${to.venue}」`); setOpen(null);
   };
-  const bad = j.reports.filter((x) => x.status === 'mismatch' || x.status === 'refunded' || x.status === 'ambiguous');
+  const bad = j.reports.filter((x) => RED.has(x.status));
   const pend = j.reports.filter((x) => x.status === 'pending');
   const short = j.totals.filter((x) => x.short);
   const lock = async () => {
@@ -354,7 +411,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
         <div className="tbl" style={{ marginBottom: 10 }}><table><thead><tr><th>號碼</th><th style={{ textAlign: 'left' }}>團練場</th><th>滿額時間</th></tr></thead>
           <tbody>{j.provisional.map((x) => <tr key={x.no}><td style={{ textAlign: 'center' }}>{x.no}</td><td>{x.venue}</td><td className="small">{tw(x.at)}</td></tr>)}</tbody></table></div>
       )}
-      {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報和年代名單不一致（張數不符、已退票、或後幾碼對到多筆需補完整編號），已用紅字標出，不計入張數。請聯絡該團練場確認。</p>}
+      {bad.length > 0 && <p className="note warn small">有 {bad.length} 筆回報需要修正（張數不符、非銀區、已退票、找不到訂單、回報早於購買、需補完整編號），已用紅字標出原因，不計入張數。每次上傳年代名單後，系統已自動寄信給該群負責人；志工用原手機修正即可。</p>}
       {short.length > 0 && <p className="note warn small">鎖定後年代名單更新，{short.map((x) => x.venue).join('、')} 的已核對張數不夠目前的劃位序。劃位序不會自動取消，請到「劃位排隊」決定。</p>}
       <div className="row" style={{ gap: 10, margin: '6px 0 8px', flexWrap: 'wrap' }}>
         <input value={find} placeholder="找群名" style={{ maxWidth: 180 }} onChange={(e) => setFind(e.target.value)} />
@@ -385,15 +442,17 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
         <div className="tbl" style={{ marginTop: 10 }}><table>
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th><th>時間</th><th /></tr></thead>
           <tbody>{j.reports.filter((x) => x.regId === open).map((x) => (
-            <tr key={x.id}>
+            <Fragment key={x.id}><tr>
               <td className="mono">{x.orderNo ?? `${x.buyDate ? `${+x.buyDate.slice(2, 4)}/${+x.buyDate.slice(4, 6)}・` : ''}${x.key}`}{x.orderNo && x.key !== x.orderNo && <div className="small muted">輸入 {x.key}</div>}</td><td style={{ textAlign: 'center' }}>{x.qty}</td>
-              <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}{x.era && <div className="small">{x.era}</div>}</td>
+              <td style={{ color: RST[x.status]?.[1], fontWeight: 700 }}>{RST[x.status]?.[0] ?? x.status}</td>
               <td>{x.reporter}</td><td className="small">{tw(x.at)}</td>
               <td><button className="btn small" disabled={busy} onClick={() => confirm2(`jr-del-${x.id}`, () => act({ action: 'join.report.delete', id: x.id }, '已刪除'))}>{sure === `jr-del-${x.id}` ? '再按一次' : '刪除'}</button>
                 {!j.locked && <select value="" disabled={busy} style={{ width: 'auto', marginTop: 4 }} onChange={(e) => { const to = j.totals.find((o) => String(o.regId) === e.target.value); if (to && window.confirm(`把這筆移到「${to.venue}」？`)) act({ action: 'join.report.move', id: x.id, to: to.regId }, `已移到「${to.venue}」`); }}>
                   <option value="">移到…</option>{others(x.regId).map((o) => <option key={o.regId} value={o.regId}>{o.venue}</option>)}
                 </select>}</td>
             </tr>
+            {x.era && <tr><td colSpan={6} className="small" style={{ color: RST[x.status]?.[1], background: RED.has(x.status) ? '#fff4f2' : undefined }}>{x.era}</td></tr>}
+            </Fragment>
           ))}</tbody>
         </table></div>
       )}

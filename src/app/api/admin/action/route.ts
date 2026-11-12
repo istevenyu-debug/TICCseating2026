@@ -265,7 +265,7 @@ export async function POST(req: Request) {
       case 'join.unlock': mustBeAdmin(); return unlockSlots(db, who);
       case 'join.clear': mustBeAdmin(); return clearJoinTest(db, who, !!a.withRegs);
       case 'join.paint': return paintFloor3(db, who, a.kind, a.seatIds);
-      case 'join.era.upload': return uploadEra(db, who, a.rows);
+      case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);
       case 'join.group.rename': return renameGroup(db, who, a.id, a.name);
       case 'join.group.merge': mustBeAdmin(); return mergeGroups(db, who, a.id, a.into);

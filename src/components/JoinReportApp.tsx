@@ -7,9 +7,9 @@ type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
   orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
   today: string;
-  list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null; mine?: boolean }[];
+  list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null; note?: string; mine?: boolean }[];
 };
-type Result = { accepted: { orderNo: string; qty: number; status: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
+type Result = { accepted: { orderNo: string; qty: number; status: string; note?: string }[]; rejected: { orderNo: string; qty: string; reason: string }[]; orders: number; verified: number; pending: number; slots: number[]; next: number };
 export type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
 export type Page_ = Page;
 /** 頁面資料與送出的來源：每群專屬連結（/join/r/<code>）或共用連結選好的群（/join） */
@@ -31,7 +31,11 @@ const NAME_KEY = 'join-reporter';
 const ST: Record<string, { text: string; color: string }> = {
   pending: { text: '待核對', color: 'var(--warn)' }, ok: { text: '已核對 ✓', color: 'var(--ok)' },
   mismatch: { text: '張數不符', color: 'var(--red)' }, refunded: { text: '已退票', color: 'var(--red)' }, ambiguous: { text: '需補完整編號', color: 'var(--red)' },
+  outside: { text: '非銀區', color: 'var(--red)' }, early: { text: '回報早於購買', color: 'var(--red)' }, notfound: { text: '找不到訂單', color: 'var(--red)' },
 };
+const RED = new Set(['mismatch', 'refunded', 'ambiguous', 'outside', 'early', 'notfound']);
+/** 紅字的怎麼修 */
+const HOW: Record<string, string> = { mismatch: '請按「刪除」，再用正確張數重新回報', outside: '這筆不計贈票，請按「刪除」', refunded: '這筆不計贈票，請按「刪除」', early: '請按「刪除」後重新回報', notfound: '請確認後 4 碼、購買日期與張數，打錯請「刪除」後重新回報', ambiguous: '請在下面補上完整訂單編號' };
 const blank = (n = 3): Row[] => Array.from({ length: n }, () => ({ orderNo: '', qty: '' }));
 const tw = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 const store = { get: () => { try { return localStorage.getItem(NAME_KEY) ?? ''; } catch { return ''; } }, set: (v: string) => { try { localStorage.setItem(NAME_KEY, v); } catch { /* 不能存也沒關係 */ } } };
@@ -60,6 +64,13 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
   const [showList, setShowList] = useState(true);
 
   const load = () => api.load().then((r) => (r.ok ? setPage(r.data) : setErr(r.message)));
+  // 年代名單更新後狀態會變：頁面開著時每 30 秒自動更新
+  useEffect(() => {
+    const id = setInterval(() => { if (!document.hidden) load(); }, 30000);
+    const vis = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', vis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', vis); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const n = store.get();
     // 剛建群的負責人：先帶入負責人姓名，可修改後按確定
@@ -127,26 +138,42 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
   const howto = (
     <div className="note" style={{ margin: '12px 0' }}>
       <b>訂單編號只要輸入後 4 碼：</b>「-」前面的最後 4 個數字，例如 ER2611120000109-1 → 輸入 <b>0109</b>。系統自動帶入今天的日期；當天買、當天回報最簡單，也排得最前面。若同一天有別筆訂單後 4 碼相同，系統會請您補上完整編號。
-      <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。</div>
+      <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。只算三樓銀區的票。有問題會變紅字並寫出原因，負責人也會收到 Email，請用原手機回來修正。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。</div>
       <div style={{ marginTop: 4 }}>有疑義請洽 {page.contact}</div>
     </div>
   );
 
+  const red = page.list.filter((x) => RED.has(x.status));
+  const myRed = red.filter((x) => x.mine !== false);
+  const alert = red.length > 0 && (
+    <div className="note err" style={{ marginBottom: 12, fontSize: 17 }}>
+      <b>⚠️ {myRed.length ? `您送出的有 ${myRed.length} 筆需要修正` : `本群有 ${red.length} 筆需要修正`}</b>（紅字，修正前不計贈票）。
+      {page.open ? <button type="button" className="btn small" style={{ marginLeft: 8 }} onClick={() => { setShowList(true); setTimeout(() => document.getElementById('join-list')?.scrollIntoView({ behavior: 'smooth' }), 50); }}>去修正</button>
+        : <> 回報已截止，有疑義請洽 {page.contact}</>}
+      {!myRed.length && page.open && <div className="small">只有送出的那支手機能修正，請通知填寫人：{[...new Set(red.map((x) => x.reporter))].join('、')}</div>}
+    </div>
+  );
   const list = (
-    <div className="card" style={{ marginTop: 12 }}>
+    <div className="card" style={{ marginTop: 12 }} id="join-list">
       <button type="button" className="linkbtn" onClick={() => setShowList(!showList)}>{showList ? '▼' : '▶'} 已回報的訂單（{page.list.length}）</button>
       {showList && page.list.length > 0 && (
         <div className="tbl" style={{ marginTop: 8 }}><table>
           <thead><tr><th>訂單編號</th><th>張數</th><th>狀態</th><th>填寫人</th>{page.open && <th />}</tr></thead>
-          <tbody>{[...page.list].reverse().map((x) => (
+          <tbody>{[...page.list].reverse().sort((a, b) => Number(RED.has(b.status)) - Number(RED.has(a.status))).map((x) => (
             <Fragment key={x.id}>
               <tr>
                 <td className="mono">{x.orderNo ?? `${x.buyDate ? `${+x.buyDate.slice(2, 4)}/${+x.buyDate.slice(4, 6)}・` : ''}${x.key}`}{x.orderNo && x.orderNo !== x.key && <div className="small muted">輸入 {x.key}</div>}<div className="small muted">{tw(x.at)}</div></td>
                 <td style={{ textAlign: 'center' }}>{x.qty}</td>
-                <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}{x.status === 'mismatch' && x.eraQty !== null && <div className="small">年代記錄 {x.eraQty} 張</div>}</td>
+                <td style={{ color: ST[x.status]?.color, fontWeight: 700 }}>{ST[x.status]?.text ?? x.status}</td>
                 <td>{x.reporter}</td>
                 {page.open && <td>{x.mine !== false && <button type="button" className="btn small" disabled={busy} onClick={() => remove(x.id, x.orderNo ?? x.key)}>刪除</button>}</td>}
               </tr>
+              {(x.note || (RED.has(x.status) && x.status !== 'ambiguous')) && (
+                <tr><td colSpan={5} className="small" style={{ background: RED.has(x.status) ? '#fff4f2' : '#f2f8f3', color: ST[x.status]?.color, paddingTop: 6 }}>
+                  {x.note || (x.status === 'mismatch' && x.eraQty !== null ? `年代記錄 ${x.eraQty} 張` : '')}
+                  {RED.has(x.status) && page.open && x.status !== 'ambiguous' && (!x.mine || !/請/.test(x.note ?? '')) && <div style={{ fontWeight: 700 }}>👉 {x.mine !== false ? HOW[x.status] : '請送出的人用他的手機修正'}</div>}
+                </td></tr>
+              )}
               {page.open && x.status === 'ambiguous' && x.mine !== false && (
                 <tr><td colSpan={5} style={{ background: '#fff4f2' }}>
                   <div className="small" style={{ color: 'var(--red)', marginBottom: 4 }}>有好幾筆訂單後幾碼都是 {x.key}，請補上完整訂單編號：</div>
@@ -163,7 +190,7 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
     </div>
   );
 
-  if (!page.open) return <main className="wrap join">{head}{summary}<div className="note" style={{ textAlign: 'center', padding: 16 }}>{page.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}有疑義請洽 {page.contact}</div>{list}</main>;
+  if (!page.open) return <main className="wrap join">{head}{alert}{summary}<div className="note" style={{ textAlign: 'center', padding: 16 }}>{page.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}有疑義請洽 {page.contact}</div>{list}</main>;
 
   if (editName || !name) return (
     <main className="wrap join">
@@ -184,9 +211,11 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
         <div className={`note${last.accepted.length ? '' : ' err'}`} style={{ marginBottom: 12 }}>
           {last.accepted.length > 0 && <div><b>已收到 {last.accepted.length} 筆、{last.accepted.reduce((a, x) => a + x.qty, 0)} 張</b>
             （已核對 {last.accepted.filter((x) => x.status === 'ok').length} 筆、待核對 {last.accepted.filter((x) => x.status === 'pending').length} 筆）。</div>}
+          {last.accepted.filter((x) => x.note).map((x, i) => <div key={i} className="small">{x.orderNo}：{x.note}</div>)}
           {last.rejected.length > 0 && <div>{last.rejected.length} 筆沒有收下，原因寫在下面，請修正後再送出。</div>}
         </div>
       )}
+      {alert}
       {summary}
       {howto}
       <form onSubmit={send} noValidate className="card" style={{ marginTop: 12 }}>

@@ -42,10 +42,11 @@ export interface JoinSettings {
   notifyAhead: number; // 前幾號寄「快輪到您了」
   hourFrom: string; // 劃位時段（台北時間），空白＝不限
   hourTo: string;
+  silverPrices: string; // 銀區票價（年代名單只算這些售價），例：3000,2550
 }
 const DEFAULTS: JoinSettings = {
   open: false, contact: DEFAULT_CONTACT, reportOpen: false, perSeat: 10, pickOpen: false, paused: false,
-  turnMin: 3, pickMin: 10, pushBack: 3, notifyAhead: 3, hourFrom: '09:00', hourTo: '21:00',
+  turnMin: 3, pickMin: 10, pushBack: 3, notifyAhead: 3, hourFrom: '09:00', hourTo: '21:00', silverPrices: '3000,2550',
 };
 const KEYS = Object.keys(DEFAULTS) as (keyof JoinSettings)[];
 const key = (k: string) => `join.${k}`;
@@ -69,6 +70,7 @@ export const settingsInput = z.object({
   open: z.boolean(), contact: z.string().max(60), reportOpen: z.boolean(), perSeat: z.number().int().min(1).max(100),
   pickOpen: z.boolean(), paused: z.boolean(), turnMin: z.number().min(0.5).max(60), pickMin: z.number().min(1).max(120),
   pushBack: z.number().int().min(1).max(50), notifyAhead: z.number().int().min(0).max(20), hourFrom: hhmm, hourTo: hhmm,
+  silverPrices: z.string().max(60).regex(/^\s*\d{2,6}(\s*[,，、 ]\s*\d{2,6})*\s*$/, '銀區票價請用逗號分開，例：3000,2550'),
 }).partial();
 
 export async function setJoinSettings(db: Db, actor: string, raw: unknown) {

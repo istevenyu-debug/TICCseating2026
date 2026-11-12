@@ -8,9 +8,9 @@ import { and, asc, eq, ne } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { ev0, getJoinSettings } from './join';
-import { GIFT_ZONE, deadlineOf, inHours, isLocked, pickSeats, provisionalSlots } from './joinQueue';
+import { BAD_STATUS, GIFT_ZONE, deadlineOf, inHours, isLocked, pickSeats, provisionalSlots } from './joinQueue';
 
-const BAD = new Set(['mismatch', 'refunded', 'ambiguous']);
+const BAD = BAD_STATUS;
 
 async function names(db: Db, eventId: number) {
   const regs = await db.select({ id: t.joinReg.id, venueId: t.joinReg.venueId, venueText: t.joinReg.venueText }).from(t.joinReg).where(eq(t.joinReg.eventId, eventId));

@@ -124,7 +124,7 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
     await setJoinSettings(db, '網管', { reportOpen: true });
 
     const r1 = await report(a.reportCode!, [[' a001 ', 4], ['A002', 5], ['ZZZ1', 1], ['R9', 2], ['A001', 4], ['', 3], ['我的訂單', 1]], '志工甲', T0);
-    expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4, status: 'ok' }, { orderNo: 'ZZZ1', qty: 1, status: 'pending' }]);
+    expect(r1.accepted).toEqual([{ orderNo: 'A001', qty: 4, status: 'ok', note: '' }, { orderNo: 'ZZZ1', qty: 1, status: 'pending', note: '' }]);
     expect(r1.rejected.map((x) => x.reason)).toEqual(['張數不符（年代記錄為 6 張）', '此訂單已退票', '這次重複輸入了', '請輸入訂單編號（後 4 碼即可）', '訂單編號只能有英文字母、數字']);
     expect(r1).toMatchObject({ verified: 4, pending: 1, slots: [], next: 6 });
 
@@ -373,7 +373,7 @@ describe('志工只輸入訂單編號後 4 碼', () => {
     await era([['ER2611120000109', 6], ['ER2611120000108', 1], ['ER2611120000222', 2]]);
     await setJoinSettings(db, '網管', { reportOpen: true });
     const r = await report(a.reportCode!, [['0109', 6], ['er2611120000108-1', 1], ['109', 1], ['0222', 3]]);
-    expect(r.accepted).toEqual([{ orderNo: 'ER2611120000109', qty: 6, status: 'ok' }, { orderNo: 'ER2611120000108', qty: 1, status: 'ok' }]);
+    expect(r.accepted).toEqual([{ orderNo: 'ER2611120000109', qty: 6, status: 'ok', note: '' }, { orderNo: 'ER2611120000108', qty: 1, status: 'ok', note: '' }]);
     expect(r.rejected.map((x) => x.reason)).toEqual(['請輸入「-」前面最後 4 個數字（或完整訂單編號）', '年代記錄後 4 碼 0222 的訂單是 2 張。請確認張數；若不是這筆，請輸入完整訂單編號']);
     expect((await reportPage(db, a.reportCode!)).list[0]).toMatchObject({ key: '0109', orderNo: 'ER2611120000109', status: 'ok' });
     // 同一筆再報：後 4 碼、完整編號都擋
@@ -406,20 +406,23 @@ describe('志工只輸入訂單編號後 4 碼', () => {
       ['ER2611130000109', 6, '2026-11-13T09:50:00+08:00'], // 甲 10:00 報、丙 11:00 報 → 甲先認領
       ['ER2611130010109', 6, '2026-11-13T10:30:00+08:00'], // 10:30 才賣：甲不能拿，丙可以
       ['ER2611130000300', 2, '2026-11-13T09:00:00+08:00'], ['ER2611120000300', 2, '2026-11-12T15:00:00+08:00'], // 撞號
-      ['ER2611130000500', 3, '2026-11-13T12:00:00+08:00'], // 回報之後才賣出：不算
+      ['ER2611130000500', 3, '2026-11-13T12:00:00+08:00'], // 回報之後才賣出：不算，標「回報早於購買」
       ['ER2611130000777', 1, '2026-11-13T09:04:00+08:00'], // 9:00 報、9:04 賣：5 分鐘誤差內
     ]);
-    expect(up).toMatchObject({ newlyVerified: 3, ambiguous: 1, pending: 1 });
+    expect(up).toMatchObject({ newlyVerified: 3, ambiguous: 1, pending: 0, early: 1, mailed: 2 });
     const pa = await reportPage(db, a.reportCode!);
     expect(pa.list.map((x) => [x.key, x.orderNo, x.status])).toEqual([['0109', 'ER2611130000109', 'ok'], ['0300', null, 'ambiguous']]);
     const pb = await reportPage(db, b.reportCode!);
-    expect(pb.list.map((x) => [x.key, x.orderNo, x.status])).toEqual([['0109', 'ER2611130010109', 'ok'], ['0500', null, 'pending'], ['0777', 'ER2611130000777', 'ok']]);
-    const [fm] = await mails('join_fix');
-    expect(fm.recipient).toBe('台北木柵@example.com');
+    expect(pb.list.map((x) => [x.key, x.orderNo, x.status])).toEqual([['0109', 'ER2611130010109', 'ok'], ['0500', null, 'early'], ['0777', 'ER2611130000777', 'ok']]);
+    expect(pb.list[1].note).toContain('11/13 12:00 才售出，晚於回報時間 11/13 11:00');
+    const ms = await mails('join_issue');
+    const fm = ms.find((x) => x.recipient === '台北木柵@example.com')!;
     expect(fm.content).toContain('0300');
+    expect(fm.content).toContain('需補完整編號');
+    expect(ms.find((x) => x.recipient === '台北微風小棧@example.com')!.content).toContain('回報早於購買');
     // 再上傳一次不重寄
     await era([['ER2611130000109', 6]]);
-    expect(await mails('join_fix')).toHaveLength(1);
+    expect(await mails('join_issue')).toHaveLength(2);
 
     const id = pa.list[1].id;
     expect(await msg(fixOwnReport(db, a.reportCode!, id, '0300', '甲'))).toContain('完整訂單編號');
@@ -453,5 +456,63 @@ describe('後 4 碼＋購買日期（預設今天，可改）', () => {
     const id = list.find((x) => x.key === '0333')!.id;
     expect(await msg(fixOwnReport(db, a.reportCode!, id, 'ER2611130000333', '甲'))).toContain('日期不同');
     expect(await fixOwnReport(db, a.reportCode!, id, 'ER2611140000333', '甲')).toEqual({ orderNo: 'ER2611140000333', status: 'pending' });
+  });
+});
+
+describe('核對不藏錯：非銀區、日期選錯、回報早於購買、找不到訂單、通知負責人', () => {
+  const send = (code: string, buyDate: string, rows: [string, number][], now: Date, reporter = '甲') =>
+    submitReport(db, code, { reporter, buyDate, rows: rows.map(([orderNo, qty]) => ({ orderNo, qty })) }, ip(), now, BASE);
+  const up = (rows: { orderNo: string; qty: number; soldAt?: string; otherQty?: number; otherNote?: string }[]) =>
+    uploadEra(db, '網管', rows.map((r) => ({ status: 'sold' as const, ...r })), new Date('2026-11-14T20:00:00+08:00'), BASE);
+  const N = new Date('2026-11-14T10:00:00+08:00');
+
+  it('非銀區（1000 元、4 樓）送出當下就說明不計；混買說明銀區幾張', async () => {
+    const a = await venueReg('台北木柵');
+    await up([
+      { orderNo: 'ER2611140000012', qty: 0, otherQty: 2, otherNote: '4樓 2 張', soldAt: '2026-11-14T09:00:00+08:00' },
+      { orderNo: 'ER2611140000011', qty: 2, otherQty: 1, otherNote: '售價 1000 1 張', soldAt: '2026-11-14T09:00:00+08:00' },
+    ]);
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    const r = await send(a.reportCode!, '2026-11-14', [['0012', 2], ['0011', 3]], N);
+    expect(r.accepted).toEqual([]);
+    expect(r.rejected.map((x) => x.reason)).toEqual(['非銀區（4樓 2 張），不計贈票', '這筆訂單銀區只有 2 張（售價 1000 1 張 不計贈票）。請把張數改成 2 張']);
+    const ok = await send(a.reportCode!, '2026-11-14', [['0011', 2]], N);
+    expect(ok.accepted[0]).toMatchObject({ orderNo: 'ER2611140000011', status: 'ok', note: '售價 1000 1 張 不計贈票' });
+    expect(await msg(fixOwnReport(db, a.reportCode!, 0, 'ER2611140000012', '甲'))).toContain('找不到');
+  });
+
+  it('名單還沒到時先收；上傳後：非銀區、日期選錯自動更正、回報早於購買、找不到訂單；每群寄一封信', async () => {
+    const a = await venueReg('台北木柵');
+    const b = await venueReg('台北微風小棧');
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    await send(a.reportCode!, '2026-11-14', [['0012', 2], ['0109', 6], ['0444', 4]], N, '甲'); // 0109 其實是 11/13 買的
+    await send(b.reportCode!, '2026-11-14', [['0555', 1], ['0011', 13]], new Date('2026-11-14T08:00:00+08:00'), '乙');
+    const res = await up([
+      { orderNo: 'ER2611140000012', qty: 0, otherQty: 2, otherNote: '4樓 2 張', soldAt: '2026-11-14T09:00:00+08:00' },
+      { orderNo: 'ER2611130000109', qty: 6, soldAt: '2026-11-13T11:36:00+08:00' },
+      { orderNo: 'ER2611140000011', qty: 13, soldAt: '2026-11-14T08:49:00+08:00' }, // 乙 8:00 就報了
+      { orderNo: 'ER2611140000999', qty: 1, soldAt: '2026-11-14T19:00:00+08:00' }, // 名單已涵蓋到 19:00
+    ]);
+    expect(res).toMatchObject({ newlyVerified: 1, dateFixed: 1, outsideReports: 1, early: 1, notfound: 2, mailed: 2 });
+    const pa = (await reportPage(db, a.reportCode!)).list;
+    expect(pa.map((x) => [x.key, x.status])).toEqual([['0012', 'outside'], ['0109', 'ok'], ['0444', 'notfound']]);
+    expect(pa[1]).toMatchObject({ orderNo: 'ER2611130000109', buyDate: '261113', note: '購買日期已自動更正為 11/13' });
+    expect(pa[2].note).toContain('仍找不到這筆');
+    const pb = (await reportPage(db, b.reportCode!)).list;
+    expect(pb.map((x) => x.status)).toEqual(['notfound', 'early']);
+    expect(pb[1].note).toBe('年代記錄這筆訂單 11/14 08:49 才售出，晚於回報時間 11/14 08:00。請刪除後重新回報');
+    const ms = await mails('join_issue');
+    const ma = ms.find((x) => x.recipient === '台北木柵@example.com')!.content;
+    expect(ma).toContain('有 2 筆回報需要修正');
+    expect(ma).toContain('11/14 後 4 碼 0012（2 張，填寫人 甲）：非銀區');
+    expect(ma).toContain(`${BASE}/join `);
+    // 後台：名單看得到每筆被哪一群回報；只看有問題的看得到原因
+    const st = await joinAdminState(db, BASE);
+    expect(st.eraList.find((x) => x.orderNo === 'ER2611130000109')).toMatchObject({ group: '台北木柵', reportStatus: 'ok' });
+    expect(st.eraList.find((x) => x.orderNo === 'ER2611140000999')).toMatchObject({ group: '', qty: 1 });
+    expect(st.reports.find((x) => x.key === '0444')!.era).toContain('仍找不到這筆');
+    // 再上傳同一份不重寄
+    await up([{ orderNo: 'ER2611140000999', qty: 1, soldAt: '2026-11-14T19:00:00+08:00' }]);
+    expect(await mails('join_issue')).toHaveLength(2);
   });
 });

@@ -128,7 +128,7 @@ export default function JoinBoardApp() {
               <span><b>{x.group}</b><br />
                 {x.ok > 0 && <span className="jb-chip" style={{ background: '#e1f2e9', color: '#1e6b4a' }}>已核對 {x.ok}</span>}
                 {x.pending > 0 && <span className="jb-chip" style={{ background: '#fbe2b0', color: '#8a5a12' }}>待核對 {x.pending}</span>}
-                {x.bad > 0 && <span className="jb-chip" style={{ background: '#f8dcd8', color: '#a3342a' }}>不計 {x.bad}</span>}
+                {x.bad > 0 && <span className="jb-chip" style={{ background: '#f8dcd8', color: '#a3342a' }}>需修正 {x.bad}</span>}
                 {x.nos.length > 0 && <span style={{ fontWeight: 700, color: 'var(--ok)' }}>🎉 第 {x.nos.join('、')} 號</span>}
               </span>
               <span style={{ textAlign: 'right' }}><b style={{ fontSize: '1.15em' }}>+{x.qty} 張</b><br /><span className="small muted">累計 {x.total} 張</span></span>

@@ -58,6 +58,14 @@ export default function JoinApp() {
     try { const g = JSON.parse(ls.get(KEY) || 'null') as Group | null; if (g?.id) setLast(g); } catch { /* 忽略 */ }
     setReady(true); load();
   }, []);
+  // 上次回報的群：這支手機送出的有紅字（需要修正）就先提醒
+  const [lastRed, setLastRed] = useState(0);
+  useEffect(() => {
+    if (!last?.id || group) return;
+    req<{ list: { status: string; mine?: boolean }[] }>(`/api/join/g/${last.id}?d=${encodeURIComponent(deviceId())}`).then((r) => {
+      if (r.ok) setLastRed(r.data.list.filter((x) => x.mine && ['mismatch', 'refunded', 'ambiguous', 'outside', 'early', 'notfound'].includes(x.status)).length);
+    });
+  }, [last?.id, group]);
 
   const choose = (g: Group | null) => { ls.set(KEY, g ? JSON.stringify(g) : ''); setLast(g ?? last); setGroup(g); setPick(null); setClash(null); setQ(''); if (!g) load(); window.scrollTo(0, 0); };
 
@@ -124,6 +132,7 @@ export default function JoinApp() {
           {last && menu.groups.some((g) => g.id === last.id) && (
             <div className="note" style={{ marginTop: 0, marginBottom: 14 }}>
               這支手機上次回報到「<b>{menu.groups.find((g) => g.id === last.id)!.name}</b>」（負責人 {menu.groups.find((g) => g.id === last.id)!.head}）
+              {lastRed > 0 && <div style={{ color: 'var(--red)', fontWeight: 700, marginTop: 6 }}>⚠️ 您送出的有 {lastRed} 筆需要修正，請按「繼續」查看紅字。</div>}
               <button type="button" className="btn pri" style={{ width: '100%', marginTop: 8, padding: 12 }} onClick={() => choose(menu.groups.find((g) => g.id === last.id)!)}>繼續回報到這一群</button>
               <button type="button" className="linkbtn small" style={{ marginTop: 6 }} onClick={() => { ls.set(KEY, ''); setLast(null); }}>不是，我要選別的群</button>
             </div>

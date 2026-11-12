@@ -435,6 +435,8 @@ export const joinEra = pgTable('join_era', {
   qty: integer('qty').notNull(),
   status: text('status').notNull().default('sold'), // sold 已售 / refunded 已退
   soldAt: timestamp('sold_at', { withTimezone: true }), // 年代售出時間（用來排除回報之後才賣出的同後四碼訂單）
+  otherQty: integer('other_qty').notNull().default(0), // 同一訂單裡不算贈票的票（非銀區、票價不符）
+  otherNote: text('other_note').notNull().default(''), // 例：4樓 2 張、售價 1000 1 張
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ pk: primaryKey({ columns: [t.eventId, t.orderNo] }) }));
 
@@ -450,7 +452,9 @@ export const joinReport = pgTable('join_report', {
   reporter: text('reporter').notNull().default(''), // 填寫人（志工名字）
   device: text('device').notNull().default(''), // 送出的手機（共用連結：只有同一支手機能刪除、補編號）
   // 先收後核：pending 待核對 / ok 已核對 / mismatch 張數不符 / refunded 已退票 / ambiguous 後四碼對到多筆，需補完整編號
+  // outside 非銀區（不計贈票）/ early 回報早於年代售出時間
   status: text('status').notNull().default('pending'),
+  note: text('note').notNull().default(''), // 核對說明（給志工、負責人、後台看）
   eraQty: integer('era_qty'), // 核對時年代名單上的張數
   checkedAt: timestamp('checked_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

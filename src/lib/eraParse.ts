@@ -3,11 +3,17 @@
  * 支援兩種格式：
  *  - 一列一筆訂單：有「張數」欄
  *  - 一列一張票（年代「售出明細」UTK6120）：沒有張數欄，訂單編號像 ER2611120000109-1、-2…，同一訂單合計列數
- * 小計／合計列（沒有訂單編號）自動略過。可只算銀區（3 樓第 13–27 排）。
+ * 小計／合計列（沒有訂單編號）自動略過。
+ * 只算銀區：3 樓、第 13–27 排、售價是設定的銀區票價（預設 3000、2550）；沒有的欄位就不檢查。
+ * 不算的票不丟掉，記在 otherQty／otherNote，志工回報這種訂單時才能說清楚原因。
  */
 
-export type EraCols = { head: number; no: number; qty: number; status: number; floor: number; row: number; date: number; time: number };
-export type EraRow = { orderNo: string; qty: number; status: 'sold' | 'refunded'; soldAt?: string | null };
+export type EraCols = { head: number; no: number; qty: number; status: number; floor: number; row: number; date: number; time: number; price: number };
+export type EraRow = { orderNo: string; qty: number; status: 'sold' | 'refunded'; soldAt?: string | null; otherQty?: number; otherNote?: string };
+/** 銀區票價（預設）：3000 原價、2550 八五折 */
+export const SILVER_PRICES = [3000, 2550];
+/** 設定字串「3000,2550」→ [3000, 2550] */
+export const parsePrices = (s: string) => [...new Set(String(s ?? '').split(/[^\d]+/).map(Number).filter((n) => n > 0))];
 
 /** 訂單編號主體：去掉每張票的「-1、-2」尾碼 */
 export const orderBase = (s: string) => s.trim().toUpperCase().replace(/^(.{6,})-\d{1,3}$/, '$1');
@@ -26,6 +32,7 @@ export function guessCols(g: string[][]): EraCols {
     row: h.findIndex((c) => c.trim() === '排' || c.includes('排號')),
     date: find(h, ['售出日期', '訂購日期', '交易日期']),
     time: find(h, ['售出時間', '訂購時間', '交易時間']),
+    price: find(h, ['售價', '票價', '實收']),
   };
 }
 
@@ -45,27 +52,47 @@ export function soldAtOf(date: string, time: string): string | null {
 
 const num = (s: string) => Number(String(s ?? '').replace(/[^\d]/g, '')) || 0;
 
-/** 銀區：3 樓第 13–27 排 */
+/** 銀區：3 樓第 13–27 排（沒有售價欄時用） */
 export function isSilver(floor: string, row: string) {
-  return /3/.test(floor ?? '') && num(row) >= 13 && num(row) <= 27;
+  return is3F(floor) && num(row) >= 13 && num(row) <= 27;
+}
+export const is3F = (floor: string) => /(^|\D)3(\D|$)|三樓/.test(String(floor ?? '').trim());
+
+/** 這張票為什麼不算銀區；算的話回傳空字串 */
+export function outsideWhy(r: string[], c: EraCols, prices: number[]) {
+  const floor = String(r[c.floor] ?? '').trim();
+  if (c.floor >= 0 && !is3F(floor)) return floor || '非 3 樓';
+  if (c.price >= 0) { const p = num(r[c.price]); if (!prices.includes(p)) return `售價 ${p}`; }
+  if (c.floor >= 0 && c.row >= 0 && !isSilver(floor, r[c.row])) return `3樓${String(r[c.row] ?? '').trim()}`;
+  return '';
 }
 
-export function eraRows(g: string[][], c: EraCols, silverOnly: boolean) {
+const noteOf = (m: Map<string, number>) => [...m].map(([k, n]) => `${k} ${n} 張`).join('、');
+
+export function eraRows(g: string[][], c: EraCols, silverOnly: boolean, prices: number[] = SILVER_PRICES) {
   const body = g.slice(c.head + 1).filter((r) => c.no >= 0 && /^[A-Za-z0-9]/.test(String(r[c.no] ?? '').trim()));
-  const canSilver = c.floor >= 0 && c.row >= 0;
+  const canSilver = c.floor >= 0 && (c.row >= 0 || c.price >= 0);
   let outside = 0;
-  const map = new Map<string, EraRow>();
+  const why = new Map<string, number>();
+  const map = new Map<string, EraRow & { notes: Map<string, number> }>();
   for (const r of body) {
-    if (silverOnly && canSilver && !isSilver(r[c.floor], r[c.row])) { outside += c.qty >= 0 ? num(r[c.qty]) : 1; continue; }
     const no = orderBase(String(r[c.no]));
     const refunded = c.status >= 0 && /退|取消|作廢/.test(r[c.status] ?? '');
     const q = c.qty >= 0 ? num(r[c.qty]) : 1;
     const soldAt = c.date >= 0 ? soldAtOf(r[c.date], c.time >= 0 ? r[c.time] : '') : null;
-    const x = map.get(no);
-    if (!x) map.set(no, { orderNo: no, qty: refunded && c.qty < 0 ? 0 : q, status: refunded ? 'refunded' : 'sold', soldAt });
-    else if (c.qty < 0) { if (!refunded) { x.qty += 1; x.status = 'sold'; } if (soldAt && (!x.soldAt || soldAt < x.soldAt)) x.soldAt = soldAt; }
-    else map.set(no, { orderNo: no, qty: q, status: refunded ? 'refunded' : 'sold', soldAt });
+    let x = map.get(no);
+    if (!x) { x = { orderNo: no, qty: 0, status: 'sold', soldAt, otherQty: 0, otherNote: '', notes: new Map() }; map.set(no, x); }
+    if (soldAt && (!x.soldAt || soldAt < x.soldAt)) x.soldAt = soldAt;
+    const w = silverOnly && canSilver ? outsideWhy(r, c, prices) : '';
+    if (w) {
+      if (refunded) continue;
+      outside += q; why.set(w, (why.get(w) ?? 0) + q);
+      x.otherQty! += q; x.notes.set(w, (x.notes.get(w) ?? 0) + q);
+      continue;
+    }
+    if (c.qty < 0) { if (!refunded) { x.qty += 1; x.status = 'sold'; } else if (!x.qty) x.status = 'refunded'; }
+    else { x.qty = q; x.status = refunded ? 'refunded' : 'sold'; }
   }
-  const rows = [...map.values()];
-  return { rows, tickets: rows.filter((x) => x.status === 'sold').reduce((a, x) => a + x.qty, 0), outside, perTicket: c.qty < 0, canSilver };
+  const rows: EraRow[] = [...map.values()].filter((x) => x.qty > 0 || x.otherQty! > 0 || x.status === 'refunded').map(({ notes, ...x }) => ({ ...x, otherNote: noteOf(notes) }));
+  return { rows, tickets: rows.filter((x) => x.status === 'sold').reduce((a, x) => a + x.qty, 0), outside, outsideNote: noteOf(why), perTicket: c.qty < 0, canSilver };
 }
