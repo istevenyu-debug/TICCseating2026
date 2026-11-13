@@ -8,10 +8,10 @@ import { ensureFloor3 } from '@/lib/floor';
 import { createVip } from '@/lib/vip';
 import { resetSales } from '@/lib/reset';
 import {
-  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
+  addVenues, decideReg, getJoinSettings, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -168,7 +168,7 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
     expect(await msg(deleteOwnReport(db, b.reportCode!, await idOf(a.reportCode!, 'A1'), '丙'))).toContain('找不到');
     expect((await pickPage(db, a.pickCode!, at(2), BASE)).locked).toBe(false);
 
-    expect(await lockSlots(db, '網管', at(2))).toEqual({ slots: 2, venues: 2, notCounted: 1 });
+    expect(await lockSlots(db, '網管', at(2))).toMatchObject({ slots: 2, venues: 2, notCounted: 1 });
     expect(await msg(lockSlots(db, '網管'))).toContain('已經鎖定');
     expect((await joinAdminState(db, BASE, at(2))).settings.reportOpen).toBe(false);
     expect(await msg(report(a.reportCode!, [['X9', 1]]))).toContain('沒有開放');
@@ -532,5 +532,58 @@ describe('三樓座位用途：贈席只在左2、右2；一鍵設定；志工�
     const rows = await db.select({ usageId: t.eventSeat.usageId }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '3F')));
     const n = (id: number) => rows.filter((r) => r.usageId === id).length;
     expect([n(u.gift), n(u.vol), n(u.era)]).toEqual([side.length - 3, 3, mid.length]);
+  });
+});
+
+describe('分輪制：鎖定本輪 → 劃位 → 開放下一輪回報，號碼接續、零頭跨輪累計', () => {
+  it('第 2 輪號碼接在後面；第 1 輪零頭累計；已選座位保留；劃位連結寄給有新號碼的；贈席不夠時停止給號', async () => {
+    const a = await venueReg('A場');
+    const b = await venueReg('B場');
+    await eraList([['A1', 9], ['B1', 6], ['A2', 3], ['B2', 5], ['C9', 60]]);
+    await setJoinSettings(db, '網管', { reportOpen: true, perSeat: 6 });
+    await report(a.reportCode!, [['A1', 9]], '甲', at(0)); // A：第 1 號，零頭 3
+    await report(b.reportCode!, [['B1', 6]], '乙', at(1)); // B：第 2 號
+    const seats = await giftSeats(4);
+    const r1 = await lockSlots(db, '網管');
+    expect(r1).toMatchObject({ round: 1, slots: 2, from: 1, to: 2 });
+    expect(await msg(report(a.reportCode!, [['A2', 3]], '甲', at(2)))).toContain('沒有開放');
+    await sendPickLinks(db, '網管', BASE);
+    expect(await mails('join_plink')).toHaveLength(2);
+    // 第 1 輪劃位：A 選好
+    await setJoinSettings(db, '網管', { pickOpen: true });
+    await tickQueue(db, BASE, at(3));
+    await submitPick(db, a.pickCode!, { seatIds: [seats[0]], repName: '王', repPhone: '0912345678' }, at(4), BASE);
+    // 第 1 輪還沒選完也可以開下一輪回報
+    expect(await nextRound(db, '網管')).toMatchObject({ round: 2, stillWaiting: 1 });
+    expect((await getJoinSettings(db)).reportOpen).toBe(true);
+    expect(await msg(unlockSlots(db, '網管'))).toContain('還沒鎖定');
+    await report(a.reportCode!, [['A2', 3]], '甲', at(10)); // A：3+3＝6 → 第 3 號（零頭跨輪）
+    await report(b.reportCode!, [['B2', 5]], '乙', at(11)); // B：5 張，還不到
+    const pa = await reportPage(db, a.reportCode!);
+    expect(pa).toMatchObject({ round: 2, locked: false, slots: [1, 3], fixed: [1] });
+    const st = await joinAdminState(db, BASE);
+    expect(st.provisional.map((x) => x.no)).toEqual([3]);
+    const r2 = await lockSlots(db, '網管');
+    expect(r2).toMatchObject({ round: 2, slots: 1, from: 3, to: 3 });
+    expect((await slotsOf(a.id)).map((x) => [x.no, x.round, x.status])).toEqual([[1, 1, 'done'], [3, 2, 'wait']]);
+    // 劃位連結：只寄給有新號碼的 A（B 已寄過、沒有新號碼）
+    await sendPickLinks(db, '網管', BASE);
+    const pl = await mails('join_plink');
+    expect(pl).toHaveLength(3);
+    expect(pl[2].recipient).toBe('A場@example.com');
+    expect(pl[2].content).toContain('第 1、3 號');
+    // 解除本輪鎖定只刪第 2 輪的
+    expect(await unlockSlots(db, '網管')).toMatchObject({ removed: 1 });
+    expect((await db.select().from(t.joinSlot)).length).toBe(2);
+    // 贈席不夠：4 席贈席，已用 1、B 第 2 號還沒選 → 只剩 2 個號碼可給
+    await setJoinSettings(db, '網管', { reportOpen: true });
+    const c = await venueReg('C場');
+    await report(c.reportCode!, [['C9', 60]], '丙', at(20)); // 10 個
+    const r3 = await lockSlots(db, '網管');
+    expect(r3).toMatchObject({ round: 2, slots: 2, from: 3, to: 4 });
+    expect(r3.over).toBe(9);
+    // 清除測試資料回到第 1 輪
+    await clearJoinTest(db, '網管', false);
+    expect((await getJoinSettings(db)).round).toBe(1);
   });
 });

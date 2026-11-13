@@ -44,7 +44,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
           <div className="stat"><b>{j.reports.length}</b><span>回報訂單</span></div>
           <div className="stat"><b>{j.reports.filter((x) => x.status === 'ok').reduce((a, x) => a + x.qty, 0)}</b><span>已核對張數</span></div>
           <div className="stat"><b style={{ color: 'var(--warn)' }}>{j.reports.filter((x) => x.status === 'pending').reduce((a, x) => a + x.qty, 0)}</b><span>待核對張數</span></div>
-          <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.locked ? j.slots.filter((x) => x.status !== 'void').length : j.provisional.length}</b><span>{j.locked ? '劃位序（已鎖定）' : '劃位序（預計）'}</span></div>
+          <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.locked ? j.slots.filter((x) => x.status !== 'void').length : j.provisional.length}</b><span>{j.locked ? `劃位序（已鎖定，第 ${j.round ?? 1} 輪）` : `第 ${j.round ?? 1} 輪預計劃位序`}</span></div>
           <div className="stat"><b>{done.length}</b><span>已選位</span></div>
           <div className="stat"><b>{j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length}</b><span>贈席空位</span></div>
         </div>
@@ -95,7 +95,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <h3 style={{ marginTop: 0 }}>2. 回報</h3>
         <label className="check"><input type="checkbox" checked={s.reportOpen} disabled={busy} onChange={(e) => set({ reportOpen: e.target.checked }, e.target.checked ? '已開放回報' : '已關閉回報')} />
           <span><b>開放回報</b>{s.reportOpen ? <span style={{ color: 'var(--ok)' }}>（開放中）</span> : <span className="muted">（關閉中）</span>}</span></label>
-        <p className="small muted">先收後核：年代名單上還沒有的訂單先收為「待核對」，每次上傳年代名單自動核對。回報截止時到「回報」按「鎖定劃位序」（會同時關閉回報）。</p>
+        <p className="small muted">先收後核：年代名單上還沒有的訂單先收為「待核對」，每次上傳年代名單自動核對。回報截止時到「回報」按「鎖定第 N 輪劃位序」（會同時關閉回報）；本輪劃位開始後，可按「開放下一輪回報」，新的劃位序接在後面。</p>
         <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
           <label className="f" style={{ maxWidth: 200 }}>每幾張一個劃位序<input inputMode="numeric" value={f.perSeat} onChange={(e) => setF({ ...f, perSeat: e.target.value })} /></label>
           <label className="f" style={{ maxWidth: 260 }}>銀區票價（逗號分開）<input value={f.silverPrices} placeholder="3000,2550" onChange={(e) => setF({ ...f, silverPrices: e.target.value })} /></label>
@@ -105,7 +105,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
       <div className="card">
         <h3 style={{ marginTop: 0 }}>3. 劃位排隊</h3>
         {!j.locked && <p className="note warn small" style={{ marginTop: 0 }}>劃位序還沒鎖定，不能開始。</p>}
-        <label className="check"><input type="checkbox" checked={s.pickOpen} disabled={busy || (!j.locked && !s.pickOpen)} onChange={(e) => (!e.target.checked || window.confirm('開始劃位排隊？第 1 號會立刻收到「輪到您了」的 Email。')) && set({ pickOpen: e.target.checked }, e.target.checked ? '已開始劃位排隊' : '已停止劃位排隊')} />
+        <label className="check"><input type="checkbox" checked={s.pickOpen} disabled={busy || (!j.slots.length && !s.pickOpen)} onChange={(e) => (!e.target.checked || window.confirm('開始劃位排隊？第 1 號會立刻收到「輪到您了」的 Email。')) && set({ pickOpen: e.target.checked }, e.target.checked ? '已開始劃位排隊' : '已停止劃位排隊')} />
           <span><b>開始劃位排隊</b>{s.pickOpen ? <span style={{ color: 'var(--ok)' }}>（進行中）</span> : <span className="muted">（未開始）</span>}</span></label>
         <label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={s.paused} disabled={busy} onChange={(e) => set({ paused: e.target.checked }, e.target.checked ? '已暫停' : '已繼續')} />
           <span><b>暫停</b>（不開始新的一輪；正在選的不計時）</span></label>
@@ -148,7 +148,7 @@ function Regs({ j, act, busy, sure, confirm2, setMsg, copy, unsent }: { j: J; ac
     if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封劃位連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結傳給負責人` : ''}` });
   };
   const withSlot = new Set(j.slots.filter((x) => x.status !== 'void').map((x) => x.regId));
-  const unsentPick = j.regs.filter((r) => r.status === 'approved' && withSlot.has(r.id) && !r.pickSentAt).length;
+  const unsentPick = j.regs.filter((r) => r.status === 'approved' && withSlot.has(r.id) && (!r.pickSentAt || j.slots.some((x) => x.regId === r.id && x.status !== 'void' && x.createdAt > r.pickSentAt!))).length;
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>登記審核</h3>
@@ -391,20 +391,28 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
   const bad = j.reports.filter((x) => RED.has(x.status));
   const pend = j.reports.filter((x) => x.status === 'pending');
   const short = j.totals.filter((x) => x.short);
+  const round = j.round ?? 1;
+  const cur = j.slots.filter((x) => x.round === round);
   const lock = async () => {
-    const msg = `鎖定劃位序？\n・回報會同時關閉\n・目前預計的 ${j.provisional.length} 個劃位序會確定下來${pend.length ? `\n・還有 ${pend.length} 筆「待核對」不會算進去（建議先上傳最新年代名單）` : ''}`;
+    const msg = `鎖定第 ${round} 輪劃位序？\n・回報會同時關閉\n・本輪預計的 ${j.provisional.length} 個劃位序會確定下來${j.over ? `\n・贈席不夠：還有 ${j.over} 個拿不到號碼` : ''}${pend.length ? `\n・還有 ${pend.length} 筆「待核對」不會算進去（建議先上傳最新年代名單；下一輪核對通過還是會算）` : ''}`;
     if (!window.confirm(msg)) return;
-    const r = await act({ action: 'join.lock' }) as { slots: number; venues: number; notCounted: number } | undefined;
-    if (r) setMsg({ kind: r.notCounted ? 'warn' : 'ok', text: `已鎖定 ${r.slots} 個劃位序（${r.venues} 個團練場）${r.notCounted ? `；${r.notCounted} 筆待核對沒有算進去` : ''}。下一步：到「登記審核」寄出劃位連結。` });
+    const r = await act({ action: 'join.lock' }) as { round: number; slots: number; from: number; to: number; venues: number; notCounted: number; over: number } | undefined;
+    if (r) setMsg({ kind: r.notCounted || r.over ? 'warn' : 'ok', text: `已鎖定第 ${r.round} 輪：第 ${r.from === r.to ? r.from : `${r.from}–${r.to}`} 號，共 ${r.slots} 個劃位序（${r.venues} 群）${r.over ? `；贈席不夠，${r.over} 個沒有號碼` : ''}${r.notCounted ? `；${r.notCounted} 筆待核對沒有算進去` : ''}。下一步：到「登記審核」寄出劃位連結。` });
+  };
+  const next = () => {
+    if (!window.confirm(`開放第 ${round + 1} 輪回報？\n・已鎖定的劃位序、已選的座位都保留，劃位排隊照常進行\n・回報重新開放，新的劃位序接在第 ${Math.max(0, ...j.slots.map((x) => x.no))} 號後面\n・零頭跨輪累計`)) return;
+    act({ action: 'join.nextRound' }, `已開放第 ${round + 1} 輪回報`);
   };
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>各團練場回報</h3>
       <div className="note small" style={{ marginBottom: 10 }}>
-        {j.locked ? <><b style={{ color: 'var(--ok)' }}>劃位序已鎖定</b>（{j.slots.filter((x) => x.status !== 'void').length} 個）。
-          {!j.slots.some((x) => x.status !== 'wait') && !j.settings.pickOpen && <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => confirm2('join-unlock', () => act({ action: 'join.unlock' }, '已解除鎖定，回報仍關閉；需要時到「設定」重新開放'))}>{sure === 'join-unlock' ? '再按一次解除' : '解除鎖定'}</button>}</>
-          : <>預計 <b>{j.provisional.length}</b> 個劃位序（依回報時間、只算已核對）。待核對 {pend.length} 筆。
-            <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy || !j.provisional.length} onClick={lock}>鎖定劃位序（回報截止）</button>
+        <b>第 {round} 輪</b>　
+        {j.locked ? <><b style={{ color: 'var(--ok)' }}>本輪已鎖定</b>（本輪 {cur.filter((x) => x.status !== 'void').length} 個，全部 {j.slots.filter((x) => x.status !== 'void').length} 個；已選位 {j.slots.filter((x) => x.status === 'done').length}）。
+          {cur.every((x) => x.status === 'wait' && !x.misses) && <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => confirm2('join-unlock', () => act({ action: 'join.unlock' }, '已解除本輪鎖定，回報仍關閉；需要時到「設定」重新開放'))}>{sure === 'join-unlock' ? '再按一次解除' : '解除本輪鎖定'}</button>}
+          <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy} onClick={next}>開放第 {round + 1} 輪回報</button></>
+          : <>{round > 1 && <>前幾輪 {j.slots.filter((x) => x.status !== 'void').length} 個劃位序（已選位 {j.slots.filter((x) => x.status === 'done').length}）。</>}本輪預計 <b>{j.provisional.length}</b> 個劃位序（依回報時間、只算已核對）{j.over ? `，贈席不夠：另有 ${j.over} 個拿不到號碼` : ''}。待核對 {pend.length} 筆。
+            <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy || !j.provisional.length} onClick={lock}>鎖定第 {round} 輪劃位序（回報截止）</button>
             {j.provisional.length > 0 && <button className="linkbtn" style={{ marginLeft: 8 }} onClick={() => setShowProv(!showProv)}>{showProv ? '收起' : '看預計順序'}</button>}</>}
       </div>
       {showProv && !j.locked && (
@@ -424,7 +432,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
             <tr key={x.regId} style={{ cursor: 'pointer', background: x.short ? '#fff4d6' : undefined }} onClick={() => setOpen(open === x.regId ? null : x.regId)}>
               <td>{open === x.regId ? '▼' : '▶'} {x.venue}</td><td>{x.headName}</td><td style={{ textAlign: 'center' }}>{x.orders}</td>
               <td style={{ textAlign: 'center' }}>{x.verified}{x.short && <span style={{ color: 'var(--red)' }}> ⚠</span>}</td><td style={{ textAlign: 'center', color: x.pending ? 'var(--warn)' : undefined }}>{x.pending}</td>
-              <td style={{ textAlign: 'center' }}>{x.slots}{!j.locked && x.slots ? <span className="muted small">（預計）</span> : null}</td><td style={{ textAlign: 'center' }}>{x.done}</td>
+              <td style={{ textAlign: 'center' }}>{x.slots}{!j.locked && j.provisional.some((p) => p.venue === x.venue) ? <span className="muted small">（含預計 {j.provisional.filter((p) => p.venue === x.venue).length}）</span> : null}</td><td style={{ textAlign: 'center' }}>{x.done}</td>
             </tr>
           ))}</tbody>
         </table></div>

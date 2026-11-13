@@ -28,9 +28,8 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
   const approved = new Set((await db.select({ id: t.joinReg.id }).from(t.joinReg).where(and(eq(t.joinReg.eventId, ev.id), eq(t.joinReg.status, 'approved')))).map((r) => r.id));
 
   // 劃位序：鎖定後用正式的，之前用預計的
-  const slots = locked
-    ? (await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no)))
-    : [];
+  // 分輪：前幾輪已鎖定的劃位序一直都在（劃位可以和下一輪回報同時進行）
+  const slots = await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no));
   const prov = locked ? [] : await provisionalSlots(db, ev.id, s.perSeat);
   const earned = new Map<string, number[]>();
   for (const x of locked ? slots.map((y) => ({ regId: y.regId, at: y.earnedAt, no: y.no })) : prov) {
@@ -69,9 +68,11 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
   const label = new Map(seats.map((x) => [x.id, x.label]));
   const gift = seats.filter((x) => x.zoneId === GIFT_ZONE.id);
 
+  const byNo = new Map(slots.map((x) => [x.no, x]));
   const order = locked
     ? slots.map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', status: x.status, seat: x.seatId ? label.get(x.seatId) ?? '' : '' }))
-    : prov.map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', status: 'provisional', seat: '' }));
+    : prov.map((x) => { const f = x.fixed ? byNo.get(x.no) : undefined;
+      return { no: x.no, group: nm.get(x.regId) ?? '', status: f ? f.status : 'provisional', seat: f?.seatId ? label.get(f.seatId) ?? '' : '' }; });
 
   const queue = slots.filter((x) => x.status === 'wait' || x.status === 'turn').sort((a, b) => a.pos - b.pos || a.no - b.no);
   const turn = queue.filter((x) => x.status === 'turn');
@@ -86,7 +87,7 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
 
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, now: now.toISOString(),
-    reportOpen: s.reportOpen && !locked, locked, perSeat: s.perSeat, contact: s.contact,
+    reportOpen: s.reportOpen && !locked, locked, started: slots.length > 0, round: s.round, perSeat: s.perSeat, contact: s.contact,
     stats: { groups: approved.size, verified, pending, slots: locked ? slots.length : prov.length, giftSeats: gift.length, giftFree: gift.filter((x) => x.status === 'free').length },
     feed, more, order, live,
     ...(o.tab === 'live' ? { seats, zones: [GIFT_ZONE] } : {}),

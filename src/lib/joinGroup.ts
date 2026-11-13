@@ -10,7 +10,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { clean, email, ev0, getJoinSettings, mailHead, newCode, personName, phone, rateLimit } from './join';
-import { deleteOwnReport, fixOwnReport, isLocked, reportPage, submitReport } from './joinQueue';
+import { anySlots, deleteOwnReport, fixOwnReport, isLocked, reportPage, submitReport } from './joinQueue';
 
 /* ---------- 一個一個處理 ---------- */
 let chain: Promise<unknown> = Promise.resolve();
@@ -164,7 +164,7 @@ export async function groupFix(db: Db, groupId: number, reportId: number, device
 /* ---------- 後台：改群名、合併、移動回報 ---------- */
 
 async function notLocked(db: Db, eventId: number) {
-  if (await isLocked(db, eventId)) throw new BookingError('INVALID', '劃位序已鎖定，不能再改群。要改請先解除鎖定。');
+  if (await anySlots(db, eventId)) throw new BookingError('INVALID', '已經有劃位序了，不能再改群、合併或移動回報。');
 }
 
 export async function renameGroup(db: Db, actor: string, id: number, name: string) {

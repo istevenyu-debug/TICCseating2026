@@ -43,10 +43,11 @@ export interface JoinSettings {
   hourFrom: string; // 劃位時段（台北時間），空白＝不限
   hourTo: string;
   silverPrices: string; // 銀區票價（年代名單只算這些售價），例：3000,2550
+  round: number; // 目前第幾輪（分輪制：鎖定本輪 → 劃位 → 開放下一輪回報）
 }
 const DEFAULTS: JoinSettings = {
   open: false, contact: DEFAULT_CONTACT, reportOpen: false, perSeat: 10, pickOpen: false, paused: false,
-  turnMin: 3, pickMin: 10, pushBack: 3, notifyAhead: 3, hourFrom: '09:00', hourTo: '21:00', silverPrices: '3000,2550',
+  turnMin: 3, pickMin: 10, pushBack: 3, notifyAhead: 3, hourFrom: '09:00', hourTo: '21:00', silverPrices: '3000,2550', round: 1,
 };
 const KEYS = Object.keys(DEFAULTS) as (keyof JoinSettings)[];
 const key = (k: string) => `join.${k}`;
@@ -393,15 +394,17 @@ export async function sendPickLinks(db: Db, actor: string, base: string, ids?: n
   const ev = await ev0(db);
   if (!base) throw new BookingError('INVALID', '還不知道網站網址，請從正式網址開啟後台再試');
   const s = await getJoinSettings(db);
-  const slots = await db.select({ regId: t.joinSlot.regId, no: t.joinSlot.no, status: t.joinSlot.status }).from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+  const slots = await db.select({ regId: t.joinSlot.regId, no: t.joinSlot.no, status: t.joinSlot.status, createdAt: t.joinSlot.createdAt }).from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
   if (!slots.length) throw new BookingError('INVALID', '劃位序還沒鎖定，請先到「回報」按「鎖定劃位序」。');
   const regs = await db.select().from(t.joinReg).where(and(eq(t.joinReg.eventId, ev.id), eq(t.joinReg.status, 'approved'),
     ids?.length ? inArray(t.joinReg.id, ids) : undefined));
   const vs = await db.select().from(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
   let sent = 0, noEmail = 0;
   for (const r of regs) {
-    const mine = slots.filter((x) => x.regId === r.id && x.status !== 'void').map((x) => x.no).sort((a, b) => a - b);
-    if (!mine.length || (!ids?.length && r.pickSentAt)) continue;
+    const mineS = slots.filter((x) => x.regId === r.id && x.status !== 'void');
+    const mine = mineS.map((x) => x.no).sort((a, b) => a - b);
+    // 全部寄：沒寄過的，或寄過之後又有新一輪的劃位序
+    if (!mine.length || (!ids?.length && r.pickSentAt && !mineS.some((x) => x.createdAt > r.pickSentAt!))) continue;
     if (!r.email || !r.pickCode) { noEmail++; continue; }
     const venue = (r.venueId ? vs.find((v) => v.id === r.venueId)?.name : r.venueText) ?? '';
     const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序已確定：第 ${mine.join('、')} 號，可選 ${mine.length} 席。`

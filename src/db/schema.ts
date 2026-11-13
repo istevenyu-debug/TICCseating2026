@@ -468,6 +468,8 @@ export const joinSlot = pgTable('join_slot', {
   no: integer('no').notNull(),
   pos: doublePrecision('pos').notNull(),
   status: text('status').notNull().default('wait'), // wait 排隊 / turn 輪到 / done 已選位 / void 取消
+  round: integer('round').notNull().default(1), // 第幾輪鎖定的
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   misses: integer('misses').notNull().default(0),
   turnAt: timestamp('turn_at', { withTimezone: true }),
   seenAt: timestamp('seen_at', { withTimezone: true }), // 輪到後負責人有打開頁面

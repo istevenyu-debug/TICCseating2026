@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { fmtDate } from './JoinApp';
 
 type Page = {
-  event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string;
+  event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string; round?: number; fixed?: number[];
   orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
   today: string;
   list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null; note?: string; mine?: boolean }[];
@@ -131,7 +131,14 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
         <div className="stat"><b style={{ color: 'var(--warn)' }}>{page.pending}</b><span>張待核對</span></div>
         <div className="stat"><b>{page.slots.length}</b><span>個劃位序</span></div>
       </div>
-      {page.slots.length > 0 && <p style={{ margin: '10px 0 0' }}>{page.locked ? '劃位序（已確定）' : '目前預計劃位序'}：<b>第 {page.slots.join('、')} 號</b></p>}
+      {page.slots.length > 0 && (() => {
+        const fx = page.locked ? page.slots : page.slots.filter((n) => page.fixed?.includes(n));
+        const pv = page.locked ? [] : page.slots.filter((n) => !page.fixed?.includes(n));
+        return <p style={{ margin: '10px 0 0' }}>
+          {fx.length > 0 && <>劃位序（已確定）：<b>第 {fx.join('、')} 號</b>{pv.length > 0 && <br />}</>}
+          {pv.length > 0 && <>{(page.round ?? 1) > 1 ? `第 ${page.round} 輪預計` : '目前預計劃位序'}：<b>第 {pv.join('、')} 號</b></>}
+        </p>;
+      })()}
       <p className="small muted" style={{ margin: '6px 0 0' }}>每 {page.perSeat} 張已核對一個劃位序，再 {page.next} 張可多一個。</p>
     </div>
   );

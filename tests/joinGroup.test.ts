@@ -110,8 +110,8 @@ describe('揪團回報：共用連結、不用註冊', () => {
     await uploadEra(db, '網管', [{ orderNo: 'ER2611130000003', qty: 6, status: 'sold' }]);
     await groupSubmit(db, { groupId: c, device: 'z', reporter: '丙', buyDate: '2026-11-13', rows: [{ orderNo: '0003', qty: 6 }] }, ip(), N, BASE);
     await lockSlots(db, '網管');
-    expect(await msg(mergeGroups(db, '網管', b, c))).toContain('已鎖定');
-    expect(await msg(moveReport(db, '網管', r1.id, c))).toContain('已鎖定');
+    expect(await msg(mergeGroups(db, '網管', b, c))).toContain('已經有劃位序');
+    expect(await msg(moveReport(db, '網管', r1.id, c))).toContain('已經有劃位序');
     expect(await msg(groupSubmit(db, { groupId: c, device: 'z', reporter: '丙', rows: [{ orderNo: '0004', qty: 1 }] }, ip(), N, BASE))).toContain('截止');
     expect((await joinAdminState(db, BASE, N)).totals.map((x) => x.venue).sort()).toEqual(['台北木柵', '新竹']);
   });

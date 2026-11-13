@@ -7,7 +7,7 @@ import SeatMap from './SeatMap';
 type MapProps = Parameters<typeof SeatMap>[0];
 type Line = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[] };
 type Board = {
-  event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; perSeat: number; contact: string;
+  event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; started?: boolean; round?: number; perSeat: number; contact: string;
   stats: { groups: number; verified: number; pending: number; slots: number; giftSeats: number; giftFree: number };
   feed: Line[]; more: boolean;
   order: { no: number; group: string; status: string; seat: string }[];
@@ -120,7 +120,7 @@ export default function JoinBoardApp() {
 
       {tab === 'feed' && (
         <div className="card">
-          <p className="small muted" style={{ marginTop: 0 }}>{b.reportOpen ? '回報中，最新的在最上面，每 10 秒自動更新。' : b.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}每 {b.perSeat} 張核對通過＝1 個劃位序。</p>
+          <p className="small muted" style={{ marginTop: 0 }}>{(b.round ?? 1) > 1 && <b>第 {b.round} 輪　</b>}{b.reportOpen ? '回報中，最新的在最上面，每 10 秒自動更新。' : b.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}每 {b.perSeat} 張核對通過＝1 個劃位序。</p>
           {!feed.length && <p className="muted">{q ? '找不到這個群的回報。' : '還沒有回報。'}</p>}
           {feed.map((x) => (
             <div key={x.k} className={`jb-line${fresh.has(x.k) ? ' new' : ''}${hit(x.group) ? ' me' : ''}`}>
@@ -140,7 +140,7 @@ export default function JoinBoardApp() {
 
       {tab === 'order' && (
         <div className="card">
-          <p className="small muted" style={{ marginTop: 0 }}>{b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : '依回報時間排列，只算核對通過的票。回報期間號碼會變動，截止後才確定。'}</p>
+          <p className="small muted" style={{ marginTop: 0 }}>{b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : `依回報時間排列，只算核對通過的票。${b.started ? '前幾輪已確定的照舊，本輪「預計」的號碼接在後面，' : '回報期間號碼會變動，'}截止後才確定。`}</p>
           {!b.order.length && <p className="muted">還沒有劃位序。</p>}
           <div className="tbl"><table><tbody>
             {b.order.filter((x) => !qq || hit(x.group)).map((x) => (
@@ -156,7 +156,7 @@ export default function JoinBoardApp() {
       {tab === 'live' && (
         <>
           <div className="card" style={{ borderTop: '4px solid var(--red)', textAlign: 'center' }}>
-            {!b.locked ? <p className="muted" style={{ margin: 0 }}>回報截止、劃位序確定後才開始劃位。</p>
+            {!b.started ? <p className="muted" style={{ margin: 0 }}>回報截止、劃位序確定後才開始劃位。</p>
               : !b.live.pickOpen ? <p className="muted" style={{ margin: 0 }}>劃位還沒開始。</p>
                 : b.live.paused ? <p style={{ margin: 0 }}>劃位暫停中，請稍候。</p>
                   : !b.live.inHours ? <p style={{ margin: 0 }}>劃位時段為 {b.live.hourFrom}–{b.live.hourTo}，時段外暫停。</p>
