@@ -8,7 +8,9 @@
  * 不算的票不丟掉，記在 otherQty／otherNote，志工回報這種訂單時才能說清楚原因。
  */
 
-export type EraCols = { head: number; no: number; qty: number; status: number; floor: number; row: number; date: number; time: number; price: number };
+export type EraCols = { head: number; no: number; qty: number; status: number; floor: number; row: number; date: number; time: number; price: number; seat?: number };
+/** 逐張票（一列一張票的售出明細才有）：全場銷售統計、三樓座位圖用 */
+export type EraTicket = { ticketNo: string; orderNo: string; floor: string; row: string; seat: string; price: number; status: 'sold' | 'refunded'; soldAt: string | null };
 export type EraRow = { orderNo: string; qty: number; status: 'sold' | 'refunded'; soldAt?: string | null; otherQty?: number; otherNote?: string };
 /** 銀區票價（預設）：3000 原價、2550 八五折 */
 export const SILVER_PRICES = [3000, 2550];
@@ -33,6 +35,7 @@ export function guessCols(g: string[][]): EraCols {
     date: find(h, ['售出日期', '訂購日期', '交易日期']),
     time: find(h, ['售出時間', '訂購時間', '交易時間']),
     price: find(h, ['售價', '票價', '實收']),
+    seat: h.findIndex((c) => c.trim() === '號' || c.includes('座號') || c.trim() === '座位'),
   };
 }
 
@@ -75,6 +78,7 @@ export function eraRows(g: string[][], c: EraCols, silverOnly: boolean, prices: 
   let outside = 0;
   const why = new Map<string, number>();
   const map = new Map<string, EraRow & { notes: Map<string, number> }>();
+  const tickets: EraTicket[] = [];
   for (const r of body) {
     const no = orderBase(String(r[c.no]));
     const refunded = c.status >= 0 && /退|取消|作廢/.test(r[c.status] ?? '');
@@ -83,6 +87,10 @@ export function eraRows(g: string[][], c: EraCols, silverOnly: boolean, prices: 
     let x = map.get(no);
     if (!x) { x = { orderNo: no, qty: 0, status: 'sold', soldAt, otherQty: 0, otherNote: '', notes: new Map() }; map.set(no, x); }
     if (soldAt && (!x.soldAt || soldAt < x.soldAt)) x.soldAt = soldAt;
+    if (c.qty < 0) {
+      const s = (k: number | undefined) => (k !== undefined && k >= 0 ? String(r[k] ?? '').trim() : '');
+      tickets.push({ ticketNo: String(r[c.no]).trim().toUpperCase(), orderNo: no, floor: s(c.floor), row: s(c.row), seat: s(c.seat), price: c.price >= 0 ? num(r[c.price]) : 0, status: refunded ? 'refunded' : 'sold', soldAt });
+    }
     const w = silverOnly && canSilver ? outsideWhy(r, c, prices) : '';
     if (w) {
       if (refunded) continue;
@@ -94,5 +102,5 @@ export function eraRows(g: string[][], c: EraCols, silverOnly: boolean, prices: 
     else { x.qty = q; x.status = refunded ? 'refunded' : 'sold'; }
   }
   const rows: EraRow[] = [...map.values()].filter((x) => x.qty > 0 || x.otherQty! > 0 || x.status === 'refunded').map(({ notes, ...x }) => ({ ...x, otherNote: noteOf(notes) }));
-  return { rows, tickets: rows.filter((x) => x.status === 'sold').reduce((a, x) => a + x.qty, 0), outside, outsideNote: noteOf(why), perTicket: c.qty < 0, canSilver };
+  return { rows, list: tickets, tickets: rows.filter((x) => x.status === 'sold').reduce((a, x) => a + x.qty, 0), outside, outsideNote: noteOf(why), perTicket: c.qty < 0, canSilver };
 }

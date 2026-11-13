@@ -440,6 +440,20 @@ export const joinEra = pgTable('join_era', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ pk: primaryKey({ columns: [t.eventId, t.orderNo] }) }));
 
+/** 年代售出明細：逐張票（樓層、排、號、票價），給全場銷售統計、三樓座位圖標示已售 */
+export const joinEraTicket = pgTable('join_era_ticket', {
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  ticketNo: text('ticket_no').notNull(), // 例：ER2611120000109-3
+  orderNo: text('order_no').notNull(),
+  floor: text('floor').notNull().default(''), // 年代的「區樓」原文，例：3樓
+  rowNo: text('row_no').notNull().default(''), // 例：13排
+  seatNo: text('seat_no').notNull().default(''), // 例：33號
+  price: integer('price').notNull().default(0), // 售價
+  status: text('status').notNull().default('sold'), // sold / refunded
+  soldAt: timestamp('sold_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ pk: primaryKey({ columns: [t.eventId, t.ticketNo] }) }));
+
 /** 志工回報的年代訂單（同一訂單全場只能報一次） */
 export const joinReport = pgTable('join_report', {
   id: serial('id').primaryKey(),

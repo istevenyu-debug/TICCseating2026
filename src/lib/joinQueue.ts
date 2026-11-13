@@ -132,7 +132,29 @@ async function eraMap(db: Db | Tx, eventId: number) {
 }
 
 /** 上傳年代名單：同一訂單編號以新的為準（張數、已售／已退、非銀區張數），然後重新核對所有回報，有新問題的寄信給負責人 */
-export async function uploadEra(db: Db, actor: string, raw: unknown, now = new Date(), base = '') {
+export const eraTicketInput = z.array(z.object({
+  ticketNo: z.string().max(60), orderNo: z.string().max(60), floor: z.string().max(20), row: z.string().max(20), seat: z.string().max(20),
+  price: z.number().int().min(0).max(1000000), status: z.enum(['sold', 'refunded']), soldAt: z.string().datetime({ offset: true }).nullish(),
+})).max(50000);
+
+/** 逐張票存起來（全場銷售統計、三樓座位圖）；同一票號以新的為準 */
+async function saveEraTickets(db: Db, eventId: number, raw: unknown, now: Date) {
+  const p = eraTicketInput.safeParse(raw ?? []);
+  if (!p.success || !p.data.length) return 0;
+  const rows = [...new Map(p.data.map((x) => [x.ticketNo.trim().toUpperCase(), x])).values()].map((x) => ({
+    eventId, ticketNo: x.ticketNo.trim().toUpperCase(), orderNo: normOrderNo(x.orderNo), floor: clean(x.floor), rowNo: clean(x.row), seatNo: clean(x.seat),
+    price: x.price, status: x.status, soldAt: x.soldAt ? new Date(x.soldAt) : null, updatedAt: now }));
+  for (let i = 0; i < rows.length; i += 500) {
+    await db.insert(t.joinEraTicket).values(rows.slice(i, i + 500)).onConflictDoUpdate({
+      target: [t.joinEraTicket.eventId, t.joinEraTicket.ticketNo],
+      set: { floor: sql`excluded.floor`, rowNo: sql`excluded.row_no`, seatNo: sql`excluded.seat_no`, price: sql`excluded.price`, status: sql`excluded.status`,
+        soldAt: sql`coalesce(excluded.sold_at, ${t.joinEraTicket.soldAt})`, updatedAt: sql`excluded.updated_at` },
+    });
+  }
+  return rows.length;
+}
+
+export async function uploadEra(db: Db, actor: string, raw: unknown, now = new Date(), base = '', tickets?: unknown) {
   const p = eraInput.safeParse(raw);
   if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '名單格式不正確');
   const ev = await ev0(db);
@@ -158,9 +180,10 @@ export async function uploadEra(db: Db, actor: string, raw: unknown, now = new D
   }
   const refunded = rows.filter((r) => r.status === 'refunded').length;
   const outside = rows.filter((r) => r.status === 'sold' && r.qty === 0 && r.otherQty > 0).length;
+  const ticketRows = await saveEraTickets(db, ev.id, tickets, now);
   const check = await recheckReports(db, ev.id, now, true, base);
   await db.insert(t.auditLog).values({ actor, action: 'join_era_upload', target: `event:${ev.id}`, detail: JSON.stringify({ rows: rows.length, added, changed, refunded, outside, ...check }) });
-  return { rows: rows.length, added, changed, refunded, outside, ...check };
+  return { rows: rows.length, added, changed, refunded, outside, ticketRows, ...check };
 }
 
 /** 一筆回報顯示用的名稱：完整編號或「11/12 後 4 碼 0109」 */
@@ -364,6 +387,14 @@ export async function eraSales(db: Db | Tx, eventId: number) {
   return { sold: x.sold, cap: c.n, left: Math.max(0, c.n - x.sold), at };
 }
 
+/** 年代售出明細裡三樓已售的座位 id（排-號，例 13-33），給三樓座位圖標示 */
+export async function eraSoldSeats(db: Db | Tx, eventId: number) {
+  const rows = await db.select({ floor: t.joinEraTicket.floor, row: t.joinEraTicket.rowNo, seat: t.joinEraTicket.seatNo }).from(t.joinEraTicket)
+    .where(and(eq(t.joinEraTicket.eventId, eventId), eq(t.joinEraTicket.status, 'sold')));
+  const n = (s: string) => (s.match(/\d+/) ?? [''])[0];
+  return rows.filter((r) => /(^|\D)3(\D|$)|三樓/.test(r.floor) && n(r.row) && n(r.seat)).map((r) => `${+n(r.row)}-${+n(r.seat)}`);
+}
+
 /* ---------- 志工回報 ---------- */
 
 async function regByReport(db: Db, code: string) {
@@ -529,6 +560,7 @@ export async function clearJoinTest(db: Db, actor: string, withRegs = false) {
     const slots = await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id)).returning({ id: t.joinSlot.id });
     const reps = await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id)).returning({ id: t.joinReport.id });
     const era = await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id)).returning({ no: t.joinEra.orderNo });
+    await tx.delete(t.joinEraTicket).where(eq(t.joinEraTicket.eventId, ev.id));
     let regs = 0;
     if (withRegs) {
       regs = (await tx.delete(t.joinReg).where(eq(t.joinReg.eventId, ev.id)).returning({ id: t.joinReg.id })).length;
@@ -854,7 +886,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   const settings = await getJoinSettings(db);
   const regState = await joinRegState(db, base);
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0, vol: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[], round: 1, over: 0, eraSales: { sold: 0, cap: 0, left: 0, at: null as string | null } };
+  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0, vol: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[], round: 1, over: 0, eraSeats: [] as string[], eraSales: { sold: 0, cap: 0, left: 0, at: null as string | null } };
   await tickQueue(db, base, now);
   const usage = await joinUsages(db, ev.id);
   const eraAll = await db.select().from(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
@@ -907,7 +939,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
     }),
     seats, totals, inHours: inHours(settings, now), locked,
     provisional: prov.filter((x) => !x.fixed).map((x) => ({ no: x.no, venue: reg.get(x.regId)?.venueName ?? '', at: x.at.toISOString() })),
-    round: settings.round, over: plan.over, eraSales: await eraSales(db, ev.id),
+    round: settings.round, over: plan.over, eraSales: await eraSales(db, ev.id), eraSeats: await eraSoldSeats(db, ev.id),
     current: active.length ? { nos: active.map((x) => x.no), venue: reg.get(active[0].regId)?.venueName ?? '', deadline: deadlineOf(settings, active[0])?.toISOString() ?? null, seen: !!active[0].seenAt } : null,
   };
 }

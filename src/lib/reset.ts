@@ -70,6 +70,7 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
       await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
       await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id));
       await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
+      await tx.delete(t.joinEraTicket).where(eq(t.joinEraTicket.eventId, ev.id));
     }
     const joinSeats = (await tx.select({ id: t.joinSlot.seatId }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), sql`${t.joinSlot.seatId} is not null`))).map((x) => x.id!);
     await tx.update(t.eventSeat).set({ status: 'free', holdUntil: null }).where(and(eq(t.eventSeat.eventId, ev.id), isNull(t.eventSeat.orderId), sql`${t.eventSeat.status} <> 'free'`,

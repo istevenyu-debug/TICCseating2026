@@ -218,6 +218,13 @@
       "when": 1794539849955,
       "tag": "0030_join_slot_round",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794542822668,
+      "tag": "0031_join_era_ticket",
+      "breakpoints": true
     }
   ]
 }

@@ -7,11 +7,12 @@ import { exportAll, importAll } from '@/lib/backup';
 import { ensureFloor3 } from '@/lib/floor';
 import { createVip } from '@/lib/vip';
 import { resetSales } from '@/lib/reset';
+import { salesOverview, setCaps } from '@/lib/sales';
 import {
   addVenues, decideReg, getJoinSettings, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, eraSales, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, eraSales, eraSoldSeats, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -588,5 +589,31 @@ describe('分輪制：鎖定本輪 → 劃位 → 開放下一輪回報，號碼
     // 清除測試資料回到第 1 輪
     await clearJoinTest(db, '網管', false);
     expect((await getJoinSettings(db)).round).toBe(1);
+  });
+});
+
+describe('全場銷售總覽：年代逐張票（樓層、票價）＋2M；三樓已售座位', () => {
+  it('依樓層、票價統計已售、已退；填總席數算尚可售；三樓已售座位 id', async () => {
+    const ev = (await db.select().from(t.event))[0];
+    await presetFloor3(db, '網管', 'middle');
+    const tk = (no: string, floor: string, row: string, seat: string, price: number, status: 'sold' | 'refunded' = 'sold') =>
+      ({ ticketNo: no, orderNo: no.replace(/-\d+$/, ''), floor, row, seat, price, status, soldAt: '2026-11-13T10:00:00+08:00' });
+    await uploadEra(db, '網管', [{ orderNo: 'ER2611130000001', qty: 2, status: 'sold' }, { orderNo: 'ER2611130000002', qty: 0, otherQty: 2, otherNote: '4樓 2 張', status: 'sold' }], new Date(), BASE, [
+      tk('ER2611130000001-1', '3樓', '13排', '33號', 3000), tk('ER2611130000001-2', '3樓', '13排', '31號', 2550),
+      tk('ER2611130000002-1', '4樓', '3排', '1號', 1000), tk('ER2611130000002-2', '4樓', '3排', '2號', 1000, 'refunded'),
+      tk('ER2611130000003-1', '2樓', '5排', '7號', 3600),
+    ]);
+    // 同一票號再上傳以新的為準
+    await uploadEra(db, '網管', [{ orderNo: 'ER2611130000001', qty: 2, status: 'sold' }], new Date(), BASE, [tk('ER2611130000001-2', '3樓', '13排', '31號', 2550)]);
+    await setCaps(db, '網管', { '4樓': 600, '3樓': 800 });
+    const s = (await salesOverview(db))!;
+    expect(s.era.floors.map((f) => [f.floor, f.sold, f.refunded, f.cap, f.left, f.prices.map((p) => p.price)])).toEqual([
+      ['2樓', 1, 0, null, null, [3600]], ['3樓', 2, 0, 800, 798, [3000, 2550]], ['4樓', 1, 1, 600, 599, [1000]],
+    ]);
+    expect(s.era).toMatchObject({ sold: 4, refunded: 1, tickets: 5 });
+    expect(s.silver).toMatchObject({ sold: 2, cap: 510, left: 508 });
+    expect(s.twoM.total).toBeGreaterThan(0);
+    expect(s.daily[0]).toMatchObject({ day: '11/13', era: 4 });
+    expect((await eraSoldSeats(db, ev.id)).sort()).toEqual(['13-31', '13-33']);
   });
 });

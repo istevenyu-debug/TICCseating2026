@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { joinAdminState } from '@/lib/joinQueue';
 import AdminMap, { type SeatLook } from './AdminMap';
-import { eraRows, guessCols, parsePrices, type EraCols, type EraRow } from '@/lib/eraParse';
+import { eraRows, guessCols, parsePrices, type EraCols, type EraRow, type EraTicket } from '@/lib/eraParse';
 
 type J = Awaited<ReturnType<typeof joinAdminState>>;
 type Reg = J['regs'][number];
@@ -280,8 +280,8 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
   const [show, setShow] = useState<'all' | 'free' | 'other'>('all');
   const [more, setMore] = useState(100);
   const prices = parsePrices(j.settings.silverPrices);
-  async function upload(rows: EraRow[], outsideNote: string) {
-    const r = await act({ action: 'join.era.upload', rows }) as UpRes | undefined;
+  async function upload(rows: EraRow[], outsideNote: string, tickets: EraTicket[] = []) {
+    const r = await act({ action: 'join.era.upload', rows, tickets }) as UpRes | undefined;
     if (!r) return false;
     setGrid(null);
     const text = upText(r, outsideNote);
@@ -298,7 +298,7 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
       const c = guessCols(g);
       const p = eraRows(g, c, true, prices);
       // 欄位都認得（訂單編號、張數或一列一張票、能判斷銀區）→ 選了檔案就直接上傳，不用再按
-      if (c.no >= 0 && p.rows.length && p.canSilver && (p.perTicket || c.qty >= 0)) { if (await upload(p.rows, p.outsideNote)) return; }
+      if (c.no >= 0 && p.rows.length && p.canSilver && (p.perTicket || c.qty >= 0)) { if (await upload(p.rows, p.outsideNote, p.list)) return; }
       setCols(c);
       setGrid(g);
     } catch { setMsg({ kind: 'err', text: '讀不到這個檔案。請用 Excel（.xlsx／.xls）或 .csv。' }); }
@@ -342,7 +342,7 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
               <p className="small" style={{ marginBottom: 4 }}>整理後 <b>{rows.length}</b> 筆訂單、銀區 <b>{parsed.tickets}</b> 張{parsed.perTicket ? '（一列一張票合計）' : ''}{parsed.outside ? `；不計贈票 ${parsed.outside} 張（${parsed.outsideNote}）` : ''}。前 5 筆預覽：</p>
               <div className="tbl"><table><thead><tr><th>訂單編號</th><th>銀區張數</th><th>不計</th><th>狀態</th></tr></thead>
                 <tbody>{rows.slice(0, 5).map((x) => <tr key={x.orderNo}><td className="mono">{x.orderNo}</td><td>{x.qty}</td><td className="small">{x.otherNote}</td><td>{x.status === 'refunded' ? '已退' : '已售'}</td></tr>)}</tbody></table></div>
-              <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={() => upload(rows, parsed.outsideNote)}>上傳 {rows.length} 筆</button>
+              <button className="btn pri" style={{ marginTop: 8 }} disabled={busy || !rows.length} onClick={() => upload(rows, parsed.outsideNote, parsed.list)}>上傳 {rows.length} 筆</button>
             </>
           )}
         </div>
@@ -496,12 +496,14 @@ function Seats({ j, act }: { j: J; act: Act }) {
   const [brush, setBrush] = useState<'gift' | 'era' | 'vol' | 'sale'>('gift');
   const owner = useMemo(() => new Map(j.slots.filter((x) => x.seatId).map((x) => [x.seatId!, x])), [j.slots]);
   const cnt = (id: number, free?: boolean) => j.seats.filter((s) => s.usageId === id && (!free || s.status === 'free')).length;
+  const eraSold = useMemo(() => new Set(j.eraSeats), [j.eraSeats]);
   const kindOf = (s: J['seats'][number]) => (s.usageId === j.usage.gift ? 'gift' : s.usageId === j.usage.era ? 'era' : s.usageId === j.usage.vol ? 'vol' : 'sale');
   const look = (s: J['seats'][number]): SeatLook => {
     const o = owner.get(s.id);
     const k = kindOf(s);
-    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: PAINT[k][1], ink: '#18213a',
-      title: `${s.label}・${s.code}・${k === 'sale' ? '其他' : PAINT[k][0]}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
+    const e = eraSold.has(s.id);
+    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: e ? '#7b8394' : PAINT[k][1], ink: e ? '#fff' : '#18213a',
+      title: `${s.label}・${s.code}・${k === 'sale' ? '其他' : PAINT[k][0]}${e ? '・年代已售' : ''}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
   };
   const [note, setNote] = useState('');
   const run = async (body: Record<string, unknown>, label: string) => {
@@ -529,6 +531,7 @@ function Seats({ j, act }: { j: J; act: Act }) {
           ))}
         </div>
         {note && <p className="note small" style={{ marginTop: 8 }}>{note}</p>}
+        {j.eraSeats.length > 0 && <p className="small"><i style={{ display: 'inline-block', width: 12, height: 12, background: '#7b8394', borderRadius: 3, verticalAlign: -1 }} /> 深灰＝年代已售（依年代售出明細的排、號）：{j.eraSeats.length} 席</p>}
         <p className="small">揪團贈席：共 {cnt(j.usage.gift)} 席，空位 {cnt(j.usage.gift, true)} 席；志工席 {cnt(j.usage.vol)} 席；劃位序 {j.slots.filter((x) => x.status !== 'void').length} 個。</p>
         {cnt(j.usage.gift, true) < j.slots.filter((x) => x.status === 'wait' || x.status === 'turn' || x.status === 'skip').length && <p className="note warn small">贈席空位比還沒選位的劃位序少，請再加贈席。</p>}
       </div></div>
