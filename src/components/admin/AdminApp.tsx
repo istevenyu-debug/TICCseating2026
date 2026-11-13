@@ -36,7 +36,8 @@ type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
 const nStatus = (ch: string, st: string) => (ch === 'push' ? ({ sent: '已送達手機', simulated: '僅顯示在購票頁' } as Record<string, string>)[st] : undefined) ?? N_STATUS[st] ?? st;
-const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '劃位連結', order_received: '收到劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消', order_expired: '劃位逾時' };
+const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '劃位連結', order_received: '收到劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消', order_expired: '劃位逾時',
+  join_group: '揪團：建群確認', join_issue: '揪團：回報需要修正', join_fix: '揪團：需補完整編號', join_plink: '揪團：劃位連結', join_soon: '揪團：快輪到了', join_turn: '揪團：輪到您了', join_missed: '揪團：劃位已延後', join_links: '揪團：連結', join_rlink: '揪團：回報連結', join_report: '揪團：收到回報' };
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };
@@ -1052,8 +1053,8 @@ function Notify() {
   const [m, setM] = useState({ user: ns.user, pass: '', url: ns.url });
   const [adv, setAdv] = useState(ne.host !== 'smtp.gmail.com');
   const [to, setTo] = useState({ email: '', phone: '' });
-  const [show, setShow] = useState<'all' | 'bad'>('all');
-  const list = st.notifications.filter((x) => show === 'all' || x.status === 'failed' || x.status === 'simulated');
+  const [show, setShow] = useState<'all' | 'bad' | 'plink' | 'join'>('all');
+  const list = st.notifications.filter((x) => show === 'all' || (show === 'plink' ? x.template === 'join_plink' : show === 'join' ? x.template.startsWith('join_') : x.status === 'failed' || x.status === 'simulated'));
   const ok = (b: boolean) => b ? <span className="pill p-paid">已設定，會真的寄出</span> : <span className="pill p-cancelled">尚未設定，只存紀錄</span>;
   const test = async (channel: 'sms' | 'email') => {
     const r = await act({ action: 'notify.test', channel, to: channel === 'sms' ? to.phone : to.email });
@@ -1125,10 +1126,12 @@ function Notify() {
       </div>
 
       <div className="card">
-        <h2>通知紀錄 <span className="small muted">最近 100 則</span></h2>
+        <h2>通知紀錄 <span className="small muted">最近 300 則</span></h2>
         <div className="row" style={{ marginBottom: 8 }}>
           <label className="switch small"><input type="radio" checked={show === 'all'} onChange={() => setShow('all')} />全部</label>
           <label className="switch small"><input type="radio" checked={show === 'bad'} onChange={() => setShow('bad')} />只看沒寄出的（{st.notifications.filter((x) => x.status === 'failed' || x.status === 'simulated').length}）</label>
+          <label className="switch small"><input type="radio" checked={show === 'plink'} onChange={() => setShow('plink')} />揪團劃位連結（{st.notifications.filter((x) => x.template === 'join_plink').length}）</label>
+          <label className="switch small"><input type="radio" checked={show === 'join'} onChange={() => setShow('join')} />揪團全部</label>
         </div>
         <div className="tbl"><table>
           <thead><tr><th>時間</th><th>內容</th><th>管道</th><th>收件人</th><th>結果</th><th></th></tr></thead>
