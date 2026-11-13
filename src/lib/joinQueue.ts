@@ -594,7 +594,7 @@ async function regByPick(db: Db, code: string) {
   return r;
 }
 
-export const GIFT_ZONE = { id: 1, name: '揪團贈席', color: '#ffd29d', gift: true };
+export const GIFT_ZONE = { id: 1, name: '揪團贈席', color: '#f8b9cf', gift: true };
 
 /** 三樓座位（劃位頁用）：贈席空位可選，其餘只看 */
 export async function pickSeats(db: Db | Tx, eventId: number) {
@@ -667,7 +667,7 @@ export async function submitPick(db: Db, code: string, raw: unknown, now = new D
     const rows = await tx.select({ id: t.eventSeat.seatId, status: t.eventSeat.status, usage: t.seatUsage.code, floor: t.venueSeat.floor, x: t.venueSeat.x, y: t.venueSeat.y })
       .from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
       .where(and(eq(t.eventSeat.eventId, me.eventId), inArray(t.eventSeat.seatId, ids))).for('update', { of: t.eventSeat });
-    if (rows.length !== ids.length || rows.some((r) => r.floor !== '3F' || r.usage !== USAGE_GIFT)) throw new BookingError('INVALID', '只能選三樓的揪團贈席（淡黃色座位）。');
+    if (rows.length !== ids.length || rows.some((r) => r.floor !== '3F' || r.usage !== USAGE_GIFT)) throw new BookingError('INVALID', '只能選三樓的揪團贈席（粉紅色座位）。');
     const taken = rows.filter((r) => r.status !== 'free').map((r) => r.id);
     if (taken.length) throw new BookingError('SEAT_TAKEN', '有座位已被選走，請重新選取。', taken);
     const got = await tx.update(t.eventSeat).set({ status: 'sold', orderId: null, holdUntil: null, bundle: null, version: sql`${t.eventSeat.version} + 1` })

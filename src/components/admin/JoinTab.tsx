@@ -488,7 +488,7 @@ function Seats({ j, act }: { j: J; act: Act }) {
   const look = (s: J['seats'][number]): SeatLook => {
     const o = owner.get(s.id);
     const kind = s.usageId === j.usage.gift ? 'gift' : s.usageId === j.usage.era ? 'era' : 'other';
-    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: kind === 'gift' ? '#ffd29d' : kind === 'era' ? '#cfcfcf' : '#e8f3fb', ink: '#18213a',
+    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: kind === 'gift' ? '#f8b9cf' : kind === 'era' ? '#cfcfcf' : '#e8f3fb', ink: '#18213a',
       title: `${s.label}・${s.code}・${kind === 'gift' ? '揪團贈席' : kind === 'era' ? '年代售出' : '其他'}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
   };
   const names = { gift: '揪團贈席', era: '年代售出', sale: '恢復可售' };
@@ -502,7 +502,7 @@ function Seats({ j, act }: { j: J; act: Act }) {
         <div className="brushes">
           {(['gift', 'era', 'sale'] as const).map((k) => (
             <button key={k} className={`brush${brush === k ? ' on' : ''}`} onClick={() => setBrush(k)}>
-              <i style={{ background: k === 'gift' ? '#ffd29d' : k === 'era' ? '#cfcfcf' : '#e8f3fb' }} />{names[k]}
+              <i style={{ background: k === 'gift' ? '#f8b9cf' : k === 'era' ? '#cfcfcf' : '#e8f3fb' }} />{names[k]}
               <span className="c">{k === 'gift' ? cnt(j.usage.gift) : k === 'era' ? cnt(j.usage.era) : ''}</span>
             </button>
           ))}

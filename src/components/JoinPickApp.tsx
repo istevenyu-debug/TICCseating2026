@@ -153,9 +153,9 @@ export default function JoinPickApp({ code }: { code: string }) {
 
       {mineTurn && rep && (
         <>
-          <p className="note" style={{ margin: '0 0 8px' }}>淡黃色是可以選的贈席，在<b>左右兩側</b>：請左右滑動座位圖，點一下勾選。</p>
+          <p className="note" style={{ margin: '0 0 8px' }}>粉紅色是可以選的贈席，在<b>左右兩側</b>：請左右滑動座位圖，點一下勾選。</p>
           <SeatMap seats={page.seats as unknown as MapProps['seats']} zones={page.zones as unknown as MapProps['zones']} vipInstalled={false} floor="3F"
-            selected={sel} onToggle={toggle} locked={busy} onBlocked={() => setMsg({ kind: 'err', text: '只能選淡黃色的揪團贈席空位。' })} />
+            selected={sel} onToggle={toggle} locked={busy} onBlocked={() => setMsg({ kind: 'err', text: '只能選粉紅色的揪團贈席空位。' })} />
           <div className="card">
             <p style={{ marginTop: 0 }}>已選 <b>{sel.size}</b> / {page.pickCount} 席：{page.seats.filter((x) => sel.has(x.id)).map((x) => x.label).join('、') || '—'}</p>
             <div className="fields">
