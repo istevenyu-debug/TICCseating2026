@@ -409,7 +409,13 @@ export async function sendPickLinks(db: Db, actor: string, base: string, ids?: n
     const venue = (r.venueId ? vs.find((v) => v.id === r.venueId)?.name : r.venueText) ?? '';
     const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序已確定：第 ${mine.join('、')} 號，可選 ${mine.length} 席。`
       + `劃位連結（只給您本人，請勿轉傳）：${pickUrl(base, r.pickCode)}　`
-      + `快輪到時、輪到時都會再寄信通知；輪到後請在 ${s.turnMin} 分鐘內打開。有疑義請洽${s.contact}。`;
+      + `快輪到時、輪到時都會再寄信通知。\n`
+      + `【劃位步驟】\n`
+      + `① 收到「輪到您了」後，請在 ${s.turnMin} 分鐘內打開劃位連結（沒打開會延後 ${s.pushBack} 號）。\n`
+      + `② 打開後有 ${s.pickMin} 分鐘選位：粉紅色是可選的贈席，在三樓左右兩側，座位圖可左右滑動；紫色志工席、白色虛線都不能選。\n`
+      + `③ 點座位出現紅框＝選了，選滿 ${mine.length} 席，填領票代表姓名、手機，按「送出選位」。\n`
+      + `④ 12/9 由領票代表領票，領票時報群名、姓名、手機末三碼。\n`
+      + `即時看板（看排到哪）： ${base}/join/board \n有疑義請洽${s.contact}。`;
     await db.insert(t.notification).values({ channel: 'email', template: 'join_plink', recipient: r.email, content });
     await db.update(t.joinReg).set({ pickSentAt: now }).where(eq(t.joinReg.id, r.id));
     sent++;
