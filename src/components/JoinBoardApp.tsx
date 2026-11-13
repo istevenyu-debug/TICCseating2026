@@ -9,6 +9,7 @@ type Line = { k: string; at: string; group: string; qty: number; orders: number;
 type Board = {
   event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; started?: boolean; round?: number; perSeat: number; contact: string;
   stats: { groups: number; verified: number; pending: number; slots: number; giftSeats: number; giftFree: number };
+  era?: { sold: number; cap: number; left: number; at: string | null };
   feed: Line[]; more: boolean;
   order: { no: number; group: string; status: string; seat: string }[];
   live: {
@@ -107,6 +108,7 @@ export default function JoinBoardApp() {
           <div className="stat"><b style={{ color: 'var(--warn)' }}>{b.stats.pending}</b><span>張待核對</span></div>
           <div className="stat"><b>{b.stats.slots}</b><span>{b.locked ? '個劃位序' : '個預計劃位序'}</span></div>
           {b.stats.giftSeats > 0 && <div className="stat"><b>{b.stats.giftFree}</b><span>席贈席還空著</span></div>}
+          {b.era && b.era.cap > 0 && b.era.at && <div className="stat"><b style={{ color: 'var(--red)' }}>{b.era.left}</b><span>年代銀區尚餘（共 {b.era.cap} 席，已售 {b.era.sold}）</span></div>}
         </div>
       </div>
 

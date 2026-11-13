@@ -40,14 +40,16 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
       <div className="card">
         <h2>十二、揪團贈票（銀區三樓・每 {j.settings.perSeat} 張送 1 席）</h2>
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
-          <div className="stat"><b>{n('approved')}</b><span>團練場（已核准）</span></div>
+          <div className="stat"><b>{n('approved')}</b><span>群（已核准）</span></div>
           <div className="stat"><b>{j.reports.length}</b><span>回報訂單</span></div>
           <div className="stat"><b>{j.reports.filter((x) => x.status === 'ok').reduce((a, x) => a + x.qty, 0)}</b><span>已核對張數</span></div>
           <div className="stat"><b style={{ color: 'var(--warn)' }}>{j.reports.filter((x) => x.status === 'pending').reduce((a, x) => a + x.qty, 0)}</b><span>待核對張數</span></div>
           <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.locked ? j.slots.filter((x) => x.status !== 'void').length : j.provisional.length}</b><span>{j.locked ? `劃位序（已鎖定，第 ${j.round ?? 1} 輪）` : `第 ${j.round ?? 1} 輪預計劃位序`}</span></div>
           <div className="stat"><b>{done.length}</b><span>已選位</span></div>
           <div className="stat"><b>{j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length}</b><span>贈席空位</span></div>
+          {j.eraSales.cap > 0 && <div className="stat"><b style={{ color: 'var(--red)' }}>{j.eraSales.left}</b><span>年代銀區尚餘（已售 {j.eraSales.sold}／{j.eraSales.cap}）</span></div>}
         </div>
+        {j.eraSales.cap > 0 && <p className="small muted" style={{ margin: '6px 0 0' }}>年代銀區數字依年代名單（最後上傳 {tw(j.eraSales.at)}）；名單沒上傳的不會算進去。</p>}
         <div className="row" style={{ marginTop: 12, flexWrap: 'wrap', gap: 6 }}>
           {secs.map(([k, label]) => <button key={k} className={`btn small${sec === k ? ' pri' : ''}`} onClick={() => setSec(k)}>{label}</button>)}
         </div>
@@ -317,7 +319,7 @@ function Era({ j, act, busy, setMsg }: { j: J; act: Act; busy: boolean; setMsg: 
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>年代名單</h3>
-      <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後上傳 {tw(j.era.updatedAt)}</p>
+      <p className="small" style={{ marginTop: 0 }}>目前 <b>{j.era.count}</b> 筆訂單{j.era.refunded ? `（已退 ${j.era.refunded} 筆）` : ''}・最後上傳 {tw(j.era.updatedAt)}{j.eraSales.cap > 0 && <>・<b>年代銀區已售 {j.eraSales.sold}／{j.eraSales.cap}，尚餘 {j.eraSales.left} 席</b></>}</p>
       <p className="small muted">直接選年代「售出明細」檔案，<b>選了就自動上傳並核對</b>（欄位認不出來時才需要手動對欄位、按上傳）。只算 3 樓、售價 {prices.join('、')} 的票（在「設定」可改）；其他票價、其他樓層記為「不計贈票」，志工回報時會看到原因。同一訂單以新上傳的為準，可以重複上傳。</p>
       <label className="btn pri">選擇年代名單檔案（自動上傳）<input type="file" accept=".xls,.xlsx,.csv" style={{ display: 'none' }} disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} /></label>
       {last && <p className={`note small ${last.warn ? 'warn' : 'ok'}`} style={{ marginTop: 10 }}>{last.text}{last.warn ? '。有問題的請到「回報」勾「只看有問題的」查看。' : ''}</p>}
@@ -405,7 +407,7 @@ function Reports({ j, act, busy, sure, confirm2, setMsg }: { j: J; act: Act; bus
   };
   return (
     <div className="card">
-      <h3 style={{ marginTop: 0 }}>各團練場回報</h3>
+      <h3 style={{ marginTop: 0 }}>各群回報</h3>
       <div className="note small" style={{ marginBottom: 10 }}>
         <b>第 {round} 輪</b>　
         {j.locked ? <><b style={{ color: 'var(--ok)' }}>本輪已鎖定</b>（本輪 {cur.filter((x) => x.status !== 'void').length} 個，全部 {j.slots.filter((x) => x.status !== 'void').length} 個；已選位 {j.slots.filter((x) => x.status === 'done').length}）。

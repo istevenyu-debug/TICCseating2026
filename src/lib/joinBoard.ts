@@ -8,7 +8,7 @@ import { and, asc, eq, ne } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { ev0, getJoinSettings } from './join';
-import { BAD_STATUS, GIFT_ZONE, deadlineOf, inHours, isLocked, pickSeats, provisionalSlots } from './joinQueue';
+import { BAD_STATUS, GIFT_ZONE, eraSales, deadlineOf, inHours, isLocked, pickSeats, provisionalSlots } from './joinQueue';
 
 const BAD = BAD_STATUS;
 
@@ -89,6 +89,7 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, now: now.toISOString(),
     reportOpen: s.reportOpen && !locked, locked, started: slots.length > 0, round: s.round, perSeat: s.perSeat, contact: s.contact,
     stats: { groups: approved.size, verified, pending, slots: locked ? slots.length : prov.length, giftSeats: gift.length, giftFree: gift.filter((x) => x.status === 'free').length },
+    era: await eraSales(db, ev.id),
     feed, more, order, live,
     ...(o.tab === 'live' ? { seats, zones: [GIFT_ZONE] } : {}),
   };

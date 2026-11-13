@@ -11,7 +11,7 @@ import {
   addVenues, decideReg, getJoinSettings, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, eraSales, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -532,6 +532,9 @@ describe('三樓座位用途：贈席只在左2、右2；一鍵設定；志工�
     const rows = await db.select({ usageId: t.eventSeat.usageId }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '3F')));
     const n = (id: number) => rows.filter((r) => r.usageId === id).length;
     expect([n(u.gift), n(u.vol), n(u.era)]).toEqual([side.length - 3, 3, mid.length]);
+    // 年代銀區尚餘：中間 510 席 − 名單上已售的銀區張數（退票、非銀區不算）
+    await uploadEra(db, '網管', [{ orderNo: 'E1', qty: 6, status: 'sold' }, { orderNo: 'E2', qty: 2, status: 'refunded' }, { orderNo: 'E3', qty: 0, otherQty: 3, otherNote: '4樓 3 張', status: 'sold' }]);
+    expect(await eraSales(db, ev.id)).toMatchObject({ sold: 6, cap: 510, left: 504 });
   });
 });
 

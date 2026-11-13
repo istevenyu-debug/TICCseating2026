@@ -351,6 +351,19 @@ export async function nextRound(db: Db, actor: string) {
   });
 }
 
+/**
+ * 年代銀區售出：依上傳的年代名單（已售訂單的銀區張數合計）。
+ * 總席數＝三樓塗成「年代售出」的座位數（中間三區，預設 510）。
+ */
+export async function eraSales(db: Db | Tx, eventId: number) {
+  const [x] = await db.select({ sold: sql<number>`coalesce(sum(${t.joinEra.qty}) filter (where ${t.joinEra.status} = 'sold'), 0)::int`, at: sql<Date | null>`max(${t.joinEra.updatedAt})` })
+    .from(t.joinEra).where(eq(t.joinEra.eventId, eventId));
+  const [c] = await db.select({ n: sql<number>`count(*)::int` }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+    .where(and(eq(t.eventSeat.eventId, eventId), eq(t.seatUsage.code, 'era-sold')));
+  const at = x.at ? new Date(x.at).toISOString() : null;
+  return { sold: x.sold, cap: c.n, left: Math.max(0, c.n - x.sold), at };
+}
+
 /* ---------- 志工回報 ---------- */
 
 async function regByReport(db: Db, code: string) {
@@ -841,7 +854,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   const settings = await getJoinSettings(db);
   const regState = await joinRegState(db, base);
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0, vol: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[], round: 1, over: 0 };
+  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0, vol: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[], round: 1, over: 0, eraSales: { sold: 0, cap: 0, left: 0, at: null as string | null } };
   await tickQueue(db, base, now);
   const usage = await joinUsages(db, ev.id);
   const eraAll = await db.select().from(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
@@ -894,7 +907,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
     }),
     seats, totals, inHours: inHours(settings, now), locked,
     provisional: prov.filter((x) => !x.fixed).map((x) => ({ no: x.no, venue: reg.get(x.regId)?.venueName ?? '', at: x.at.toISOString() })),
-    round: settings.round, over: plan.over,
+    round: settings.round, over: plan.over, eraSales: await eraSales(db, ev.id),
     current: active.length ? { nos: active.map((x) => x.no), venue: reg.get(active[0].regId)?.venueName ?? '', deadline: deadlineOf(settings, active[0])?.toISOString() ?? null, seen: !!active[0].seenAt } : null,
   };
 }
