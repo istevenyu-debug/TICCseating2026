@@ -15,7 +15,7 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { rowKey, seatLabel } from './layout';
 import { normalizePhone } from './validation';
-import { USAGE_GIFT, clean, ev0, getJoinSettings, joinRegState, joinUsages, mailHead, pickUrl, rateLimit, reportUrl, type JoinSettings } from './join';
+import { USAGE_GIFT, USAGE_VOL, clean, ev0, getJoinSettings, joinRegState, joinUsages, mailHead, pickUrl, rateLimit, reportUrl, type JoinSettings } from './join';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Slot = typeof t.joinSlot.$inferSelect;
@@ -697,6 +697,8 @@ async function regByPick(db: Db, code: string) {
 }
 
 export const GIFT_ZONE = { id: 1, name: '揪團贈席', color: '#f8b9cf', gift: true };
+/** 志工席：劃位頁、看板只顯示（紫色），不能選 */
+export const VOL_ZONE = { id: 2, name: '志工席', color: '#c9b3f0', gift: false };
 
 /** 三樓座位（劃位頁用）：贈席空位可選，其餘只看 */
 export async function pickSeats(db: Db | Tx, eventId: number) {
@@ -707,7 +709,7 @@ export async function pickSeats(db: Db | Tx, eventId: number) {
     .where(and(eq(t.eventSeat.eventId, eventId), eq(t.venueSeat.floor, '3F')));
   return rows.map((s) => ({
     id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), bundle: null as string | null,
-    zoneId: s.usage === USAGE_GIFT ? GIFT_ZONE.id : 0,
+    zoneId: s.usage === USAGE_GIFT ? GIFT_ZONE.id : s.usage === USAGE_VOL ? VOL_ZONE.id : 0,
     status: (s.usage === USAGE_GIFT ? (s.status === 'free' ? 'free' : 'sold') : 'blocked') as 'free' | 'sold' | 'blocked',
   }));
 }
@@ -742,7 +744,7 @@ export async function pickPage(db: Db, code: string, now = new Date(), base = ''
     mine: all.filter((x) => x.regId === me.id).map((x) => ({ no: x.no, status: x.status, misses: x.misses, seat: x.seatId ? label.get(x.seatId) ?? '' : '', place: waitIdx.get(x.id) ?? -1 })),
     pickCount: mineTurn ? turn.length : 0,
     rep: { name: myDone[0]?.repName || me.headName, phone: myDone[0]?.repPhone || me.headPhone },
-    zones: [GIFT_ZONE], seats,
+    zones: [GIFT_ZONE, VOL_ZONE], seats,
   };
 }
 

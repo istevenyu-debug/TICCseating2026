@@ -95,7 +95,7 @@ export default function SeatMap({ seats, zones, vipInstalled, selected, onToggle
               <button
                 key={s.id}
                 type="button"
-                className={`seat${off ? ' off' : ''}${isSel && (s.status !== 'mine' || isFocus) ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
+                className={`seat${s.status === 'blocked' && z ? ' zb' : ''}${off ? ' off' : ''}${isSel && (s.status !== 'mine' || isFocus) ? ' sel' : ''}${s.type === 'wheelchair' ? ' wheel' : ''}${bundleClass(s, linkRight)}`}
                 data-k={s.status}
                 style={{ gridColumn: s.x, gridRow: s.y, ['--z' as string]: z?.color, color: z && (s.status === 'free' || isSel) ? inkFor(z.color) : undefined }}
                 title={title}

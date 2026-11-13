@@ -63,6 +63,7 @@ label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; co
 .hall.f3 { grid-template-columns: repeat(11, var(--cell)) 34px repeat(12, var(--cell)) 14px repeat(10, var(--cell)) 14px repeat(12, var(--cell)) 34px repeat(12, var(--cell)); } /* 三樓：x 1–11 左斜區、12 排號、13–24、25 走道、26–35、36 走道、37–48、49 排號、50–61 右斜區 */
 .seat { width: var(--cell); height: var(--cell); border-radius: 4px 4px 6px 6px; font: 500 9px/var(--cell) var(--f-mono); text-align: center; color: var(--seat-ink); border: 1px solid transparent; padding: 0; cursor: pointer; position: relative; background: var(--z); }
 .seat[data-k="blocked"] { background: transparent; border: 1px dashed var(--line); color: var(--muted); cursor: not-allowed; }
+.seat.zb[data-k="blocked"] { background: var(--z); border: 1px solid transparent; color: #3a2a5a; } /* 只看、不能選的有色座位（例：志工席） */
 .seat[data-k="sold"] { background: var(--sold); color: var(--surface); cursor: not-allowed; }
 .seat[data-k="pending"] { background: repeating-linear-gradient(45deg, var(--pending) 0 3px, transparent 3px 6px); border-color: var(--pending); color: var(--muted); cursor: not-allowed; }
 .seat[data-k="held"] { background: repeating-linear-gradient(-45deg, var(--sold) 0 2px, transparent 2px 5px); color: var(--muted); cursor: not-allowed; }
