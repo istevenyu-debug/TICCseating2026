@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
@@ -55,7 +55,7 @@ describe('揪團即時看板', () => {
     const a = await mk('台北大安1', '0912000001');
     await uploadEra(db, '網管', [{ orderNo: 'ER2611130000001', qty: 12, status: 'sold' }]);
     await send(a, [['0001', 12]], T(10));
-    const seats = await db.select({ id: t.venueSeat.id }).from(t.venueSeat).where(eq(t.venueSeat.floor, '3F')).orderBy(t.venueSeat.y, t.venueSeat.x);
+    const seats = await db.select({ id: t.venueSeat.id }).from(t.venueSeat).where(and(eq(t.venueSeat.floor, '3F'), inArray(t.venueSeat.block, ['L2', 'R2']))).orderBy(t.venueSeat.y, t.venueSeat.x);
     await paintFloor3(db, '網管', 'gift', seats.slice(0, 4).map((s) => s.id));
     await lockSlots(db, '網管', T(12));
     await setJoinSettings(db, '網管', { pickOpen: true });

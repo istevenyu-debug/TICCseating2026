@@ -481,33 +481,45 @@ function ClearTest({ act, busy }: { act: Act; busy: boolean }) {
 }
 
 /* ---------- 三樓座位 ---------- */
+const PAINT: Record<'gift' | 'era' | 'vol' | 'sale', [string, string]> = { gift: ['揪團贈席', '#f8b9cf'], era: ['年代售出', '#cfcfcf'], vol: ['志工席', '#c9b3f0'], sale: ['恢復可售', '#e8f3fb'] };
 function Seats({ j, act }: { j: J; act: Act }) {
-  const [brush, setBrush] = useState<'gift' | 'era' | 'sale'>('gift');
+  const [brush, setBrush] = useState<'gift' | 'era' | 'vol' | 'sale'>('gift');
   const owner = useMemo(() => new Map(j.slots.filter((x) => x.seatId).map((x) => [x.seatId!, x])), [j.slots]);
   const cnt = (id: number, free?: boolean) => j.seats.filter((s) => s.usageId === id && (!free || s.status === 'free')).length;
+  const kindOf = (s: J['seats'][number]) => (s.usageId === j.usage.gift ? 'gift' : s.usageId === j.usage.era ? 'era' : s.usageId === j.usage.vol ? 'vol' : 'sale');
   const look = (s: J['seats'][number]): SeatLook => {
     const o = owner.get(s.id);
-    const kind = s.usageId === j.usage.gift ? 'gift' : s.usageId === j.usage.era ? 'era' : 'other';
-    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: kind === 'gift' ? '#f8b9cf' : kind === 'era' ? '#cfcfcf' : '#e8f3fb', ink: '#18213a',
-      title: `${s.label}・${s.code}・${kind === 'gift' ? '揪團贈席' : kind === 'era' ? '年代售出' : '其他'}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
+    const k = kindOf(s);
+    return { kind: s.status === 'free' ? 'free' : (s.status as SeatLook['kind']), bg: PAINT[k][1], ink: '#18213a',
+      title: `${s.label}・${s.code}・${k === 'sale' ? '其他' : PAINT[k][0]}${o ? `・第 ${o.no} 號 ${o.venue}` : s.status !== 'free' ? '・已劃走' : ''}` };
   };
-  const names = { gift: '揪團贈席', era: '年代售出', sale: '恢復可售' };
+  const [note, setNote] = useState('');
+  const run = async (body: Record<string, unknown>, label: string) => {
+    const r = await act(body) as { updated: number; skipped: number; notSide: number } | undefined;
+    if (r) setNote(`已設定 ${r.updated} 席為「${label}」${r.notSide ? `；${r.notSide} 席不在左2、右2，揪團贈席只能塗兩側斜區，已略過` : ''}${r.skipped - (r.notSide ?? 0) > 0 ? `；${r.skipped - r.notSide} 席已被選走或不在三樓，沒改` : ''}。`);
+  };
   return (
     <div className="grid2">
-      <AdminMap floor="3F" seats={j.seats} vipInstalled={false} look={look} caption="點按或拖曳塗刷；已被選走的座位不會改"
-        onPaint={(ids) => act({ action: 'join.paint', kind: brush, seatIds: ids }, `已設定為「${names[brush]}」`)} />
+      <AdminMap floor="3F" seats={j.seats} vipInstalled={false} look={look} caption="框選或塗刷；已被選走的座位不會改"
+        onPaint={(ids) => run({ action: 'join.paint', kind: brush, seatIds: ids }, PAINT[brush][0])} />
       <div className="side"><div className="card">
         <h3 style={{ marginTop: 0 }}>三樓座位用途</h3>
-        <p className="small muted" style={{ marginTop: 0 }}>中間三區（年代賣）塗「年代售出」：系統內誰都選不到，招待也不行。兩側要給團練場的塗「揪團贈席」。</p>
+        <p className="small muted" style={{ marginTop: 0 }}>揪團贈席（粉紅）只能在<b>左2、右2</b>（兩側斜區）。中間三區（左1、中、右1，年代賣）塗「年代售出」：系統內誰都選不到。志工席：各群選不到，留給志工。</p>
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          <button className="btn small" onClick={() => window.confirm('左2、右2 的空位全部設為「揪團贈席」？（志工席、已選走的不動）') && run({ action: 'join.preset', which: 'side' }, '揪團贈席')}>一鍵：左2、右2＝揪團贈席</button>
+          <button className="btn small" onClick={() => window.confirm('左1、中、右1 的空位全部設為「年代售出」？（志工席、已選走的不動）') && run({ action: 'join.preset', which: 'middle' }, '年代售出')}>一鍵：中間三區＝年代售出</button>
+        </div>
+        <p className="small muted" style={{ margin: '0 0 6px' }}>筆刷（先選，再到左邊座位圖按「開始設定」框選或點座位）：</p>
         <div className="brushes">
-          {(['gift', 'era', 'sale'] as const).map((k) => (
+          {(['gift', 'vol', 'era', 'sale'] as const).map((k) => (
             <button key={k} className={`brush${brush === k ? ' on' : ''}`} onClick={() => setBrush(k)}>
-              <i style={{ background: k === 'gift' ? '#f8b9cf' : k === 'era' ? '#cfcfcf' : '#e8f3fb' }} />{names[k]}
-              <span className="c">{k === 'gift' ? cnt(j.usage.gift) : k === 'era' ? cnt(j.usage.era) : ''}</span>
+              <i style={{ background: PAINT[k][1] }} />{PAINT[k][0]}
+              <span className="c">{k === 'gift' ? cnt(j.usage.gift) : k === 'era' ? cnt(j.usage.era) : k === 'vol' ? cnt(j.usage.vol) : ''}</span>
             </button>
           ))}
         </div>
-        <p className="small">揪團贈席：共 {cnt(j.usage.gift)} 席，空位 {cnt(j.usage.gift, true)} 席；劃位序 {j.slots.filter((x) => x.status !== 'void').length} 個。</p>
+        {note && <p className="note small" style={{ marginTop: 8 }}>{note}</p>}
+        <p className="small">揪團贈席：共 {cnt(j.usage.gift)} 席，空位 {cnt(j.usage.gift, true)} 席；志工席 {cnt(j.usage.vol)} 席；劃位序 {j.slots.filter((x) => x.status !== 'void').length} 個。</p>
         {cnt(j.usage.gift, true) < j.slots.filter((x) => x.status === 'wait' || x.status === 'turn' || x.status === 'skip').length && <p className="note warn small">贈席空位比還沒選位的劃位序少，請再加贈席。</p>}
       </div></div>
     </div>

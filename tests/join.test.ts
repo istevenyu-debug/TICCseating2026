@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
@@ -8,7 +8,7 @@ import { ensureFloor3 } from '@/lib/floor';
 import { createVip } from '@/lib/vip';
 import { resetSales } from '@/lib/reset';
 import {
-  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
+  addVenues, decideReg, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
   clearJoinTest, deleteOwnReport, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
@@ -46,7 +46,7 @@ const report = (code: string, rows: [string, number | string][], reporter = '志
   submitReport(db, code, { reporter, rows: rows.map(([orderNo, qty]) => ({ orderNo, qty })) }, ip(), now, BASE);
 /** 三樓左側斜區前 n 個座位塗成贈席 */
 async function giftSeats(n: number) {
-  const seats = await db.select({ id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y }).from(t.venueSeat).where(eq(t.venueSeat.floor, '3F')).orderBy(t.venueSeat.y, t.venueSeat.x);
+  const seats = await db.select({ id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y }).from(t.venueSeat).where(and(eq(t.venueSeat.floor, '3F'), inArray(t.venueSeat.block, ['L2', 'R2']))).orderBy(t.venueSeat.y, t.venueSeat.x);
   const ids = seats.slice(0, n).map((s) => s.id);
   await paintFloor3(db, '網管', 'gift', ids);
   return ids;
@@ -514,5 +514,23 @@ describe('核對不藏錯：非銀區、日期選錯、回報早於購買、找�
     // 再上傳同一份不重寄
     await up([{ orderNo: 'ER2611140000999', qty: 1, soldAt: '2026-11-14T19:00:00+08:00' }]);
     expect(await mails('join_issue')).toHaveLength(2);
+  });
+});
+
+describe('三樓座位用途：贈席只在左2、右2；一鍵設定；志工席', () => {
+  it('揪團贈席塗到中間會略過；一鍵設定兩側與中間；志工席不被一鍵覆蓋', async () => {
+    const ev = (await db.select().from(t.event))[0];
+    const u = await joinUsages(db, ev.id);
+    const s3 = await db.select({ id: t.venueSeat.id, block: t.venueSeat.block }).from(t.venueSeat).where(eq(t.venueSeat.floor, '3F'));
+    const side = s3.filter((s) => s.block === 'L2' || s.block === 'R2');
+    const mid = s3.filter((s) => !['L2', 'R2'].includes(s.block));
+    expect(side.length + mid.length).toBe(724);
+    expect(await paintFloor3(db, '網管', 'gift', [mid[0].id, side[0].id])).toMatchObject({ updated: 1, notSide: 1 });
+    expect(await paintFloor3(db, '網管', 'vol', side.slice(1, 4).map((s) => s.id))).toMatchObject({ updated: 3 });
+    expect((await presetFloor3(db, '網管', 'side')).updated).toBe(side.length - 3);
+    expect((await presetFloor3(db, '網管', 'middle')).updated).toBe(mid.length);
+    const rows = await db.select({ usageId: t.eventSeat.usageId }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '3F')));
+    const n = (id: number) => rows.filter((r) => r.usageId === id).length;
+    expect([n(u.gift), n(u.vol), n(u.era)]).toEqual([side.length - 3, 3, mid.length]);
   });
 });

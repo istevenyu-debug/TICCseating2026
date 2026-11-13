@@ -93,32 +93,50 @@ export async function setJoinSettings(db: Db, actor: string, raw: unknown) {
 
 export const USAGE_GIFT = 'join-gift';
 export const USAGE_ERA = 'era-sold';
+export const USAGE_VOL = 'join-vol';
+/** 揪團贈席只能在三樓兩側斜區（左2、右2） */
+export const GIFT_BLOCKS = ['L2', 'R2'];
 
 /** 確保有「揪團贈席」「年代售出」兩種用途（都不開放販售） */
 export async function joinUsages(db: Db, eventId: number) {
-  const have = await db.select().from(t.seatUsage).where(and(eq(t.seatUsage.eventId, eventId), inArray(t.seatUsage.code, [USAGE_GIFT, USAGE_ERA])));
-  const want = [{ code: USAGE_GIFT, name: '揪團贈席' }, { code: USAGE_ERA, name: '年代售出' }].filter((u) => !have.some((h) => h.code === u.code));
+  const have = await db.select().from(t.seatUsage).where(and(eq(t.seatUsage.eventId, eventId), inArray(t.seatUsage.code, [USAGE_GIFT, USAGE_ERA, USAGE_VOL])));
+  const want = [{ code: USAGE_GIFT, name: '揪團贈席' }, { code: USAGE_ERA, name: '年代售出' }, { code: USAGE_VOL, name: '志工席' }].filter((u) => !have.some((h) => h.code === u.code));
   if (want.length) have.push(...await db.insert(t.seatUsage).values(want.map((u) => ({ eventId, ...u, sellable: false }))).returning());
-  return { gift: have.find((u) => u.code === USAGE_GIFT)!.id, era: have.find((u) => u.code === USAGE_ERA)!.id };
+  return { gift: have.find((u) => u.code === USAGE_GIFT)!.id, era: have.find((u) => u.code === USAGE_ERA)!.id, vol: have.find((u) => u.code === USAGE_VOL)!.id };
 }
 
-/** 後台塗三樓座位：贈席／年代售出／恢復可售。只改空位；已被選走的不動 */
-export async function paintFloor3(db: Db, actor: string, kind: 'gift' | 'era' | 'sale', seatIds: string[]) {
+/**
+ * 後台塗三樓座位：贈席／年代售出／志工席／恢復可售。只改空位；已被選走的不動。
+ * 揪團贈席只能在左2、右2（兩側斜區），塗到其他區的略過。
+ */
+export async function paintFloor3(db: Db, actor: string, kind: 'gift' | 'era' | 'vol' | 'sale', seatIds: string[]) {
   const ev = await ev0(db);
   const u = await joinUsages(db, ev.id);
-  let usageId = kind === 'gift' ? u.gift : kind === 'era' ? u.era : 0;
+  let usageId = kind === 'gift' ? u.gift : kind === 'era' ? u.era : kind === 'vol' ? u.vol : 0;
   if (kind === 'sale') {
     const [s] = await db.select().from(t.seatUsage).where(and(eq(t.seatUsage.eventId, ev.id), eq(t.seatUsage.sellable, true))).orderBy(t.seatUsage.id).limit(1);
     if (!s) throw new BookingError('INVALID', '找不到「可售」用途');
     usageId = s.id;
   }
   const ids = [...new Set(seatIds)];
-  const rows = ids.length ? await db.select({ id: t.eventSeat.seatId, status: t.eventSeat.status, floor: t.venueSeat.floor }).from(t.eventSeat)
+  const rows = ids.length ? await db.select({ id: t.eventSeat.seatId, status: t.eventSeat.status, floor: t.venueSeat.floor, block: t.venueSeat.block }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ids))) : [];
-  const ok = rows.filter((r) => r.floor === '3F' && r.status === 'free').map((r) => r.id);
+  const free = rows.filter((r) => r.floor === '3F' && r.status === 'free');
+  const ok = free.filter((r) => kind !== 'gift' || GIFT_BLOCKS.includes(r.block)).map((r) => r.id);
   if (ok.length) await db.update(t.eventSeat).set({ usageId }).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, ok)));
   await db.insert(t.auditLog).values({ actor, action: 'join_paint', target: `event:${ev.id}`, detail: JSON.stringify({ kind, count: ok.length }) });
-  return { updated: ok.length, skipped: ids.length - ok.length };
+  return { updated: ok.length, skipped: ids.length - ok.length, notSide: free.length - ok.length };
+}
+
+/** 一鍵設定三樓：左2、右2 空位＝揪團贈席；左1、中、右1 空位＝年代售出。志工席、已被選走的不動 */
+export async function presetFloor3(db: Db, actor: string, which: 'side' | 'middle') {
+  const ev = await ev0(db);
+  const u = await joinUsages(db, ev.id);
+  const rows = await db.select({ id: t.eventSeat.seatId, usageId: t.eventSeat.usageId, block: t.venueSeat.block }).from(t.eventSeat)
+    .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '3F'), eq(t.eventSeat.status, 'free')));
+  const ids = rows.filter((r) => r.usageId !== u.vol && (which === 'side' ? GIFT_BLOCKS.includes(r.block) : !GIFT_BLOCKS.includes(r.block))).map((r) => r.id);
+  return paintFloor3(db, actor, which === 'side' ? 'gift' : 'era', ids);
 }
 
 /* ---------- 團練場清單 ---------- */

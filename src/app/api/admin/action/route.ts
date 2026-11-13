@@ -16,7 +16,7 @@ import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
 import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
-import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
+import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
 import { changeSlotSeat, clearJoinTest, deleteReport, lockSlots, markSent, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
@@ -92,7 +92,8 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.lock') }),
   z.object({ action: z.literal('join.unlock') }),
   z.object({ action: z.literal('join.clear'), withRegs: z.boolean().optional() }),
-  z.object({ action: z.literal('join.paint'), kind: z.enum(['gift', 'era', 'sale']), seatIds: z.array(z.string().max(16)).min(1).max(800) }),
+  z.object({ action: z.literal('join.paint'), kind: z.enum(['gift', 'era', 'vol', 'sale']), seatIds: z.array(z.string().max(16)).min(1).max(800) }),
+  z.object({ action: z.literal('join.preset'), which: z.enum(['side', 'middle']) }),
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000) }),
   z.object({ action: z.literal('join.report.delete'), id }),
   z.object({ action: z.literal('join.group.rename'), id, name: z.string().max(60) }),
@@ -265,6 +266,7 @@ export async function POST(req: Request) {
       case 'join.unlock': mustBeAdmin(); return unlockSlots(db, who);
       case 'join.clear': mustBeAdmin(); return clearJoinTest(db, who, !!a.withRegs);
       case 'join.paint': return paintFloor3(db, who, a.kind, a.seatIds);
+      case 'join.preset': return presetFloor3(db, who, a.which);
       case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);
       case 'join.group.rename': return renameGroup(db, who, a.id, a.name);

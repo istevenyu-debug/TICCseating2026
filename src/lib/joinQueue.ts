@@ -784,7 +784,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
   const settings = await getJoinSettings(db);
   const regState = await joinRegState(db, base);
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[] };
+  if (!ev) return { settings, ...regState, era: { count: 0, refunded: 0, updatedAt: null as string | null }, reports: [], eraList: [] as { orderNo: string; qty: number; otherQty: number; otherNote: string; status: string; soldAt: string | null; group: string; reportStatus: string }[], slots: [], seats: [], usage: { gift: 0, era: 0, vol: 0 }, totals: [], current: null, inHours: true, locked: false, provisional: [] as { no: number; venue: string; at: string }[] };
   await tickQueue(db, base, now);
   const usage = await joinUsages(db, ev.id);
   const eraAll = await db.select().from(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
