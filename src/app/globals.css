@@ -121,6 +121,8 @@ a.btn.disabled { opacity: .45; pointer-events: none; }
 table { border-collapse: collapse; width: 100%; font-size: 13px; }
 th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
 th { font-weight: 500; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.card.sales td, .card.sales th { padding: 6px 14px 6px 0; } /* 全場銷售總覽：表格不撐滿，欄距適中 */
+.card.sales p { max-width: 430px; }
 tr.click { cursor: pointer; } tr.click:hover td, tr.cur td { background: var(--bg); }
 .p-held { color: var(--accent); }
 .pstack { display: flex; flex-direction: column; gap: 14px; }
