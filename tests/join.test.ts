@@ -131,9 +131,9 @@ describe('志工回報：先收後核，劃位序依回報時間，鎖定後確�
     // B 先回報一張名單上還沒有的 10 張（待核對），A 之後湊滿 10 張已核對
     const rb = await report(b.reportCode!, [['P100', 10]], '志工丙', at(1));
     expect(rb).toMatchObject({ verified: 0, pending: 10, slots: [] });
-    expect((await report(b.reportCode!, [['A001', 4]], '志工丙', at(1))).rejected[0].reason).toContain('其他團練場');
+    expect((await report(b.reportCode!, [['A001', 4]], '志工丙', at(1))).rejected[0].reason).toContain('其他群');
     const r2 = await report(a.reportCode!, [['A002', 6], ['A001', 4]], '志工乙', at(2));
-    expect(r2.rejected[0].reason).toBe('本團練場已回報過');
+    expect(r2.rejected[0].reason).toBe('本群已回報過');
     expect(r2).toMatchObject({ verified: 10, slots: [1] });
 
     // 年代名單更新：P100 核對通過；B 回報較早，排到第 1 號，A 變第 2 號
@@ -377,8 +377,8 @@ describe('志工只輸入訂單編號後 4 碼', () => {
     expect(r.rejected.map((x) => x.reason)).toEqual(['請輸入「-」前面最後 4 個數字（或完整訂單編號）', '年代記錄後 4 碼 0222 的訂單是 2 張。請確認張數；若不是這筆，請輸入完整訂單編號']);
     expect((await reportPage(db, a.reportCode!)).list[0]).toMatchObject({ key: '0109', orderNo: 'ER2611120000109', status: 'ok' });
     // 同一筆再報：後 4 碼、完整編號都擋
-    expect((await report(a.reportCode!, [['0109', 6]])).rejected[0].reason).toContain('本團練場已回報過 0109');
-    expect((await report(a.reportCode!, [['ER2611120000109', 6]])).rejected[0].reason).toBe('本團練場已回報過');
+    expect((await report(a.reportCode!, [['0109', 6]])).rejected[0].reason).toContain('本群已回報過 0109');
+    expect((await report(a.reportCode!, [['ER2611120000109', 6]])).rejected[0].reason).toBe('本群已回報過');
   });
 
   it('名單上有兩筆後 4 碼、張數都一樣：請他輸入完整編號', async () => {
@@ -389,7 +389,7 @@ describe('志工只輸入訂單編號後 4 碼', () => {
     expect(r.rejected[0].reason).toBe('有好幾筆訂單後 4 碼都是 0109，請輸入完整訂單編號');
     expect((await report(a.reportCode!, [['ER2611130000109', 2]])).accepted[0].status).toBe('ok');
     // 本團練場已有一筆 …0109 × 2：後 4 碼再報會被當成重複，要用完整編號
-    expect((await report(a.reportCode!, [['0109', 2]])).rejected[0].reason).toContain('本團練場已回報過 0109');
+    expect((await report(a.reportCode!, [['0109', 2]])).rejected[0].reason).toContain('本群已回報過 0109');
     expect((await report(a.reportCode!, [['ER2611120000109', 2]])).accepted[0]).toMatchObject({ orderNo: 'ER2611120000109', status: 'ok' });
   });
 
@@ -445,7 +445,7 @@ describe('後 4 碼＋購買日期（預設今天，可改）', () => {
     await setJoinSettings(db, '網管', { reportOpen: true });
     expect((await send(a.reportCode!, '2026-11-14', [['0109', 6]], N)).accepted[0]).toMatchObject({ orderNo: 'ER2611140000109', status: 'ok' });
     expect((await send(a.reportCode!, '2026-11-13', [['0109', 6]], N)).accepted[0]).toMatchObject({ orderNo: 'ER2611130000109', status: 'ok' });
-    expect((await send(a.reportCode!, '2026-11-14', [['0109', 6]], N)).rejected[0].reason).toContain('本團練場已回報過 11/14 0109');
+    expect((await send(a.reportCode!, '2026-11-14', [['0109', 6]], N)).rejected[0].reason).toContain('本群已回報過 11/14 0109');
     expect(await msg(send(a.reportCode!, '2026-11-15', [['0109', 6]], N))).toContain('購買日期不正確');
     // 11/14 的 0222 還不在名單上：待核對；11/13 的 0222 不會被拿走
     const r = await send(a.reportCode!, '2026-11-14', [['0222', 2], ['0333', 1]], N);

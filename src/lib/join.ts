@@ -376,7 +376,7 @@ export async function sendLinks(db: Db, actor: string, base: string, ids?: numbe
   let sent = 0, noEmail = 0;
   for (const r of todo) {
     if (!r.email || !r.reportCode) { noEmail++; continue; }
-    const venue = vs.find((v) => v.id === r.venueId)?.name ?? '';
+    const venue = (r.venueId ? vs.find((v) => v.id === r.venueId)?.name : r.venueText) ?? '';
     const content = `【${ev.name}】${r.headName} 您好，感謝您擔任「${venue}」的揪團負責人。請把下面的回報連結轉給協助回報的志工：${reportUrl(base, r.reportCode)}　`
       + `先收後核：志工輸入年代訂單編號（「-」前面最後 4 碼即可，例如 ER2611120000109-1 輸入 0109，系統自動帶入當天日期；請當天買、當天回報）與張數後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入；劃位序依回報時間排列，越早回報越前面。`
       + `劃位連結會在劃位前另外寄給您。有疑義請洽${s.contact}。`;
@@ -403,7 +403,7 @@ export async function sendPickLinks(db: Db, actor: string, base: string, ids?: n
     const mine = slots.filter((x) => x.regId === r.id && x.status !== 'void').map((x) => x.no).sort((a, b) => a - b);
     if (!mine.length || (!ids?.length && r.pickSentAt)) continue;
     if (!r.email || !r.pickCode) { noEmail++; continue; }
-    const venue = vs.find((v) => v.id === r.venueId)?.name ?? '';
+    const venue = (r.venueId ? vs.find((v) => v.id === r.venueId)?.name : r.venueText) ?? '';
     const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序已確定：第 ${mine.join('、')} 號，可選 ${mine.length} 席。`
       + `劃位連結（只給您本人，請勿轉傳）：${pickUrl(base, r.pickCode)}　`
       + `快輪到時、輪到時都會再寄信通知；輪到後請在 ${s.turnMin} 分鐘內打開。有疑義請洽${s.contact}。`;

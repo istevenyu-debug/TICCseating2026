@@ -143,7 +143,7 @@ export default function JoinPickApp({ code }: { code: string }) {
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>我的劃位序</h2>
-        {!page.mine.length ? <p className="muted" style={{ margin: 0 }}>{page.locked ? `本團練場沒有劃位序（已核對 ${page.tickets} 張）。有疑義請洽 ${s.contact}` : `回報截止後才會確定劃位序。目前已核對 ${page.tickets} 張。`}</p> : (
+        {!page.mine.length ? <p className="muted" style={{ margin: 0 }}>{page.locked ? `本群沒有劃位序（已核對 ${page.tickets} 張）。有疑義請洽 ${s.contact}` : `回報截止後才會確定劃位序。目前已核對 ${page.tickets} 張。`}</p> : (
           <div className="tbl"><table>
             <thead><tr><th>劃位序</th><th>狀態</th></tr></thead>
             <tbody>{page.mine.map((x) => <tr key={x.no}><td className="mono">第 {x.no} 號</td><td>{statusText(x, x.place)}</td></tr>)}</tbody>
@@ -162,7 +162,7 @@ export default function JoinPickApp({ code }: { code: string }) {
               <label className="f">領票代表（12/9 去年代領票的人）<input value={rep.name} maxLength={30} onChange={(e) => setRep({ ...rep, name: e.target.value })} /></label>
               <label className="f">領票代表手機<input value={rep.phone} inputMode="tel" onChange={(e) => setRep({ ...rep, phone: e.target.value })} /></label>
             </div>
-            <p className="small muted">領票時報團練場、姓名、手機末三碼。</p>
+            <p className="small muted">領票時報群名、姓名、手機末三碼。</p>
             <button className="btn pri" style={{ width: '100%', padding: 14, fontSize: 18 }} disabled={busy || sel.size !== page.pickCount} onClick={pick}>{busy ? '送出中…' : '送出選位'}</button>
           </div>
         </>
@@ -172,7 +172,7 @@ export default function JoinPickApp({ code }: { code: string }) {
         <h2 style={{ marginTop: 0 }}>劃位排序（最初順序）</h2>
         {!page.board.length ? <p className="muted" style={{ margin: 0 }}>還沒有劃位序。</p> : (
           <div className="tbl"><table>
-            <thead><tr><th>劃位序</th><th>團練場</th><th>狀態</th></tr></thead>
+            <thead><tr><th>劃位序</th><th>群</th><th>狀態</th></tr></thead>
             <tbody>{page.board.map((x) => {
               const q = page.queue.find((y) => y.no === x.no);
               return <tr key={x.no} style={x.mine ? { background: 'var(--accent-soft, #fff6e0)', fontWeight: 700 } : undefined}>

@@ -366,10 +366,10 @@ export async function submitReport(db: Db, code: string, raw: unknown, ip = '', 
     let m: Match | null = null;
     if (!reason && !isSuffixKey(k)) {
       const d = claimed.get(k);
-      if (d) reason = d.regId === reg.id ? '本團練場已回報過' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`;
+      if (d) reason = d.regId === reg.id ? '本群已回報過' : `此訂單已由其他群回報，有疑義請洽${s.contact}`;
     }
     if (!reason && isSuffixKey(k) && mine.some((r) => r.qty === qty && (r.key === k ? (r.buyDate ?? bd) === bd : (r.orderNo ?? '').endsWith(k) && (!bd || !r.orderNo || [null, bd].includes(orderDate({ orderNo: r.orderNo, soldAt: null })))))) {
-      reason = `本團練場已回報過 ${ymdLabel(bd)}${k}（${qty} 張）；若是另一筆訂單，請輸入完整訂單編號`;
+      reason = `本群已回報過 ${ymdLabel(bd)}${k}（${qty} 張）；若是另一筆訂單，請輸入完整訂單編號`;
     }
     if (!reason) {
       m = matchKey(k, qty, now, era, new Set(claimed.keys()), isSuffixKey(k) ? bd : null);
@@ -425,7 +425,7 @@ export async function fixOwnReport(db: Db, code: string, id: number, full: strin
   if (isSuffixKey(r.key) && !no.endsWith(r.key)) throw new BookingError('INVALID', `完整編號的最後幾碼要是 ${r.key}。輸入錯了請刪除這筆再重新輸入。`);
   if (isSuffixKey(r.key) && r.buyDate && ![null, r.buyDate].includes(orderDate({ orderNo: no, soldAt: null }))) throw new BookingError('INVALID', `這筆的購買日期是 ${ymdLabel(r.buyDate).trim()}，完整編號的日期不同。輸入錯了請刪除這筆再重新輸入。`);
   const [d] = await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, reg.eventId), eq(t.joinReport.orderNo, no)));
-  if (d && d.id !== r.id) throw new BookingError('INVALID', d.regId === reg.id ? '本團練場已回報過這筆訂單' : `此訂單已由其他團練場回報，有疑義請洽${s.contact}`);
+  if (d && d.id !== r.id) throw new BookingError('INVALID', d.regId === reg.id ? '本群已回報過這筆訂單' : `此訂單已由其他群回報，有疑義請洽${s.contact}`);
   const j = judge((await db.select().from(t.joinEra).where(and(eq(t.joinEra.eventId, reg.eventId), eq(t.joinEra.orderNo, no))))[0], r.qty);
   if (j.status === 'refunded') throw new BookingError('INVALID', '此訂單已退票');
   if (j.status === 'outside') throw new BookingError('INVALID', j.note);
@@ -443,7 +443,7 @@ export async function deleteReport(db: Db, actor: string, id: number) {
     if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
     const { verified, slots } = await totalsOf(tx, r.regId);
     const after = verified - (r.status === 'ok' ? r.qty : 0);
-    if (slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這個團練場最後的劃位序，再刪除。`);
+    if (slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這一群最後的劃位序，再刪除。`);
     await tx.delete(t.joinReport).where(eq(t.joinReport.id, id));
     await tx.insert(t.auditLog).values({ actor, action: 'join_report_delete', target: `join_reg:${r.regId}`, detail: `${r.orderNo ?? r.key} × ${r.qty}` });
     return true;
