@@ -5,13 +5,13 @@ import { fmtDate } from './JoinApp';
 import SeatMap from './SeatMap';
 
 type MapProps = Parameters<typeof SeatMap>[0];
-type Line = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[] };
+type Line = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[]; cnt?: number };
 type Board = {
   event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; started?: boolean; round?: number; perSeat: number; contact: string;
-  stats: { groups: number; verified: number; pending: number; slots: number; giftSeats: number; giftFree: number };
+  stats: { groups: number; verified: number; pending: number; slots: number; giftSeats: number; giftFree: number; canGive?: number };
   era?: { sold: number; cap: number; left: number; at: string | null };
   feed: Line[]; more: boolean;
-  order: { no: number; group: string; status: string; seat: string }[];
+  order: { no: number; group: string; status: string; seat: string; n?: number }[];
   live: {
     pickOpen: boolean; paused: boolean; inHours: boolean; hourFrom: string; hourTo: string;
     current: { nos: number[]; group: string; deadline: string | null } | null;
@@ -27,7 +27,7 @@ const hm = (iso: string, now: string) => {
   const time = d.toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false });
   return day(d) === day(n) ? time : `${day(d)} ${time}`;
 };
-const ORDER_ST: Record<string, [string, string]> = { provisional: ['預計', 'var(--muted)'], wait: ['排隊中', 'var(--muted)'], turn: ['選位中', 'var(--red)'], done: ['已選位', 'var(--ok)'] };
+const ORDER_ST: Record<string, [string, string]> = { provisional: ['待截止', 'var(--muted)'], wait: ['排隊中', 'var(--muted)'], turn: ['選位中', 'var(--red)'], done: ['已選位', 'var(--ok)'] };
 
 /** 揪團即時看板（公開）：回報動態、劃位排序、劃位現況。每幾秒自動更新 */
 export default function JoinBoardApp() {
@@ -108,6 +108,7 @@ export default function JoinBoardApp() {
           <div className="stat"><b style={{ color: 'var(--warn)' }}>{b.stats.pending}</b><span>張待核對</span></div>
           <div className="stat"><b>{b.stats.slots}</b><span>{b.locked ? '個劃位序' : '個預計劃位序'}</span></div>
           {b.stats.giftSeats > 0 && <div className="stat"><b>{b.stats.giftFree}</b><span>席贈席還空著</span></div>}
+          {b.stats.giftSeats > 0 && b.stats.canGive !== undefined && <div className="stat"><b style={{ color: 'var(--ok)' }}>{b.stats.canGive}</b><span>還可以給的劃位序</span></div>}
           {b.era && b.era.cap > 0 && b.era.at && <div className="stat"><b style={{ color: 'var(--red)' }}>{b.era.left}</b><span>年代銀區尚餘（共 {b.era.cap} 席，已售 {b.era.sold}）</span></div>}
         </div>
       </div>
@@ -132,6 +133,7 @@ export default function JoinBoardApp() {
                 {x.pending > 0 && <span className="jb-chip" style={{ background: '#fbe2b0', color: '#8a5a12' }}>待核對 {x.pending}</span>}
                 {x.bad > 0 && <span className="jb-chip" style={{ background: '#f8dcd8', color: '#a3342a' }}>需修正 {x.bad}</span>}
                 {x.nos.length > 0 && <span style={{ fontWeight: 700, color: 'var(--ok)' }}>🎉 第 {x.nos.join('、')} 號</span>}
+                {(x.cnt ?? 0) > 0 && <span style={{ fontWeight: 700, color: 'var(--ok)' }}>🎉 +{x.cnt} 個劃位序</span>}
               </span>
               <span style={{ textAlign: 'right' }}><b style={{ fontSize: '1.15em' }}>+{x.qty} 張</b><br /><span className="small muted">累計 {x.total} 張</span></span>
             </div>
@@ -142,12 +144,12 @@ export default function JoinBoardApp() {
 
       {tab === 'order' && (
         <div className="card">
-          <p className="small muted" style={{ marginTop: 0 }}>{b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : `依回報時間排列，只算核對通過的票。${b.started ? '前幾輪已確定的照舊，本輪「預計」的號碼接在後面，' : '回報期間號碼會變動，'}截止後才確定。`}</p>
+          <p className="small muted" style={{ marginTop: 0 }}>{b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : `依回報時間排列，只算核對通過的票。${b.started ? '前幾輪已確定的號碼照舊；' : ''}本輪先顯示各群預計幾個，號碼在回報截止後才確定。`}</p>
           {!b.order.length && <p className="muted">還沒有劃位序。</p>}
           <div className="tbl"><table><tbody>
             {b.order.filter((x) => !qq || hit(x.group)).map((x) => (
-              <tr key={x.no} style={{ background: hit(x.group) ? '#eef6f1' : undefined }}>
-                <td style={{ width: 70 }}><b>第 {x.no} 號</b></td><td>{x.group}</td>
+              <tr key={x.no ? `n${x.no}` : `g${x.group}`} style={{ background: hit(x.group) ? '#eef6f1' : undefined }}>
+                <td style={{ width: 70 }}><b>{x.no ? `第 ${x.no} 號` : `預計 ${x.n ?? 1} 個`}</b></td><td>{x.group}</td>
                 <td style={{ textAlign: 'right', color: ORDER_ST[x.status]?.[1], fontWeight: 700 }}>{x.seat || ORDER_ST[x.status]?.[0]}</td>
               </tr>
             ))}

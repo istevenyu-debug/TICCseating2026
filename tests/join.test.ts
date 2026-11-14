@@ -12,7 +12,7 @@ import {
   addVenues, decideReg, getJoinSettings, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, eraSales, eraSoldSeats, pickSeats, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, eraSales, eraSoldSeats, pickSeats, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, saveDraft, extendTurn, pickMinutes, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -294,6 +294,31 @@ describe('自動輪號劃位', () => {
     expect((await mails('join_missed')).some((x) => x.content.includes('我回來了'))).toBe(true);
     await rejoinQueue(db, a.pickCode!);
     expect((await slotsOf(a.id)).map((x) => [x.status, x.misses])).toEqual([['wait', 2], ['wait', 2]]);
+  });
+
+  it('時間到：已點選的座位先保留、其餘延後；後台＋5 分鐘；席數多的多給時間', async () => {
+    const { a, b, seats } = await setup();
+    await setJoinSettings(db, '網管', { pickOpen: true, turnMin: 3, pickMin: 10, pickPerSeat: 1, pushBack: 3, notifyAhead: 0 });
+    expect(pickMinutes(await getJoinSettings(db), 2)).toBe(10);
+    expect(pickMinutes(await getJoinSettings(db), 12)).toBe(20);
+    await tickQueue(db, BASE, T0);
+    await pickPage(db, a.pickCode!, T0, BASE); // A 打開
+    expect(await saveDraft(db, b.pickCode!, { seatIds: [seats[5]] })).toEqual({ saved: false }); // 不是 B 的時間
+    await saveDraft(db, a.pickCode!, { seatIds: [seats[0]], repName: '王代表', repPhone: '0912345678' });
+    expect((await pickPage(db, a.pickCode!, at(1), BASE)).draft).toEqual([seats[0]]);
+    await extendTurn(db, '網管'); // 10 → 15 分鐘
+    await tickQueue(db, BASE, at(12));
+    expect((await joinAdminState(db, BASE, at(12))).current?.extraMin).toBe(5);
+    await tickQueue(db, BASE, at(16)); // 時間到
+    const sa = await slotsOf(a.id);
+    expect(sa.map((x) => x.status)).toEqual(['done', 'wait']);
+    expect(sa[0].repName).toBe('王代表');
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
+    expect(es.status).toBe('sold');
+    const m = (await mails('join_missed'))[0].content;
+    expect(m).toContain('有打開劃位連結，但沒有在時間內送出選位');
+    expect(m).not.toContain('沒有在時間內打開');
+    expect((await joinAdminState(db, BASE, at(16))).current?.venue).toBe('B場');
   });
 
   it('時段外、暫停時不開始新的一輪', async () => {

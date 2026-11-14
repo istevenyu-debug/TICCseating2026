@@ -585,10 +585,16 @@ export function inHours(s: Pick<JoinSettings, 'hourFrom' | 'hourTo'>, now: Date)
   const hm = tpeHM(now);
   return s.hourFrom <= s.hourTo ? hm >= s.hourFrom && hm < s.hourTo : hm >= s.hourFrom || hm < s.hourTo;
 }
-export function deadlineOf(s: Pick<JoinSettings, 'turnMin' | 'pickMin'>, x: Pick<Slot, 'turnAt' | 'seenAt'>) {
-  if (x.seenAt) return new Date(x.seenAt.getTime() + s.pickMin * 60_000);
-  return x.turnAt ? new Date(x.turnAt.getTime() + s.turnMin * 60_000) : null;
+/** 這一輪的選位分鐘：基本分鐘＋超過 2 席每席多給 pickPerSeat 分鐘 */
+export const pickMinutes = (s: Pick<JoinSettings, 'pickMin' | 'pickPerSeat'>, n: number) => s.pickMin + (s.pickPerSeat ?? 0) * Math.max(0, n - 2);
+/** 期限：還沒打開＝輪到後 turnMin 分鐘；打開後＝選位分鐘（依席數）；都再加後台多給的分鐘 */
+export function deadlineOf(s: Pick<JoinSettings, 'turnMin' | 'pickMin' | 'pickPerSeat'>, x: Pick<Slot, 'turnAt' | 'seenAt'> & { extraMin?: number }, n = 1) {
+  const extra = (x.extraMin ?? 0) * 60_000;
+  if (x.seenAt) return new Date(x.seenAt.getTime() + pickMinutes(s, n) * 60_000 + extra);
+  return x.turnAt ? new Date(x.turnAt.getTime() + s.turnMin * 60_000 + extra) : null;
 }
+type Draft = { seats: string[]; repName: string; repPhone: string };
+const readDraft = (x: { draft?: string }): Draft | null => { try { const d = JSON.parse(x.draft || ''); return d && Array.isArray(d.seats) ? d : null; } catch { return null; } };
 
 async function activeSlots(tx: Tx | Db, eventId: number) {
   return tx.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, eventId), inArray(t.joinSlot.status, ['wait', 'turn']))).orderBy(asc(t.joinSlot.pos), asc(t.joinSlot.no));
@@ -604,7 +610,7 @@ function groupAt(list: Slot[], i: number) {
 async function miss(tx: Tx, s: JoinSettings, group: Slot[], others: Slot[], maxPos: number) {
   const misses = Math.max(...group.map((g) => g.misses)) + 1;
   const n = group.length;
-  const reset = { turnAt: null, seenAt: null, soonMailed: false, turnMailed: false, misses };
+  const reset = { turnAt: null, seenAt: null, soonMailed: false, turnMailed: false, misses, extraMin: 0, draft: '' };
   if (misses >= 3) {
     for (const g of group) await tx.update(t.joinSlot).set({ ...reset, status: 'skip' }).where(eq(t.joinSlot.id, g.id));
     return 'skip' as const;
@@ -645,20 +651,49 @@ async function runTick(db: Db, base: string, now: Date): Promise<boolean> {
     const nameOf = async (r: Reg) => venueName(tx, r);
     const url = (r: Reg) => (base && r.pickCode ? pickUrl(base, r.pickCode) : '');
 
-    // 1. 時間到：叫不到
-    const turn = list.filter((x) => x.status === 'turn');
+    // 1. 時間到：沒打開＝叫不到；打開了但沒送出＝已點選的座位先存，其餘延後
+    let turn = list.filter((x) => x.status === 'turn');
     if (turn.length && !s.paused) {
-      const dl = deadlineOf(s, turn[0]);
+      const dl = deadlineOf(s, turn[0], turn.length);
       if (dl && now > dl) {
-        const others = list.filter((x) => x.status === 'wait');
-        const how = await miss(tx, s, turn, others, await maxPos());
         const r = regs.get(turn[0].regId);
-        if (r) {
-          const what = how === 'skip' ? '已暫停您的排隊。請打開劃位連結，按「我回來了」重新排到最後'
-            : how === 'end' ? '已排到最後' : `已延後 ${s.pushBack} 號`;
-          mails.push({ reg: r, template: 'join_missed', content: `【${ev.name}】${r.headName} 您好，輪到${await nameOf(r)}劃位（第 ${turn.map((x) => x.no).join('、')} 號）時，沒有在時間內打開劃位連結，${what}。${url(r) ? `劃位連結：${url(r)}` : ''}` });
+        const nosAll = turn.map((x) => x.no).join('、');
+        const opened = !!turn[0].seenAt;
+        let kept: { no: number; label: string }[] = [];
+        const d = turn[0].seenAt ? readDraft(turn[0]) : null;
+        if (d?.seats.length && r) {
+          const ok = await tx.select({ id: t.eventSeat.seatId, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code })
+            .from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+            .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, d.seats.slice(0, turn.length)), eq(t.eventSeat.status, 'free'), eq(t.seatUsage.code, USAGE_GIFT), eq(t.venueSeat.floor, '3F')));
+          const seats = ok.sort((a, b) => a.y - b.y || a.x - b.x);
+          if (seats.length) {
+            await tx.update(t.eventSeat).set({ status: 'sold', orderId: null, holdUntil: null, bundle: null, version: sql`${t.eventSeat.version} + 1` })
+              .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seats.map((x) => x.id)), eq(t.eventSeat.status, 'free')));
+            const ordered = [...turn].sort((a, b) => a.no - b.no);
+            const repName = d.repName?.trim() || r.headName, repPhone = /^09\d{8}$/.test(d.repPhone ?? '') ? d.repPhone : r.headPhone;
+            for (const [i, seat] of seats.entries()) {
+              await tx.update(t.joinSlot).set({ status: 'done', seatId: seat.id, repName, repPhone, pickedAt: now, turnAt: null, draft: '', extraMin: 0 }).where(eq(t.joinSlot.id, ordered[i].id));
+              kept.push({ no: ordered[i].no, label: seatLabel(seat) });
+            }
+            await tx.insert(t.auditLog).values({ actor: 'system', action: 'join_pick_timeout', target: `join_reg:${r.id}`, detail: JSON.stringify({ kept: kept.map((k) => k.no), seats: seats.map((x) => x.id) }) });
+            turn = turn.filter((x) => !kept.some((k) => k.no === x.no));
+          }
         }
-        await tx.insert(t.auditLog).values({ actor: 'system', action: 'join_miss', target: `join_reg:${turn[0].regId}`, detail: `${turn.map((x) => x.no).join(',')} → ${how}` });
+        let how: 'skip' | 'end' | 'back' | 'none' = 'none';
+        if (turn.length) {
+          const others = list.filter((x) => x.status === 'wait');
+          how = await miss(tx, s, turn, others, await maxPos());
+        }
+        if (r) {
+          const what = how === 'skip' ? '已暫停排隊。請打開劃位連結，按「我回來了」重新排到最後'
+            : how === 'end' ? '已排到最後' : `已延後 ${s.pushBack} 號`;
+          const why = opened ? '有打開劃位連結，但沒有在時間內送出選位' : '沒有在時間內打開劃位連結';
+          const keptText = kept.length ? `已為您保留時間內點選的 ${kept.length} 席（${kept.map((k) => `第 ${k.no} 號 ${k.label}`).join('、')}）` : '';
+          const restText = turn.length ? `${keptText ? '；其餘' : ''}第 ${turn.map((x) => x.no).join('、')} 號${what}` : '';
+          mails.push({ reg: r, template: kept.length && !turn.length ? 'join_kept' : 'join_missed',
+            content: `【${ev.name}】${r.headName} 您好，輪到${await nameOf(r)}劃位（第 ${nosAll} 號）時，${why}。${keptText}${restText}。${url(r) ? `劃位連結：${url(r)}` : ''}` });
+        }
+        await tx.insert(t.auditLog).values({ actor: 'system', action: 'join_miss', target: `join_reg:${r?.id ?? ''}`, detail: `${nosAll} → kept ${kept.length}, ${how}` });
         list = await activeSlots(tx, ev.id);
       }
     }
@@ -736,13 +771,14 @@ export async function pickPage(db: Db, code: string, now = new Date(), base = ''
   const tot = await totalsOf(db, me.id);
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: vn(me.id), headName: me.headName,
-    settings: { pickOpen: s.pickOpen, paused: s.paused, inHours: inHours(s, now), hourFrom: s.hourFrom, hourTo: s.hourTo, turnMin: s.turnMin, pickMin: s.pickMin, pushBack: s.pushBack, contact: s.contact },
+    settings: { pickOpen: s.pickOpen, paused: s.paused, inHours: inHours(s, now), hourFrom: s.hourFrom, hourTo: s.hourTo, turnMin: s.turnMin, pickMin: s.pickMin, pickPerSeat: s.pickPerSeat, pushBack: s.pushBack, contact: s.contact },
     now: now.toISOString(), tickets: tot.verified, locked: all.length > 0,
-    current: turn.length ? { nos: turn.map((x) => x.no), venue: vn(turn[0].regId), mine: mineTurn, deadline: deadlineOf(s, turn[0])?.toISOString() ?? null, seen: !!turn[0].seenAt } : null,
+    current: turn.length ? { nos: turn.map((x) => x.no), venue: vn(turn[0].regId), mine: mineTurn, deadline: deadlineOf(s, turn[0], turn.length)?.toISOString() ?? null, seen: !!turn[0].seenAt } : null,
     queue: queue.map((x) => ({ no: x.no, venue: vn(x.regId), mine: x.regId === me.id, status: x.status, misses: x.misses, place: waitIdx.get(x.id) ?? -1 })),
     board: all.map((x) => ({ no: x.no, venue: vn(x.regId), mine: x.regId === me.id, status: x.status, misses: x.misses, seat: x.seatId ? label.get(x.seatId) ?? '' : '' })),
     mine: all.filter((x) => x.regId === me.id).map((x) => ({ no: x.no, status: x.status, misses: x.misses, seat: x.seatId ? label.get(x.seatId) ?? '' : '', place: waitIdx.get(x.id) ?? -1 })),
     pickCount: mineTurn ? turn.length : 0,
+    draft: mineTurn ? readDraft(turn[0])?.seats ?? [] : [],
     rep: { name: myDone[0]?.repName || me.headName, phone: myDone[0]?.repPhone || me.headPhone },
     zones: [GIFT_ZONE, VOL_ZONE], seats,
   };
@@ -765,7 +801,7 @@ export async function submitPick(db: Db, code: string, raw: unknown, now = new D
   const res = await db.transaction(async (tx) => {
     const turn = (await activeSlots(tx, me.eventId)).filter((x) => x.status === 'turn');
     if (!turn.length || turn[0].regId !== me.id) throw new BookingError('INVALID', '現在不是您的劃位時間，請看排隊看板。');
-    const dl = deadlineOf(s, turn[0]);
+    const dl = deadlineOf(s, turn[0], turn.length);
     if (dl && now > dl && !s.paused) throw new BookingError('INVALID', '選位時間已過，已延後，請看排隊看板。');
     if (ids.length !== turn.length) throw new BookingError('INVALID', `這次要選 ${turn.length} 席，目前選了 ${ids.length} 席。`);
     const rows = await tx.select({ id: t.eventSeat.seatId, status: t.eventSeat.status, usage: t.seatUsage.code, floor: t.venueSeat.floor, x: t.venueSeat.x, y: t.venueSeat.y })
@@ -779,13 +815,35 @@ export async function submitPick(db: Db, code: string, raw: unknown, now = new D
     if (got.length !== ids.length) throw new BookingError('SEAT_TAKEN', '有座位剛被選走，請重新選取。');
     const order = rows.sort((a, b) => a.y - b.y || a.x - b.x);
     for (const [i, slot] of turn.sort((a, b) => a.no - b.no).entries()) {
-      await tx.update(t.joinSlot).set({ status: 'done', seatId: order[i].id, repName: p.data.repName, repPhone: p.data.repPhone, pickedAt: now, turnAt: null }).where(eq(t.joinSlot.id, slot.id));
+      await tx.update(t.joinSlot).set({ status: 'done', seatId: order[i].id, repName: p.data.repName, repPhone: p.data.repPhone, pickedAt: now, turnAt: null, draft: '', extraMin: 0 }).where(eq(t.joinSlot.id, slot.id));
     }
     await tx.insert(t.auditLog).values({ actor: `負責人:${me.headName}`, action: 'join_pick', target: `join_reg:${me.id}`, detail: JSON.stringify({ nos: turn.map((x) => x.no), seats: ids }) });
     return { nos: turn.map((x) => x.no), seats: order.map((r) => r.id) };
   });
   await tickQueue(db, base, now); // 下一位自動開放
   return res;
+}
+
+/** 選位中：已點選的座位先存（時間到時用），每次點選就送一次 */
+export async function saveDraft(db: Db, code: string, raw: unknown) {
+  const p = z.object({ seatIds: z.array(z.string().max(16)).max(30), repName: z.string().max(30).optional(), repPhone: z.string().max(20).optional() }).safeParse(raw);
+  if (!p.success) throw new BookingError('INVALID', '資料不完整');
+  const me = await regByPick(db, code);
+  const turn = (await activeSlots(db, me.eventId)).filter((x) => x.status === 'turn');
+  if (!turn.length || turn[0].regId !== me.id) return { saved: false };
+  const draft = JSON.stringify({ seats: [...new Set(p.data.seatIds)].slice(0, turn.length), repName: clean(p.data.repName ?? ''), repPhone: normalizePhone(p.data.repPhone ?? '') });
+  await db.update(t.joinSlot).set({ draft }).where(inArray(t.joinSlot.id, turn.map((x) => x.id)));
+  return { saved: true };
+}
+
+/** 後台：目前劃位的這一群多給幾分鐘 */
+export async function extendTurn(db: Db, actor: string, minutes = 5) {
+  const ev = await ev0(db);
+  const turn = (await activeSlots(db, ev.id)).filter((x) => x.status === 'turn');
+  if (!turn.length) throw new BookingError('INVALID', '目前沒有人在劃位。');
+  await db.update(t.joinSlot).set({ extraMin: sql`${t.joinSlot.extraMin} + ${minutes}` }).where(inArray(t.joinSlot.id, turn.map((x) => x.id)));
+  await db.insert(t.auditLog).values({ actor, action: 'join_extend', target: `join_reg:${turn[0].regId}`, detail: `+${minutes} 分鐘` });
+  return { nos: turn.map((x) => x.no), minutes };
 }
 
 /** 被暫停排隊（叫不到 3 次）：負責人按「我回來了」重新排到最後 */
@@ -942,7 +1000,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
     seats, totals, inHours: inHours(settings, now), locked,
     provisional: prov.filter((x) => !x.fixed).map((x) => ({ no: x.no, venue: reg.get(x.regId)?.venueName ?? '', at: x.at.toISOString() })),
     round: settings.round, over: plan.over, eraSales: await eraSales(db, ev.id), eraSeats: await eraSoldSeats(db, ev.id),
-    current: active.length ? { nos: active.map((x) => x.no), venue: reg.get(active[0].regId)?.venueName ?? '', deadline: deadlineOf(settings, active[0])?.toISOString() ?? null, seen: !!active[0].seenAt } : null,
+    current: active.length ? { nos: active.map((x) => x.no), venue: reg.get(active[0].regId)?.venueName ?? '', deadline: deadlineOf(settings, active[0], active.length)?.toISOString() ?? null, seen: !!active[0].seenAt, extraMin: active[0].extraMin } : null,
   };
 }
 

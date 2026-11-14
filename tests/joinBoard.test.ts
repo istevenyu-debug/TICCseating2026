@@ -37,13 +37,14 @@ describe('揪團即時看板', () => {
     await send(b, [['0003', 12]], T(10, 30));
     await send(a, [['0002', 2], ['0099', 3]], T(11));
     const d = await boardData(db, {}, T(12));
-    expect(d.feed.map((x) => [x.group, x.qty, x.ok, x.pending, x.total, x.nos])).toEqual([
-      ['台北大安1', 5, 2, 3, 9, [3]],
-      ['新竹竹北', 12, 12, 0, 12, [1, 2]],
-      ['台北大安1', 4, 4, 0, 4, []],
+    // 截止前只說「幾個」，不給號碼（號碼會變動）
+    expect(d.feed.map((x) => [x.group, x.qty, x.ok, x.pending, x.total, x.nos, x.cnt])).toEqual([
+      ['台北大安1', 5, 2, 3, 9, [], 1],
+      ['新竹竹北', 12, 12, 0, 12, [], 2],
+      ['台北大安1', 4, 4, 0, 4, [], 0],
     ]);
     expect(d.stats).toMatchObject({ groups: 2, verified: 18, pending: 3, slots: 3 });
-    expect(d.order.map((x) => [x.no, x.group, x.status])).toEqual([[1, '新竹竹北', 'provisional'], [2, '新竹竹北', 'provisional'], [3, '台北大安1', 'provisional']]);
+    expect(d.order.map((x) => [x.no, x.group, x.status, x.n])).toEqual([[0, '新竹竹北', 'provisional', 2], [0, '台北大安1', 'provisional', 1]]);
     expect((await boardData(db, { q: '大安' }, T(12))).feed).toHaveLength(2);
     expect((await boardData(db, { before: d.feed[0].at }, T(12))).feed).toHaveLength(2);
     // 不含個資

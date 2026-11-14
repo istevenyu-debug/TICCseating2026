@@ -37,7 +37,7 @@ const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
 const nStatus = (ch: string, st: string) => (ch === 'push' ? ({ sent: '已送達手機', simulated: '僅顯示在購票頁' } as Record<string, string>)[st] : undefined) ?? N_STATUS[st] ?? st;
 const N_TEMPLATE: Record<string, string> = { preorder_received: '收到訂單', preorder_link: '寄出劃位連結', preorder_cancelled: '訂單取消', invite: '劃位連結', order_received: '收到劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消', order_expired: '劃位逾時',
-  join_group: '揪團：建群確認', join_issue: '揪團：回報需要修正', join_fix: '揪團：需補完整編號', join_plink: '揪團：劃位連結', join_soon: '揪團：快輪到了', join_turn: '揪團：輪到您了', join_missed: '揪團：劃位已延後', join_links: '揪團：連結', join_rlink: '揪團：回報連結', join_report: '揪團：收到回報' };
+  join_group: '揪團：建群確認', join_issue: '揪團：回報需要修正', join_fix: '揪團：需補完整編號', join_plink: '揪團：劃位連結', join_soon: '揪團：快輪到了', join_turn: '揪團：輪到您了', join_missed: '揪團：劃位已延後', join_kept: '揪團：已保留座位', join_links: '揪團：連結', join_rlink: '揪團：回報連結', join_report: '揪團：收到回報' };
 /** 例：「簡訊已寄出、Email 寄送失敗：帳號或密碼錯誤」 */
 function deliveryText(d: Delivery | undefined) {
   if (!d?.length) return { text: '', bad: false };

@@ -136,7 +136,7 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
         const pv = page.locked ? [] : page.slots.filter((n) => !page.fixed?.includes(n));
         return <p style={{ margin: '10px 0 0' }}>
           {fx.length > 0 && <>劃位序（已確定）：<b>第 {fx.join('、')} 號</b>{pv.length > 0 && <br />}</>}
-          {pv.length > 0 && <>{(page.round ?? 1) > 1 ? `第 ${page.round} 輪預計` : '目前預計劃位序'}：<b>第 {pv.join('、')} 號</b></>}
+          {pv.length > 0 && <>{(page.round ?? 1) > 1 ? `第 ${page.round} 輪預計` : '目前預計'}：<b>{pv.length} 個劃位序</b><span className="small muted">（號碼回報截止後才確定）</span></>}
         </p>;
       })()}
       <p className="small muted" style={{ margin: '6px 0 0' }}>每 {page.perSeat} 張已核對一個劃位序，再 {page.next} 張可多一個。</p>

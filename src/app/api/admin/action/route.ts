@@ -19,7 +19,7 @@ import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
 import { setCaps } from '@/lib/sales';
-import { changeSlotSeat, clearJoinTest, deleteReport, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
+import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
@@ -96,6 +96,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.paint'), kind: z.enum(['gift', 'era', 'vol', 'sale']), seatIds: z.array(z.string().max(16)).min(1).max(800) }),
   z.object({ action: z.literal('join.preset'), which: z.enum(['side', 'middle']) }),
   z.object({ action: z.literal('join.nextRound') }),
+  z.object({ action: z.literal('join.extend'), minutes: z.number().int().min(1).max(30).optional() }),
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000), tickets: z.array(z.unknown()).max(50000).optional() }),
   z.object({ action: z.literal('sales.caps'), caps: z.record(z.string().max(40), z.number().int().min(0).max(10000)) }),
   z.object({ action: z.literal('join.report.delete'), id }),
@@ -271,6 +272,7 @@ export async function POST(req: Request) {
       case 'join.paint': return paintFloor3(db, who, a.kind, a.seatIds);
       case 'join.preset': return presetFloor3(db, who, a.which);
       case 'join.nextRound': mustBeAdmin(); return nextRound(db, who);
+      case 'join.extend': return extendTurn(db, who, a.minutes ?? 5);
       case 'sales.caps': mustBeAdmin(); return setCaps(db, who, a.caps);
       case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req), a.tickets); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);

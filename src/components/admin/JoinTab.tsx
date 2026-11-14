@@ -47,6 +47,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
           <div className="stat"><b style={{ color: 'var(--ok)' }}>{j.locked ? j.slots.filter((x) => x.status !== 'void').length : j.provisional.length}</b><span>{j.locked ? `劃位序（已鎖定，第 ${j.round ?? 1} 輪）` : `第 ${j.round ?? 1} 輪預計劃位序`}</span></div>
           <div className="stat"><b>{done.length}</b><span>已選位</span></div>
           <div className="stat"><b>{j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length}</b><span>贈席空位</span></div>
+          <div className="stat"><b style={{ color: 'var(--ok)' }}>{Math.max(0, j.seats.filter((s) => s.usageId === j.usage.gift && s.status === 'free').length - j.slots.filter((x) => x.status === 'wait' || x.status === 'turn').length - (j.locked ? 0 : j.provisional.length))}</b><span>還可以給的劃位序</span></div>
           {j.eraSales.cap > 0 && <div className="stat"><b style={{ color: 'var(--red)' }}>{j.eraSales.left}</b><span>年代銀區尚餘（已售 {j.eraSales.sold}／{j.eraSales.cap}）</span></div>}
         </div>
         {j.eraSales.cap > 0 && <p className="small muted" style={{ margin: '6px 0 0' }}>年代銀區數字依年代名單（最後上傳 {tw(j.eraSales.at)}）；名單沒上傳的不會算進去。</p>}
@@ -69,7 +70,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
 /* ---------- 設定 ---------- */
 function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean; base: string; copy: (s: string) => void }) {
   const s = j.settings;
-  const [f, setF] = useState({ contact: s.contact, perSeat: String(s.perSeat), turnMin: String(s.turnMin), pickMin: String(s.pickMin), pushBack: String(s.pushBack), notifyAhead: String(s.notifyAhead), hourFrom: s.hourFrom, hourTo: s.hourTo, silverPrices: s.silverPrices });
+  const [f, setF] = useState({ contact: s.contact, perSeat: String(s.perSeat), turnMin: String(s.turnMin), pickMin: String(s.pickMin), pickPerSeat: String(s.pickPerSeat), pushBack: String(s.pushBack), notifyAhead: String(s.notifyAhead), hourFrom: s.hourFrom, hourTo: s.hourTo, silverPrices: s.silverPrices });
   const set = (values: Record<string, unknown>, ok: string) => act({ action: 'join.settings', values }, ok);
   const link = `${base}/join`;
   const num = (k: keyof typeof f) => Number(f[k]);
@@ -114,6 +115,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <div className="fields" style={{ marginTop: 10, gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))' }}>
           <label className="f">輪到後等幾分鐘<input inputMode="decimal" value={f.turnMin} onChange={(e) => setF({ ...f, turnMin: e.target.value })} /></label>
           <label className="f">打開後選位分鐘<input inputMode="numeric" value={f.pickMin} onChange={(e) => setF({ ...f, pickMin: e.target.value })} /></label>
+          <label className="f">超過 2 席，每席多給幾分鐘<input inputMode="decimal" value={f.pickPerSeat} onChange={(e) => setF({ ...f, pickPerSeat: e.target.value })} /></label>
           <label className="f">叫不到延後幾號<input inputMode="numeric" value={f.pushBack} onChange={(e) => setF({ ...f, pushBack: e.target.value })} /></label>
           <label className="f">前幾號先通知<input inputMode="numeric" value={f.notifyAhead} onChange={(e) => setF({ ...f, notifyAhead: e.target.value })} /></label>
           <label className="f">時段開始<input value={f.hourFrom} placeholder="09:00" onChange={(e) => setF({ ...f, hourFrom: e.target.value })} /></label>
@@ -122,7 +124,7 @@ function Settings({ j, act, busy, base, copy }: { j: J; act: Act; busy: boolean;
         <p className="small muted">叫不到：第 1 次延後幾號、第 2 次排到最後、第 3 次暫停排隊（負責人按「我回來了」重新排到最後）。時段留白＝不限。</p>
       </div>
       <ClearTest act={act} busy={busy} />
-      <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim(), silverPrices: f.silverPrices.trim() }, '已儲存設定')}>儲存設定</button>
+      <button className="btn pri" disabled={busy} onClick={() => set({ contact: f.contact, perSeat: num('perSeat'), turnMin: num('turnMin'), pickMin: num('pickMin'), pickPerSeat: num('pickPerSeat'), pushBack: num('pushBack'), notifyAhead: num('notifyAhead'), hourFrom: f.hourFrom.trim(), hourTo: f.hourTo.trim(), silverPrices: f.silverPrices.trim() }, '已儲存設定')}>儲存設定</button>
     </>
   );
 }
@@ -550,6 +552,8 @@ function Queue({ j, act, busy, queue, setMsg }: { j: J; act: Act; busy: boolean;
       <p className="small" style={{ marginTop: 0 }}>{!s.pickOpen ? '尚未開始（到「設定」開始）' : s.paused ? '暫停中' : !j.inHours ? `時段外（${s.hourFrom}–${s.hourTo}）` : '進行中'}</p>
       {j.current ? (
         <div className="note">正在劃位：<b>第 {j.current.nos.join('、')} 號 {j.current.venue}</b>・{j.current.seen ? '負責人已打開' : '等負責人打開'}・期限 {tw(j.current.deadline)}
+          {j.current.extraMin ? `（已多給 ${j.current.extraMin} 分鐘）` : ''}
+          <button className="btn pri small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => act({ action: 'join.extend', minutes: 5 }, `第 ${j.current!.nos.join('、')} 號多給 5 分鐘`)}>＋5 分鐘</button>
           <button className="btn small" style={{ marginLeft: 8 }} disabled={busy} onClick={() => window.confirm('跳過這一輪？算一次叫不到。') && act({ action: 'join.queue.skip' }, '已跳過')}>跳過這一輪</button></div>
       ) : <p className="muted small">目前沒有人在劃位。</p>}
       <h4>排隊中（{queue.length}）</h4>

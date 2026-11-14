@@ -1,7 +1,7 @@
 import { getDb } from '@/db/client';
 import { handle, originOf, readJson } from '@/lib/api';
 import { BookingError } from '@/lib/booking';
-import { pickPage, rejoinQueue, submitPick } from '@/lib/joinQueue';
+import { pickPage, rejoinQueue, saveDraft, submitPick } from '@/lib/joinQueue';
 import { dispatchQueued } from '@/lib/notify';
 
 export const dynamic = 'force-dynamic';
@@ -22,6 +22,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
   return handle(async () => {
     const db = await getDb();
     const body = await readJson(req) as { action?: string };
+    if (body?.action === 'draft') return saveDraft(db, params.code, body);
     const r = body?.action === 'rejoin' ? await rejoinQueue(db, params.code)
       : body?.action === 'pick' ? await submitPick(db, params.code, body, new Date(), base(req))
         : (() => { throw new BookingError('INVALID', '不明的操作'); })();

@@ -7,12 +7,12 @@ import { phoneProblem } from '@/lib/validation';
 
 type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; tickets: number; locked: boolean; now: string;
-  settings: { pickOpen: boolean; paused: boolean; inHours: boolean; hourFrom: string; hourTo: string; turnMin: number; pickMin: number; pushBack: number; contact: string };
+  settings: { pickOpen: boolean; paused: boolean; inHours: boolean; hourFrom: string; hourTo: string; turnMin: number; pickMin: number; pickPerSeat?: number; pushBack: number; contact: string };
   current: { nos: number[]; venue: string; mine: boolean; deadline: string | null; seen: boolean } | null;
   queue: { no: number; venue: string; mine: boolean; status: string; misses: number; place: number }[];
   board: { no: number; venue: string; mine: boolean; status: string; misses: number; seat: string }[];
   mine: { no: number; status: string; misses: number; seat: string; place: number }[];
-  pickCount: number; rep: { name: string; phone: string };
+  pickCount: number; draft?: string[]; rep: { name: string; phone: string };
   zones: { id: number; name: string; color: string; gift: boolean }[];
   seats: { id: string; x: number; y: number; no: string; type: string; code: string; label: string; bundle: string | null; zoneId: number; status: 'free' | 'sold' | 'blocked' }[];
 };
@@ -48,6 +48,13 @@ export default function JoinPickApp({ code }: { code: string }) {
   const [, setTick] = useState(0);
   const offset = useRef(0);
   const wasMine = useRef(false);
+  const jumped = useRef(false);
+  const saveT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 已點選的座位先存（時間到時系統會保留這些）
+  const saveDraft = (ids: Set<string>, r = rep) => {
+    if (saveT.current) clearTimeout(saveT.current);
+    saveT.current = setTimeout(() => { call(code, { action: 'draft', seatIds: [...ids], repName: r?.name ?? '', repPhone: r?.phone ?? '' }); }, 500);
+  };
 
   const load = async () => {
     const r = await call<Page>(code);
@@ -55,7 +62,7 @@ export default function JoinPickApp({ code }: { code: string }) {
     offset.current = new Date(r.data.now).getTime() - Date.now();
     setPage(r.data); setErr('');
     const mine = !!r.data.current?.mine;
-    if (mine && !wasMine.current) { alertMe(); setSel(new Set()); }
+    if (mine && !wasMine.current) { alertMe(); setSel(new Set(r.data.draft ?? [])); jumped.current = false; }
     wasMine.current = mine;
     setRep((x) => x ?? r.data.rep);
   };
@@ -66,6 +73,16 @@ export default function JoinPickApp({ code }: { code: string }) {
     return () => { clearInterval(a); clearInterval(b); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { document.title = page?.current?.mine ? '🔔 輪到您劃位了' : '揪團劃位'; }, [page?.current?.mine]);
+  // 輪到時：座位圖自動捲到第一個粉紅贈席（兩側斜區），不用自己找
+  useEffect(() => {
+    if (!page?.current?.mine || jumped.current) return;
+    const t = setTimeout(() => {
+      const el = document.querySelector<HTMLElement>('.mapscroll button.seat[data-k="free"]');
+      const box = el?.closest<HTMLElement>('.mapscroll');
+      if (el && box) { box.scrollLeft += el.getBoundingClientRect().left - box.getBoundingClientRect().left - 24; jumped.current = true; }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [page]);
 
   if (err && !page) return <main className="wrap join"><div className="card"><p className="note err">{err}</p></div></main>;
   if (!page) return <main className="wrap join"><div className="card muted">載入中…</div></main>;
@@ -101,7 +118,7 @@ export default function JoinPickApp({ code }: { code: string }) {
     if (n.has(id)) n.delete(id);
     else if (n.size >= page.pickCount) { setMsg({ kind: 'err', text: `這次只能選 ${page.pickCount} 席，要換請先取消一席。` }); return; }
     else n.add(id);
-    setSel(n); setMsg(null);
+    setSel(n); setMsg(null); saveDraft(n);
   };
   const statusText = (x: { status: string; misses: number; seat: string }, place?: number) =>
     x.status === 'done' ? x.seat : x.status === 'turn' ? '劃位中' : x.status === 'skip' ? '暫停排隊（叫不到）'
@@ -130,7 +147,7 @@ export default function JoinPickApp({ code }: { code: string }) {
                 : !s.inHours ? <b>劃位時段 {s.hourFrom}–{s.hourTo}，時段外暫停。</b>
                   : <b>目前沒有人在劃位。</b>}
           {s.pickOpen && next.length > 0 && <div className="small" style={{ marginTop: 6 }}>下一位：{next.map((x) => `第 ${x.no} 號 ${x.venue}${x.mine ? '（您）' : ''}`).join('　→　')}</div>}
-          <p className="small muted" style={{ margin: '8px 0 0' }}>輪到時請在 {s.turnMin} 分鐘內打開這頁，之後有 {s.pickMin} 分鐘選位。沒打開會延後 {s.pushBack} 號，第二次排到最後。頁面每幾秒自動更新。</p>
+          <p className="small muted" style={{ margin: '8px 0 0' }}>輪到時請在 {s.turnMin} 分鐘內打開這頁，之後有 {s.pickMin} 分鐘選位{s.pickPerSeat ? `（超過 2 席，每席多 ${s.pickPerSeat} 分鐘）` : ''}；時間到時已點選的座位會先保留。沒打開會延後 {s.pushBack} 號，第二次排到最後。頁面每幾秒自動更新。</p>
         </div>
       )}
 
@@ -159,8 +176,8 @@ export default function JoinPickApp({ code }: { code: string }) {
           <div className="card">
             <p style={{ marginTop: 0 }}>已選 <b>{sel.size}</b> / {page.pickCount} 席：{page.seats.filter((x) => sel.has(x.id)).map((x) => x.label).join('、') || '—'}</p>
             <div className="fields">
-              <label className="f">領票代表（12/9 去年代領票的人）<input value={rep.name} maxLength={30} onChange={(e) => setRep({ ...rep, name: e.target.value })} /></label>
-              <label className="f">領票代表手機<input value={rep.phone} inputMode="tel" onChange={(e) => setRep({ ...rep, phone: e.target.value })} /></label>
+              <label className="f">領票代表（12/9 去年代領票的人）<input value={rep.name} maxLength={30} onChange={(e) => { const r = { ...rep, name: e.target.value }; setRep(r); saveDraft(sel, r); }} /></label>
+              <label className="f">領票代表手機<input value={rep.phone} inputMode="tel" onChange={(e) => { const r = { ...rep, phone: e.target.value }; setRep(r); saveDraft(sel, r); }} /></label>
             </div>
             <p className="small muted">領票時報群名、姓名、手機末三碼。</p>
             <button className="btn pri" style={{ width: '100%', padding: 14, fontSize: 18 }} disabled={busy || sel.size !== page.pickCount} onClick={pick}>{busy ? '送出中…' : '送出選位'}</button>

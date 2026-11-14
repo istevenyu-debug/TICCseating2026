@@ -225,6 +225,13 @@
       "when": 1794542822668,
       "tag": "0031_join_era_ticket",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794613729032,
+      "tag": "0032_join_slot_extra",
+      "breakpoints": true
     }
   ]
 }

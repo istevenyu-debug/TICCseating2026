@@ -18,7 +18,7 @@ async function names(db: Db, eventId: number) {
   return new Map(regs.map((r) => [r.id, r.venueId ? vs.get(r.venueId) ?? r.venueText : r.venueText]));
 }
 
-export type FeedLine = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[] };
+export type FeedLine = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[]; cnt: number };
 
 export async function boardData(db: Db, o: { q?: string; before?: string; tab?: string } = {}, now = new Date()) {
   const ev = await ev0(db);
@@ -32,8 +32,10 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
   const slots = await db.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), ne(t.joinSlot.status, 'void'))).orderBy(asc(t.joinSlot.no));
   const prov = locked ? [] : await provisionalSlots(db, ev.id, s.perSeat);
   const earned = new Map<string, number[]>();
+  const cnt = new Map<string, number>(); // 截止前：只給「幾個」，不給號碼（號碼會因核對而變動，容易誤會）
   for (const x of locked ? slots.map((y) => ({ regId: y.regId, at: y.earnedAt, no: y.no })) : prov) {
     const k = `${x.regId}-${x.at.getTime()}`;
+    if (!locked && !(x as { fixed?: boolean }).fixed) { cnt.set(k, (cnt.get(k) ?? 0) + 1); continue; }
     earned.set(k, [...(earned.get(k) ?? []), x.no]);
   }
 
@@ -47,7 +49,7 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
     const k = `${r.regId}-${r.createdAt.getTime()}`;
     let L = byKey.get(k);
     if (!L) {
-      L = { k, at: r.createdAt.toISOString(), group: nm.get(r.regId) ?? '', qty: 0, orders: 0, ok: 0, pending: 0, bad: 0, total: 0, nos: earned.get(k) ?? [] };
+      L = { k, at: r.createdAt.toISOString(), group: nm.get(r.regId) ?? '', qty: 0, orders: 0, ok: 0, pending: 0, bad: 0, total: 0, nos: earned.get(k) ?? [], cnt: cnt.get(k) ?? 0 };
       byKey.set(k, L); lines.push(L);
     }
     L.orders++; L.qty += r.qty;
@@ -71,14 +73,20 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
   const byNo = new Map(slots.map((x) => [x.no, x]));
   const order = locked
     ? slots.map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', status: x.status, seat: x.seatId ? label.get(x.seatId) ?? '' : '' }))
-    : prov.map((x) => { const f = x.fixed ? byNo.get(x.no) : undefined;
-      return { no: x.no, group: nm.get(x.regId) ?? '', status: f ? f.status : 'provisional', seat: f?.seatId ? label.get(f.seatId) ?? '' : '' }; });
+    : (() => {
+      const fixed = prov.filter((x) => x.fixed).map((x) => { const f = byNo.get(x.no);
+        return { no: x.no, group: nm.get(x.regId) ?? '', status: f?.status ?? 'wait', seat: f?.seatId ? label.get(f.seatId) ?? '' : '', n: 1 }; });
+      // 本輪預計：每群合成一行「預計 N 個」，依該群第一個預計號碼的先後
+      const g = new Map<number, { no: number; group: string; status: string; seat: string; n: number }>();
+      for (const x of prov.filter((y) => !y.fixed)) { const e = g.get(x.regId); if (e) e.n++; else g.set(x.regId, { no: 0, group: nm.get(x.regId) ?? '', status: 'provisional', seat: '', n: 1 }); }
+      return [...fixed, ...g.values()];
+    })();
 
   const queue = slots.filter((x) => x.status === 'wait' || x.status === 'turn').sort((a, b) => a.pos - b.pos || a.no - b.no);
   const turn = queue.filter((x) => x.status === 'turn');
   const live = {
     pickOpen: s.pickOpen, paused: s.paused, inHours: inHours(s, now), hourFrom: s.hourFrom, hourTo: s.hourTo,
-    current: turn.length ? { nos: turn.map((x) => x.no), group: nm.get(turn[0].regId) ?? '', deadline: deadlineOf(s, turn[0])?.toISOString() ?? null } : null,
+    current: turn.length ? { nos: turn.map((x) => x.no), group: nm.get(turn[0].regId) ?? '', deadline: deadlineOf(s, turn[0], turn.length)?.toISOString() ?? null } : null,
     next: queue.filter((x) => x.status === 'wait').slice(0, 5).map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '' })),
     recent: slots.filter((x) => x.status === 'done' && x.pickedAt).sort((a, b) => b.pickedAt!.getTime() - a.pickedAt!.getTime()).slice(0, 10)
       .map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', seat: x.seatId ? label.get(x.seatId) ?? '' : '', at: x.pickedAt!.toISOString() })),
@@ -88,7 +96,9 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, now: now.toISOString(),
     reportOpen: s.reportOpen && !locked, locked, started: slots.length > 0, round: s.round, perSeat: s.perSeat, contact: s.contact,
-    stats: { groups: approved.size, verified, pending, slots: locked ? slots.length : prov.length, giftSeats: gift.length, giftFree: gift.filter((x) => x.status === 'free').length },
+    stats: { groups: approved.size, verified, pending, slots: locked ? slots.length : prov.length, giftSeats: gift.length, giftFree: gift.filter((x) => x.status === 'free').length,
+      // 還可以給幾個劃位序＝贈席空位－還沒選位的號碼－本輪預計的
+      canGive: Math.max(0, gift.filter((x) => x.status === 'free').length - queue.length - (locked ? 0 : prov.filter((x) => !x.fixed).length)) },
     era: await eraSales(db, ev.id),
     feed, more, order, live,
     ...(o.tab === 'live' ? { seats, zones: [GIFT_ZONE, VOL_ZONE] } : {}),
