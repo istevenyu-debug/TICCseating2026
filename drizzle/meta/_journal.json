@@ -239,6 +239,13 @@
       "when": 1794627590899,
       "tag": "0033_join_slot_void_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794672630730,
+      "tag": "0034_card_link_2m",
+      "breakpoints": true
     }
   ]
 }

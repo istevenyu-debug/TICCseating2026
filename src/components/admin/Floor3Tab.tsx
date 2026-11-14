@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import type { floor3State } from '@/lib/card';
+import type { listCardLinks } from '@/lib/cardLink';
+import CardLinksCard from './CardLinksCard';
 import { inkFor } from '@/lib/color';
 import AdminMap, { type SeatLook } from './AdminMap';
 
@@ -10,7 +12,7 @@ type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
 type Mode = 'frame' | 'unframe' | 'hold' | 'unhold';
 interface Usage { id: number; code: string; name: string; sellable: boolean }
 interface Props {
-  f: F3; act: Act; busy: boolean; usages: Usage[]; base: string; sure: string | null; confirm2: (key: string, fn: () => void) => void;
+  f: F3; cardLinks: Awaited<ReturnType<typeof listCardLinks>>; act: Act; busy: boolean; usages: Usage[]; base: string; sure: string | null; confirm2: (key: string, fn: () => void) => void;
   setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void;
 }
 
@@ -23,7 +25,7 @@ const toLocal = (iso: string | null) => (iso ? new Date(new Date(iso).getTime() 
 const fromLocal = (s: string) => (s ? new Date(`${s}:00+08:00`).toISOString() : null);
 
 /** 後台「三樓售票」：開賣、價格、組合框選、刷卡訂單、退票。三樓的東西都在這一頁，不會動到 2M */
-export default function Floor3Tab({ f, act, busy, usages, base, sure, confirm2, setMsg }: Props) {
+export default function Floor3Tab({ f, cardLinks, act, busy, usages, base, sure, confirm2, setMsg }: Props) {
   const cfg = f.config;
   const s = cfg.settings;
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -67,6 +69,7 @@ export default function Floor3Tab({ f, act, busy, usages, base, sure, confirm2, 
 
   return (
     <div className="pstack">
+      {cardLinks && <CardLinksCard d={cardLinks} act={act} busy={busy} base={base} />}
       <h2 style={{ margin: '4px 0 -4px' }}>三樓統計 <span className="small muted">（上面那排數字是 2M，兩邊分開算）</span></h2>
       <div className="stats">
         <div className="stat"><b>{f.stats.free}</b><span>剩餘座位</span></div>

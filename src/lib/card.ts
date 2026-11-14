@@ -274,7 +274,7 @@ export async function createCardOrder(db: Db, raw: unknown, origin: string, now 
     }
     const amount = items.reduce((a, x) => a + x.price * x.qty, 0);
     if (amount <= 0) throw new BookingError('INVALID', '金額不正確');
-    const tradeNo = `3F${tradeStamp(now)}${Array.from({ length: 5 }, () => TRADE_CHARS[randomInt(TRADE_CHARS.length)]).join('')}`;
+    const tradeNo = tradeNoOf('3F', now);
     const [o] = await tx.insert(t.cardOrder).values({
       eventId: ev.id, tradeNo, token: randomBytes(18).toString('base64url'), env: cfg.mode, items, amount,
       name: v.name, phone: v.phone, email: v.email, invType: v.invType, invCode: v.invCode, invTitle: v.invTitle,
@@ -285,6 +285,11 @@ export async function createCardOrder(db: Db, raw: unknown, origin: string, now 
   });
   menuCache = null;
 
+  return gatewayForm(cfg, order, origin, now);
+}
+
+/** 導到綠界付款頁的表單（三樓公開頁、2M 刷卡專屬連結共用） */
+export function gatewayForm(cfg: CardConfig, order: typeof t.cardOrder.$inferSelect, origin: string, now: Date) {
   const base = origin.replace(/\/$/, '');
   const fields: Record<string, string> = {
     MerchantID: cfg.merchantId, MerchantTradeNo: order.tradeNo, MerchantTradeDate: gwDate(now), PaymentType: 'aio',
@@ -296,6 +301,8 @@ export async function createCardOrder(db: Db, raw: unknown, origin: string, now 
   fields.CheckMacValue = checkMac(fields, cfg.hashKey, cfg.hashIV);
   return { action: `${BASE[cfg.mode]}/Cashier/AioCheckOut/V5`, fields, token: order.token };
 }
+
+export const tradeNoOf = (prefix: string, now: Date) => `${prefix}${tradeStamp(now)}${Array.from({ length: 5 }, () => TRADE_CHARS[randomInt(TRADE_CHARS.length)]).join('')}`;
 
 /* ---------- 付款成功：冪等 ---------- */
 
@@ -318,7 +325,7 @@ export async function markPaid(db: Db, tradeNo: string, info: PaidInfo, now = ne
     const code = Array.from({ length: 10 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join('');
     const label = o.items.map((i) => `${i.name} × ${i.qty}`).join('、');
     const [link] = await tx.insert(t.inviteLink).values({
-      eventId: o.eventId, code, name: o.name, phone: o.phone, quota: 0, expiresAt, floor: '3F', note: `刷卡 ${o.tradeNo}・${label}`.slice(0, 300),
+      eventId: o.eventId, code, name: o.name, phone: o.phone, quota: 0, expiresAt, floor: o.floor, paidCard: o.floor !== '3F', note: `刷卡 ${o.tradeNo}・${label}`.slice(0, 300),
     }).returning();
     const [po] = await tx.insert(t.preorder).values({
       eventId: o.eventId, no: o.tradeNo, items: o.items, amount: o.amount, name: o.name, phone: o.phone, email: o.email,
@@ -331,15 +338,15 @@ export async function markPaid(db: Db, tradeNo: string, info: PaidInfo, now = ne
     const url = `${await siteOrigin(tx as unknown as Db)}/t/${code}`;
     await tx.insert(t.notification).values({
       linkId: link.id, channel: 'email', template: 'preorder_link', recipient: o.email,
-      content: `【${ev.name}】${o.name} 您好，已收到您的付款（訂單 ${o.tradeNo}：${label}）。請立即點以下專屬連結選座位，座位依付款先後選取：${url}　連結有效至演出當天，請勿轉傳他人。`,
+      content: `【${ev.name}】${o.name} 您好，已收到您的付款（訂單 ${o.tradeNo}：${label}）。請立即點以下專屬連結選座位，座位依付款先後選取：${url}　連結有效至演出當天，請勿轉傳他人。${o.terms ? `\n退票與轉讓：${o.terms}` : ''}`,
     });
     await tx.insert(t.auditLog).values({ actor: `card:${info.via}`, action: 'card_paid', target: `card:${o.id}`, detail: JSON.stringify({ tradeNo, gw: info.gwTradeNo }) });
     return { kind: 'fresh' as const, o, code, preorderId: po.id };
   });
   menuCache = null;
   if (r.kind === 'fresh') {
-    await ensureInvoice(db, r.preorderId).catch((e) => console.error('三樓發票開立失敗', e)); // 開票失敗不影響付款，定時會再試
-    const stock = await floor3Stock(db, r.o.eventId, now).catch(() => null);
+    await ensureInvoice(db, r.preorderId, r.o.floor === '3F' ? '三樓刷卡' : '2M刷卡').catch((e) => console.error('刷卡發票開立失敗', e)); // 開票失敗不影響付款，定時會再試
+    const stock = r.o.floor === '3F' ? await floor3Stock(db, r.o.eventId, now).catch(() => null) : null;
     const short = stock && r.o.items.some((i) => (stock.left[`${i.kind}:${i.id}`] ?? 0) === 0 && now > r.o.reserveUntil);
     if (short) await db.update(t.cardOrder).set({ flagged: true, note: `${r.o.note}逾時後才付款，請確認座位是否足夠。`.slice(-500) }).where(eq(t.cardOrder.tradeNo, tradeNo));
   }
@@ -347,9 +354,9 @@ export async function markPaid(db: Db, tradeNo: string, info: PaidInfo, now = ne
 }
 
 /** 刷卡單的發票：不看「開立時機」設定，建立後直接開；電腦核對有異常的留給人工 */
-async function ensureInvoice(db: Db, preorderId: number) {
-  const inv = await createForPreorder(db, preorderId, '三樓刷卡');
-  if (inv && inv.status === 'pending' && !inv.checks.length) await issueInvoice(db, inv.id, '三樓刷卡');
+async function ensureInvoice(db: Db, preorderId: number, by = '三樓刷卡') {
+  const inv = await createForPreorder(db, preorderId, by);
+  if (inv && inv.status === 'pending' && !inv.checks.length) await issueInvoice(db, inv.id, by);
 }
 
 /* ---------- 第一、二道保險：綠界通知、買方回來 ---------- */
@@ -478,7 +485,9 @@ export async function cardStatus(db: Db, token: string, now = new Date(), post: 
   }
   let code: string | null = null;
   if (o.linkId && o.status === 'paid') [{ code }] = await db.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
-  return { status: o.status, code, orderNo: o.tradeNo };
+  let back = '/3f';
+  if (o.cardLinkId) { const [cl] = await db.select({ code: t.cardLink.code }).from(t.cardLink).where(eq(t.cardLink.id, o.cardLinkId)); back = cl ? `/c/${cl.code}` : '/'; }
+  return { status: o.status, code, orderNo: o.tradeNo, back };
 }
 
 /* ---------- 退票 ---------- */
@@ -612,7 +621,8 @@ export async function floor3State(db: Db, now = new Date()) {
   const ords = links.length ? await db.select({ linkId: t.orders.linkId, id: t.orders.id, status: t.orders.status }).from(t.orders).where(inArray(t.orders.linkId, links.map((l) => l.id))) : [];
   const oseats = ords.length ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId }).from(t.orderSeat).where(inArray(t.orderSeat.orderId, ords.filter((x) => x.status === 'paid' || x.status === 'pending').map((x) => x.id))) : [];
   const cfg = await getCardConfig(db);
-  const paid = rows.filter((r) => ['paid', 'refunding'].includes(r.status));
+  const rows3 = rows.filter((r) => r.floor === '3F'); // 統計只算三樓（2M 刷卡專屬連結另外算）
+  const paid = rows3.filter((r) => ['paid', 'refunding'].includes(r.status));
   const stock = await floor3Stock(db, ev.id, now);
   return {
     config: await publicCardConfig(db),
@@ -620,7 +630,7 @@ export async function floor3State(db: Db, now = new Date()) {
     zones: zones.map((z) => ({ id: z.id, name: z.name, color: z.color, price: z.price, open: z.open, combo: comboZone.has(z.id), seatCount: seats.filter((s) => s.zoneId === z.id).length })),
     combos: combos.map((c) => ({ id: c.id, name: c.name, isSingle: c.isSingle, price: c.price, active: c.active, seats: c.items.reduce((a, i) => a + i.qty, 0) })),
     seats, stock,
-    stats: { total: seats.length, sold: seats.filter((s) => s.status === 'sold').length, picking: seats.filter((s) => s.status === 'held' || s.status === 'pending').length, free: stock.freeSeats, orders: paid.length, revenue: paid.reduce((a, r) => a + r.amount, 0), refunded: rows.filter((r) => r.status === 'refunded').length, flagged: rows.filter((r) => r.flagged).length, pending: rows.filter((r) => r.status === 'pending').length },
+    stats: { total: seats.length, sold: seats.filter((s) => s.status === 'sold').length, picking: seats.filter((s) => s.status === 'held' || s.status === 'pending').length, free: stock.freeSeats, orders: paid.length, revenue: paid.reduce((a, r) => a + r.amount, 0), refunded: rows3.filter((r) => r.status === 'refunded').length, flagged: rows.filter((r) => r.flagged).length, pending: rows3.filter((r) => r.status === 'pending').length },
     orders: rows.map((r) => ({
       id: r.id, tradeNo: r.tradeNo, gwTradeNo: r.gwTradeNo, env: r.env, status: r.status, items: r.items.map((i) => `${i.name} × ${i.qty}`).join('、'), amount: r.amount,
       name: r.name, phone: r.phone, email: r.email, invoice: invDesc(r.invType, r.invCode, r.invTitle, r.email), paidVia: r.paidVia, note: r.note, flagged: r.flagged,

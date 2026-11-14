@@ -1,4 +1,5 @@
 import { adminQuery, refundCardOrder, saveCardKeys, saveCardSettings } from '@/lib/card';
+import { createCardLink, updateCardLink } from '@/lib/cardLink';
 import { frameComboGroup, unframeComboGroup } from '@/lib/floor';
 import { z } from 'zod';
 import { handle, originOf, readJson } from '@/lib/api';
@@ -173,6 +174,8 @@ const action = z.discriminatedUnion('action', [
     open: z.boolean(), saleStart: z.string().nullable(), saleEnd: z.string().nullable(), credit: z.boolean(),
     refundOn: z.boolean(), refundDays: z.number().int().min(0).max(60), refundFeePct: z.number().min(0).max(10),
   }).partial() }),
+  z.object({ action: z.literal('cardlink.create'), values: z.record(z.unknown()) }),
+  z.object({ action: z.literal('cardlink.update'), id: z.number().int().positive(), values: z.record(z.unknown()) }),
   z.object({ action: z.literal('floor3.keys'), values: z.object({
     mode: z.enum(['test', 'prod']), merchantId: z.string().trim().max(10), hashKey: z.string().max(64), hashIV: z.string().max(64), checkCode: z.string().max(20),
   }).partial() }),
@@ -216,6 +219,8 @@ export async function POST(req: Request) {
       case 'floor3.unframe': mustBeAdmin(); return unframeComboGroup(db, who, a.seatId);
       case 'floor3.settings': mustBeAdmin(); return saveCardSettings(db, who, a.values);
       case 'floor3.keys': mustBeAdmin(); return saveCardKeys(db, who, a.values);
+      case 'cardlink.create': mustBeAdmin(); return createCardLink(db, who, a.values);
+      case 'cardlink.update': mustBeAdmin(); return updateCardLink(db, who, a.id, a.values);
       case 'floor3.query': mustBeAdmin(); return adminQuery(db, who, a.id);
       case 'floor3.refund': {
         mustBeAdmin();

@@ -56,7 +56,7 @@ function ownedBy(link: LinkRow) {
 
 export function saleStateFor(ev: EventRow, link: LinkRow, now: Date): { state: ReturnType<typeof saleState>; startsAt: string | null } {
   // 三樓連結＝已刷卡付款：一定能劃，不受 2M 的開放設定影響
-  if (link.floor === '3F') return { state: 'open', startsAt: null };
+  if (link.floor === '3F' || link.paidCard) return { state: 'open', startsAt: null }; // 2M 刷卡連結也一樣
   const base = saleState(ev, now);
   // 開賣、截止時間只當提醒：拿到專屬連結的人就能劃（是否發連結由主辦方決定）
   const startsAt = ev.saleStart && now < ev.saleStart ? ev.saleStart.toISOString() : null;
@@ -78,7 +78,7 @@ const SALE_MSG = { closed: '目前未開放訂購。', not_started: '尚未開�
  * 三樓不經過發布（連結是刷卡付款後才有的），直接看三樓自己的開放勾選，兩邊互不影響。
  */
 function openSets(ev: EventRow, link: LinkRow, zones: { id: number; open: boolean }[], combos: { id: number; active: boolean; isSingle: boolean; items: { zoneId: number }[] }[]) {
-  if (link.floor === '3F') {
+  if (link.floor === '3F' || link.paidCard) { // 已刷卡付款：能劃什麼由付款內容決定（linkEntitle 會擋）
     const openCombos = new Set(combos.filter((c) => c.active).map((c) => c.id));
     const openZones = new Set(zones.filter((z) => z.open).map((z) => z.id));
     for (const c of combos) if (c.active && !c.isSingle) for (const i of c.items) openZones.add(i.zoneId);
@@ -90,7 +90,7 @@ function openSets(ev: EventRow, link: LinkRow, zones: { id: number; open: boolea
 
 /** 這次最多可勾幾張：每筆訂單上限，再加上專屬連結的剩餘張數（0 = 不限） */
 function canBuyOf(ev: EventRow, link: LinkRow, used: number) {
-  if (link.floor === '3F') return 9999; // 三樓不限購：能劃幾席由已付款內容決定
+  if (link.floor === '3F' || link.paidCard) return 9999; // 三樓不限購：能劃幾席由已付款內容決定
   if (link.quota === 0) return ev.maxPerOrder;
   return Math.max(0, Math.min(ev.maxPerOrder, link.quota - used));
 }
@@ -511,10 +511,10 @@ export async function submitOrder(db: Db, code: string, raw: unknown, now = new 
     return { orderNo: order.orderNo!, amount: order.amount };
   });
   // 三樓已刷卡付款：送出就算劃位成功，馬上給 QR code，不用等後台確認
-  if (link.floor === '3F') {
+  if (link.floor === '3F' || link.paidCard) {
     const { confirmPayment } = await import('./admin');
     const { siteOrigin } = await import('./push');
-    await confirmPayment(db, '三樓刷卡', input.orderId, {}, now, await siteOrigin(db));
+    await confirmPayment(db, link.floor === '3F' ? '三樓刷卡' : '2M刷卡', input.orderId, {}, now, await siteOrigin(db));
   }
   return done;
 }

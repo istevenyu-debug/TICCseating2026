@@ -121,7 +121,7 @@ export async function getAdminState(db: Db, now = new Date()) {
 
   // 由訂單收款產生的連結：付款內容 vs 已劃內容
   const pos = await db.select({ linkId: t.preorder.linkId, no: t.preorder.no, items: t.preorder.items }).from(t.preorder)
-    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.linkId} is not null`, sql`${t.preorder.source} <> 'card'`));
+    .where(and(eq(t.preorder.eventId, ev.id), sql`${t.preorder.linkId} is not null`)); // 含 2M 刷卡（三樓的連結不在這份清單，不影響）
   const paidByLink = new Map(pos.map((p) => {
     const os = orderRows.filter((o) => o.linkId === p.linkId && ACTIVE_ORDER.includes(o.status));
     const e = entitle(p.items, os.map((o) => ({

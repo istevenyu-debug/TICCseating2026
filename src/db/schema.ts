@@ -140,6 +140,7 @@ export const inviteLink = pgTable('invite_link', {
   status: text('status').notNull().default('active'), // active / disabled
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   floor: text('floor').notNull().default('2M'), // 連結綁樓層：只看得到、選得到這一層
+  paidCard: boolean('paid_card').notNull().default(false), // 刷卡付款後產生的連結：一定能劃、送出就算劃位成功（不受 2M 開放設定影響）
 }, (t) => ({ code: uniqueIndex('invite_link_code_idx').on(t.code) }));
 
 /** 訂單。status：held / pending / paid / cancelled / expired */
@@ -379,7 +380,28 @@ export const cardOrder = pgTable('card_order', {
   refundAmount: integer('refund_amount').notNull().default(0),
   refundFee: integer('refund_fee').notNull().default(0),
   refundBy: text('refund_by'),
+  floor: text('floor').notNull().default('3F'), // 3F 三樓公開購票頁／2M 刷卡專屬連結
+  cardLinkId: integer('card_link_id'), // 2M：從哪一條刷卡專屬連結買的
+  terms: text('terms').notNull().default(''), // 買方付款前同意的退票／轉讓規則（當時的文字）
 }, (t) => ({ tradeNo: uniqueIndex('card_order_trade_no_idx').on(t.tradeNo), token: uniqueIndex('card_order_token_idx').on(t.token), byStatus: index('card_order_status_idx').on(t.status) }));
+
+/** 2M 刷卡專屬連結（不公開）：只給特定買方，選方案、組數 → 綠界刷卡 → 付款後才選位 */
+export const cardLink = pgTable('card_link', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  code: text('code').notNull(),
+  name: text('name').notNull().default(''), // 給誰（後台辨識用）
+  comboIds: jsonb('combo_ids').$type<number[]>().notNull(), // 可買的方案（2M 組合）
+  maxSets: integer('max_sets').notNull().default(0), // 這條連結最多買幾組，0＝不限
+  policy: text('policy').notNull().default('transfer'), // transfer 不可退、可轉讓／refund 期限前可退（酌收手續費）
+  transferDays: integer('transfer_days').notNull().default(3), // 演出前幾天以前可轉讓
+  refundDays: integer('refund_days').notNull().default(10), // 演出前幾天以前可退
+  refundFeePct: integer('refund_fee_pct').notNull().default(10),
+  active: boolean('active').notNull().default(true),
+  note: text('note').notNull().default(''),
+  createdBy: text('created_by').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ code: uniqueIndex('card_link_code_idx').on(t.code) }));
 
 /* ---------- 揪團贈票（銀區買十送一）：團練場、揪團登記 ---------- */
 
