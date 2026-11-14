@@ -232,6 +232,13 @@
       "when": 1794613729032,
       "tag": "0032_join_slot_extra",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794627590899,
+      "tag": "0033_join_slot_void_reason",
+      "breakpoints": true
     }
   ]
 }

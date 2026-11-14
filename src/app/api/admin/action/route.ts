@@ -274,7 +274,7 @@ export async function POST(req: Request) {
       case 'join.nextRound': mustBeAdmin(); return nextRound(db, who);
       case 'join.extend': return extendTurn(db, who, a.minutes ?? 5);
       case 'sales.caps': mustBeAdmin(); return setCaps(db, who, a.caps);
-      case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req), a.tickets); dispatchQueued(db).catch(() => undefined); return r; }
+      case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req), a.tickets); await tickQueue(db, joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);
       case 'join.group.rename': return renameGroup(db, who, a.id, a.name);
       case 'join.group.merge': mustBeAdmin(); return mergeGroups(db, who, a.id, a.into);

@@ -72,7 +72,7 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
 
   const byNo = new Map(slots.map((x) => [x.no, x]));
   const order = locked
-    ? slots.map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', status: x.status, seat: x.seatId ? label.get(x.seatId) ?? '' : '' }))
+    ? slots.map((x) => ({ no: x.no, group: nm.get(x.regId) ?? '', status: x.status, seat: x.seatId ? label.get(x.seatId) ?? '' : '', n: 1 }))
     : (() => {
       const fixed = prov.filter((x) => x.fixed).map((x) => { const f = byNo.get(x.no);
         return { no: x.no, group: nm.get(x.regId) ?? '', status: f?.status ?? 'wait', seat: f?.seatId ? label.get(f.seatId) ?? '' : '', n: 1 }; });
@@ -95,7 +95,7 @@ export async function boardData(db: Db, o: { q?: string; before?: string; tab?: 
 
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, now: now.toISOString(),
-    reportOpen: s.reportOpen && !locked, locked, started: slots.length > 0, round: s.round, perSeat: s.perSeat, contact: s.contact,
+    reportOpen: s.reportOpen && !locked, locked, auto: s.auto, started: slots.length > 0, round: s.round, perSeat: s.perSeat, contact: s.contact,
     stats: { groups: approved.size, verified, pending, slots: locked ? slots.length : prov.length, giftSeats: gift.length, giftFree: gift.filter((x) => x.status === 'free').length,
       // 還可以給幾個劃位序＝贈席空位－還沒選位的號碼－本輪預計的
       canGive: Math.max(0, gift.filter((x) => x.status === 'free').length - queue.length - (locked ? 0 : prov.filter((x) => !x.fixed).length)) },

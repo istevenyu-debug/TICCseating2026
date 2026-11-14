@@ -5,7 +5,7 @@ import { fmtDate } from './JoinApp';
 
 type Page = {
   event: { name: string; showAt: string }; venue: string; headName: string; open: boolean; locked: boolean; perSeat: number; contact: string; round?: number; fixed?: number[];
-  orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number;
+  orders: number; verified: number; pending: number; bad: number; slots: number[]; next: number; auto?: boolean;
   today: string;
   list: { id: number; key: string; buyDate: string | null; orderNo: string | null; qty: number; reporter: string; at: string; status: string; eraQty: number | null; note?: string; mine?: boolean }[];
 };
@@ -145,7 +145,7 @@ export default function JoinReportApp({ code, api: api0, bar, suggestName }: { c
   const howto = (
     <div className="note" style={{ margin: '12px 0' }}>
       <b>訂單編號只要輸入後 4 碼：</b>「-」前面的最後 4 個數字，例如 ER2611120000109-1 → 輸入 <b>0109</b>。系統自動帶入今天的日期；當天買、當天回報最簡單，也排得最前面。若同一天有別筆訂單後 4 碼相同，系統會請您補上完整編號。
-      <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。只算三樓銀區的票。有問題會變紅字並寫出原因，負責人也會收到 Email，請用原手機回來修正。劃位序依回報時間排列，越早回報越前面；名單更新時預計號碼可能變動，回報截止後才確定。</div>
+      <div style={{ marginTop: 6 }}><b>先收後核：</b>送出後先登記為「待核對」，等年代名單更新後自動核對，核對通過才計入張數與劃位序。只算三樓銀區的票。有問題會變紅字並寫出原因，負責人也會收到 Email，請用原手機回來修正。劃位序依回報時間排列，越早回報越前面；{page.auto ? '核對通過就給號，並寄劃位連結給負責人。' : '名單更新時預計號碼可能變動，回報截止後才確定。'}</div>
       <div style={{ marginTop: 4 }}>有疑義請洽 {page.contact}</div>
     </div>
   );

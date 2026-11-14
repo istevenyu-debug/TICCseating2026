@@ -1,0 +1,1 @@
+ALTER TABLE "join_slot" ADD COLUMN "void_reason" text DEFAULT '' NOT NULL;

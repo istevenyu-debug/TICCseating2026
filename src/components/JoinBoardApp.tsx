@@ -7,7 +7,7 @@ import SeatMap from './SeatMap';
 type MapProps = Parameters<typeof SeatMap>[0];
 type Line = { k: string; at: string; group: string; qty: number; orders: number; ok: number; pending: number; bad: number; total: number; nos: number[]; cnt?: number };
 type Board = {
-  event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; started?: boolean; round?: number; perSeat: number; contact: string;
+  event: { name: string; showAt: string }; now: string; reportOpen: boolean; locked: boolean; auto?: boolean; started?: boolean; round?: number; perSeat: number; contact: string;
   stats: { groups: number; verified: number; pending: number; slots: number; giftSeats: number; giftFree: number; canGive?: number };
   era?: { sold: number; cap: number; left: number; at: string | null };
   feed: Line[]; more: boolean;
@@ -106,7 +106,7 @@ export default function JoinBoardApp() {
           <div className="stat"><b>{b.stats.groups}</b><span>群</span></div>
           <div className="stat"><b style={{ color: 'var(--ok)' }}>{b.stats.verified}</b><span>張已核對</span></div>
           <div className="stat"><b style={{ color: 'var(--warn)' }}>{b.stats.pending}</b><span>張待核對</span></div>
-          <div className="stat"><b>{b.stats.slots}</b><span>{b.locked ? '個劃位序' : '個預計劃位序'}</span></div>
+          <div className="stat"><b>{b.stats.slots}</b><span>{b.locked || b.auto ? '個劃位序' : '個預計劃位序'}</span></div>
           {b.stats.giftSeats > 0 && <div className="stat"><b>{b.stats.giftFree}</b><span>席贈席還空著</span></div>}
           {b.stats.giftSeats > 0 && b.stats.canGive !== undefined && <div className="stat"><b style={{ color: 'var(--ok)' }}>{b.stats.canGive}</b><span>還可以給的劃位序</span></div>}
           {b.era && b.era.cap > 0 && b.era.at && <div className="stat"><b style={{ color: 'var(--red)' }}>{b.era.left}</b><span>年代銀區尚餘（共 {b.era.cap} 席，已售 {b.era.sold}）</span></div>}
@@ -123,7 +123,7 @@ export default function JoinBoardApp() {
 
       {tab === 'feed' && (
         <div className="card">
-          <p className="small muted" style={{ marginTop: 0 }}>{(b.round ?? 1) > 1 && <b>第 {b.round} 輪　</b>}{b.reportOpen ? '回報中，最新的在最上面，每 10 秒自動更新。' : b.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}每 {b.perSeat} 張核對通過＝1 個劃位序。</p>
+          <p className="small muted" style={{ marginTop: 0 }}>{!b.auto && (b.round ?? 1) > 1 && <b>第 {b.round} 輪　</b>}{b.reportOpen ? '回報中，最新的在最上面，每 10 秒自動更新。' : b.locked ? '回報已截止，劃位序已確定。' : '回報目前沒有開放。'}每 {b.perSeat} 張核對通過＝1 個劃位序。</p>
           {!feed.length && <p className="muted">{q ? '找不到這個群的回報。' : '還沒有回報。'}</p>}
           {feed.map((x) => (
             <div key={x.k} className={`jb-line${fresh.has(x.k) ? ' new' : ''}${hit(x.group) ? ' me' : ''}`}>
@@ -144,7 +144,7 @@ export default function JoinBoardApp() {
 
       {tab === 'order' && (
         <div className="card">
-          <p className="small muted" style={{ marginTop: 0 }}>{b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : `依回報時間排列，只算核對通過的票。${b.started ? '前幾輪已確定的號碼照舊；' : ''}本輪先顯示各群預計幾個，號碼在回報截止後才確定。`}</p>
+          <p className="small muted" style={{ marginTop: 0 }}>{b.auto ? '核對通過就給號（依回報時間），號碼不會再變。輪到時依順序一個一個選位。' : b.locked ? '劃位序已確定。輪到時依號碼一個一個選位。' : `依回報時間排列，只算核對通過的票。${b.started ? '前幾輪已確定的號碼照舊；' : ''}本輪先顯示各群預計幾個，號碼在回報截止後才確定。`}</p>
           {!b.order.length && <p className="muted">還沒有劃位序。</p>}
           <div className="tbl"><table><tbody>
             {b.order.filter((x) => !qq || hit(x.group)).map((x) => (

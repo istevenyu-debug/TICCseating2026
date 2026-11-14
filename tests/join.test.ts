@@ -12,7 +12,7 @@ import {
   addVenues, decideReg, getJoinSettings, editReg, joinMenu, joinUsages, mergeVenue, paintFloor3, presetFloor3, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, submitJoin,
 } from '@/lib/join';
 import {
-  clearJoinTest, deleteOwnReport, eraSales, eraSoldSeats, pickSeats, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, saveDraft, extendTurn, pickMinutes, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
+  clearJoinTest, deleteOwnReport, eraSales, eraSoldSeats, pickSeats, fixOwnReport, deleteReport, joinAdminState, lockSlots, markSent, nextRound, pickPage, rejoinQueue, reportPage, restoreSlot, saveDraft, extendTurn, pickMinutes, autoAssign, skipTurn, submitPick, submitReport, tickQueue, unlockSlots, uploadEra, voidSlot,
 } from '@/lib/joinQueue';
 
 let db: Db;
@@ -367,6 +367,57 @@ describe('自動輪號劃位', () => {
     expect(await db.select().from(t.joinSlot)).toHaveLength(0);
     const [es2] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, seats[0]));
     expect(es2.status).toBe('free');
+  });
+});
+
+describe('自動給號：核對通過就給號、寄連結、排隊；退票移到退票區；贈席分配完關閉回報', () => {
+  it('不用鎖定；依回報時間給號；退票自動移出、座位放回；張數補回可再拿', async () => {
+    const a = await venueReg('A場');
+    const b = await venueReg('B場');
+    const seats = await giftSeats(4);
+    await eraList([['A1', 20]]);
+    await setJoinSettings(db, '網管', { auto: true, reportOpen: true, pickOpen: true, hourFrom: '', hourTo: '' });
+    await report(a.reportCode!, [['A1', 20]], '志工甲', T0); // 當下核對
+    await report(b.reportCode!, [['B1', 10]], '志工乙', at(1)); // 待核對
+    await tickQueue(db, BASE, at(2));
+    expect((await slotsOf(a.id)).map((x) => [x.no, x.status])).toEqual([[1, 'turn'], [2, 'turn']]);
+    expect((await mails('join_plink')).map((x) => x.recipient)).toEqual(['A場@example.com']);
+    expect((await reportPage(db, b.reportCode!)).open).toBe(true); // 回報一直開著
+    // 上傳名單：B 核對通過 → 第 3 號、寄連結
+    await uploadEra(db, '網管', [{ orderNo: 'A1', qty: 20, status: 'sold' }, { orderNo: 'B1', qty: 10, status: 'sold' }], at(3), BASE);
+    await tickQueue(db, BASE, at(3));
+    expect((await slotsOf(b.id)).map((x) => x.no)).toEqual([3]);
+    expect((await mails('join_plink')).map((x) => x.recipient)).toEqual(['A場@example.com', 'B場@example.com']);
+    // 贈席 4 席、已給 3 號 → 還有 1；A 選位
+    await pickPage(db, a.pickCode!, at(3), BASE);
+    await submitPick(db, a.pickCode!, { seatIds: seats.slice(0, 2), repName: '王', repPhone: '0912345678' }, at(4), BASE);
+    // A 退票 10 張 → 只剩 1 個號：第 2 號移到退票區、座位放回
+    await uploadEra(db, '網管', [{ orderNo: 'A1', qty: 10, status: 'sold' }, { orderNo: 'B1', qty: 10, status: 'sold' }], at(5), BASE);
+    await autoAssign(db, BASE, at(5));
+    const sa = await slotsOf(a.id);
+    expect(sa.map((x) => [x.no, x.status, x.voidReason])).toEqual([[1, 'done', ''], [2, 'void', 'refund']]);
+    const [es] = await db.select().from(t.eventSeat).where(eq(t.eventSeat.seatId, sa[1].seatId ?? seats[1]));
+    expect(es.status).toBe('free');
+    expect((await joinAdminState(db, BASE, at(5))).slots.find((x) => x.no === 2)?.voidReason).toBe('refund');
+    // 張數補回來（再買 10 張）→ 可以再拿一個新號碼
+    await eraList([['A1', 10], ['B1', 10], ['A2', 10]]);
+    await report(a.reportCode!, [['A2', 10]], '志工甲', at(6));
+    await autoAssign(db, BASE, at(6));
+    expect((await slotsOf(a.id)).filter((x) => x.status !== 'void').map((x) => x.no)).toEqual([1, 4]);
+  });
+
+  it('贈席分配完自動關閉回報；後台刪回報不擋（多的號碼移到退票區）', async () => {
+    const a = await venueReg('A場');
+    await giftSeats(2);
+    await eraList([['A1', 20]]);
+    await setJoinSettings(db, '網管', { auto: true, reportOpen: true });
+    await report(a.reportCode!, [['A1', 20]]);
+    await autoAssign(db, BASE, at(1));
+    expect((await getJoinSettings(db)).reportOpen).toBe(false);
+    const [r] = await db.select().from(t.joinReport).where(eq(t.joinReport.regId, a.id));
+    await deleteReport(db, '網管', r.id);
+    await autoAssign(db, BASE, at(2));
+    expect((await slotsOf(a.id)).map((x) => x.status)).toEqual(['void', 'void']);
   });
 });
 

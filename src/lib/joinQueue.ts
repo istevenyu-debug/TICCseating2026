@@ -15,7 +15,7 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { rowKey, seatLabel } from './layout';
 import { normalizePhone } from './validation';
-import { USAGE_GIFT, USAGE_VOL, clean, ev0, getJoinSettings, joinRegState, joinUsages, mailHead, pickUrl, rateLimit, reportUrl, type JoinSettings } from './join';
+import { USAGE_GIFT, USAGE_VOL, clean, ev0, getJoinSettings, joinRegState, joinUsages, mailHead, pickUrl, rateLimit, reportUrl, sendPickLinks, type JoinSettings } from './join';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Slot = typeof t.joinSlot.$inferSelect;
@@ -266,6 +266,7 @@ export async function curRound(db: Db | Tx) {
 
 /** 本輪已鎖定（有本輪的劃位序）：回報關閉、本輪號碼確定 */
 export async function isLocked(db: Db | Tx, eventId: number) {
+  if (await autoOn(db)) return false; // 自動給號：回報一直開著，號碼核對通過就確定
   const round = await curRound(db);
   const [x] = await db.select({ id: t.joinSlot.id }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, eventId), eq(t.joinSlot.round, round))).limit(1);
   return !!x;
@@ -284,12 +285,18 @@ export type ProvSlot = { regId: number; at: Date; no: number; fixed: boolean };
  * 分輪：前幾輪已鎖定的（fixed）照舊；新的接在最大號碼後面，零頭跨輪累計（已取得的個數扣掉，含已取消的）。
  * 贈席有限：新的個數不超過「贈席空位 − 還沒選位的劃位序」，超過的放在 over。
  */
-async function slotPlan(db: Db | Tx, eventId: number, perSeat: number) {
+const autoOn = async (db: Db | Tx) => (await db.select({ v: t.appSetting.value }).from(t.appSetting).where(eq(t.appSetting.key, 'join.auto')))[0]?.v === '1';
+export const REFUND = 'refund';
+
+async function slotPlan(db: Db | Tx, eventId: number, perSeat: number, auto = false) {
   const approved = new Set((await db.select({ id: t.joinReg.id }).from(t.joinReg).where(and(eq(t.joinReg.eventId, eventId), eq(t.joinReg.status, 'approved')))).map((r) => r.id));
-  const reps = await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, eventId), eq(t.joinReport.status, 'ok'))).orderBy(asc(t.joinReport.createdAt), asc(t.joinReport.id));
+  // 自動給號：張數變少（部分退票）照年代剩下的張數算
+  const reps = (await db.select().from(t.joinReport).where(and(eq(t.joinReport.eventId, eventId), inArray(t.joinReport.status, auto ? ['ok', 'mismatch'] : ['ok']))).orderBy(asc(t.joinReport.createdAt), asc(t.joinReport.id)))
+    .map((r) => (r.status === 'ok' ? r : { ...r, qty: Math.min(r.qty, r.eraQty ?? 0) }));
   const old = await db.select().from(t.joinSlot).where(eq(t.joinSlot.eventId, eventId)).orderBy(asc(t.joinSlot.no));
   const had = new Map<number, number>();
-  for (const x of old) had.set(x.regId, (had.get(x.regId) ?? 0) + 1);
+  // 已取得的個數（含已取消的；退票移走的不算，之後張數補回來可以再拿）
+  for (const x of old) if (!(x.status === 'void' && x.voidReason === REFUND)) had.set(x.regId, (had.get(x.regId) ?? 0) + 1);
   const sum = new Map<number, number>();
   const fresh: { regId: number; at: Date }[] = [];
   for (const r of reps) {
@@ -299,7 +306,7 @@ async function slotPlan(db: Db | Tx, eventId: number, perSeat: number) {
     for (let k = Math.floor(before / perSeat) + 1; k <= Math.floor(after / perSeat); k++) if (k > (had.get(r.regId) ?? 0)) fresh.push({ regId: r.regId, at: r.createdAt });
   }
   let room = Infinity;
-  if (old.length) {
+  if (old.length || auto) {
     const [g] = await db.select({ n: sql<number>`count(*)::int` }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
       .where(and(eq(t.eventSeat.eventId, eventId), eq(t.seatUsage.code, 'join-gift'), eq(t.eventSeat.status, 'free')));
     room = Math.max(0, g.n - old.filter((x) => x.status === 'wait' || x.status === 'turn').length);
@@ -313,7 +320,7 @@ async function slotPlan(db: Db | Tx, eventId: number, perSeat: number) {
   return { list, over: fresh.length - take.length };
 }
 export async function provisionalSlots(db: Db | Tx, eventId: number, perSeat: number) {
-  return (await slotPlan(db, eventId, perSeat)).list;
+  return (await slotPlan(db, eventId, perSeat, await autoOn(db))).list;
 }
 
 /** 某群的劃位序：本輪鎖定後是正式的；回報中＝前幾輪正式的＋本輪預計的 */
@@ -418,7 +425,7 @@ export async function reportPage(db: Db, code: string) {
   const list = await db.select().from(t.joinReport).where(eq(t.joinReport.regId, r.id)).orderBy(asc(t.joinReport.id));
   return {
     event: { name: ev.name, showAt: ev.showAt.toISOString() }, venue: await venueName(db, r), headName: r.headName,
-    open: s.reportOpen && !num.locked, locked: num.locked, perSeat: s.perSeat, contact: s.contact, round: s.round,
+    open: s.reportOpen && !num.locked, locked: num.locked, auto: s.auto, perSeat: s.perSeat, contact: s.contact, round: s.round,
     orders: tot.orders, verified: tot.verified, pending: tot.pending, bad: tot.bad, slots: num.nos, fixed: tot.slots.map((x) => x.no), next: s.perSeat - (tot.verified % s.perSeat),
     today: tpeYmd(new Date()),
     list: list.map((x) => ({ id: x.id, key: x.key, buyDate: x.buyDate, orderNo: x.orderNo, qty: x.qty, reporter: x.reporter, at: x.createdAt.toISOString(), status: x.status, eraQty: x.eraQty, note: x.note })),
@@ -544,7 +551,7 @@ export async function deleteReport(db: Db, actor: string, id: number) {
     if (!r) throw new BookingError('NOT_FOUND', '找不到這筆回報');
     const { verified, slots } = await totalsOf(tx, r.regId);
     const after = verified - (r.status === 'ok' ? r.qty : 0);
-    if (slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這一群最後的劃位序，再刪除。`);
+    if (!s.auto && slots.length && Math.floor(after / s.perSeat) < slots.length) throw new BookingError('INVALID', `刪掉後已核對張數不夠 ${slots.length} 個劃位序。請先取消這一群最後的劃位序，再刪除。`);
     await tx.delete(t.joinReport).where(eq(t.joinReport.id, id));
     await tx.insert(t.auditLog).values({ actor, action: 'join_report_delete', target: `join_reg:${r.regId}`, detail: `${r.orderNo ?? r.key} × ${r.qty}` });
     return true;
@@ -634,8 +641,65 @@ const regsById = async (tx: Tx | Db, ids: number[]) => new Map((ids.length ? awa
 let ticking: Promise<boolean> | null = null;
 export function tickQueue(db: Db, base = '', now = new Date()): Promise<boolean> {
   if (ticking) return ticking;
-  ticking = runTick(db, base, now).finally(() => { ticking = null; });
+  ticking = (async () => { const a = await autoAssign(db, base, now); const b = await runTick(db, base, now); return a || b; })().finally(() => { ticking = null; });
   return ticking;
+}
+
+/**
+ * 自動給號（設定 auto）：每次推進排隊前先做——
+ * 1. 退票：某群已核對張數不夠目前的劃位序 → 多的（先還沒選位的、號碼大的）移到退票區，已選的座位放回贈席。已送年代的不動（要人工）。
+ * 2. 新號碼：核對通過、跨過每 perSeat 張的，依回報時間給下一個號碼，排到隊伍最後；贈席不夠就不給。
+ * 3. 寄劃位連結給有新號碼的群；贈席都分配完就關閉回報。
+ */
+export async function autoAssign(db: Db, base = '', now = new Date()) {
+  const s = await getJoinSettings(db);
+  if (!s.auto) return false;
+  const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
+  if (!ev) return false;
+  let added = 0;
+  await db.transaction(async (tx) => {
+    // 部分退票（張數變少＝張數不符）：先照年代剩下的張數算，只移走真的不夠的號碼
+    const reps = await tx.select({ regId: t.joinReport.regId, qty: t.joinReport.qty, status: t.joinReport.status, eraQty: t.joinReport.eraQty }).from(t.joinReport)
+      .where(and(eq(t.joinReport.eventId, ev.id), inArray(t.joinReport.status, ['ok', 'mismatch'])));
+    const ver = new Map<number, number>();
+    for (const r of reps) ver.set(r.regId, (ver.get(r.regId) ?? 0) + (r.status === 'ok' ? r.qty : Math.min(r.qty, r.eraQty ?? 0)));
+    const slots = await tx.select().from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), ne(t.joinSlot.status, 'void')));
+    const byReg = new Map<number, Slot[]>();
+    for (const x of slots) byReg.set(x.regId, [...(byReg.get(x.regId) ?? []), x]);
+    for (const [regId, mine] of byReg) {
+      let extra = mine.length - Math.floor((ver.get(regId) ?? 0) / s.perSeat);
+      if (extra <= 0) continue;
+      const order = [...mine].filter((x) => !x.sentAt).sort((a, b) => Number(a.status === 'done') - Number(b.status === 'done') || b.no - a.no);
+      for (const x of order) {
+        if (extra-- <= 0) break;
+        if (x.seatId) await tx.update(t.eventSeat).set({ status: 'free', orderId: null, version: sql`${t.eventSeat.version} + 1` }).where(and(eq(t.eventSeat.eventId, ev.id), eq(t.eventSeat.seatId, x.seatId)));
+        await tx.update(t.joinSlot).set({ status: 'void', seatId: null, turnAt: null, draft: '', voidReason: REFUND }).where(eq(t.joinSlot.id, x.id));
+        await tx.insert(t.auditLog).values({ actor: '系統', action: 'join_slot_refund', target: `join_slot:${x.id}`, detail: `第 ${x.no} 號移到退票區（已核對張數減少）${x.seatId ? '，座位放回贈席' : ''}` });
+      }
+    }
+    const plan = await slotPlan(tx, ev.id, s.perSeat, true);
+    const prov = plan.list.filter((x) => !x.fixed);
+    if (prov.length) {
+      const round = await curRound(tx);
+      const maxPos = Number((await tx.select({ m: sql<number>`coalesce(max(${t.joinSlot.pos}), 0)` }).from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id)))[0].m);
+      let i = 0;
+      for (const x of prov) await tx.insert(t.joinSlot).values({ eventId: ev.id, regId: x.regId, no: x.no, pos: maxPos + ++i, earnedAt: x.at, round, createdAt: now });
+      await tx.insert(t.auditLog).values({ actor: '系統', action: 'join_auto_assign', target: `event:${ev.id}`, detail: JSON.stringify({ from: prov[0].no, to: prov[prov.length - 1].no, over: plan.over }) });
+      added = prov.length;
+    }
+    // 贈席都分配完（空位－還沒選位的＝0）→ 關閉回報
+    if (s.reportOpen) {
+      const [g] = await tx.select({ all: sql<number>`count(*)::int`, free: sql<number>`count(*) filter (where ${t.eventSeat.status} = 'free')::int` }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+        .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.seatUsage.code, 'join-gift')));
+      const [w] = await tx.select({ n: sql<number>`count(*)::int` }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), inArray(t.joinSlot.status, ['wait', 'turn'])));
+      if (g.all > 0 && g.free - w.n <= 0) {
+        await tx.insert(t.appSetting).values({ key: 'join.reportOpen', value: '0' }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: '0' } });
+        await tx.insert(t.auditLog).values({ actor: '系統', action: 'join_auto_close', target: `event:${ev.id}`, detail: '贈席都分配完，自動關閉回報' });
+      }
+    }
+  });
+  if (added && base) return (await sendPickLinks(db, '系統', base, undefined, now)).sent > 0;
+  return false;
 }
 
 async function runTick(db: Db, base: string, now: Date): Promise<boolean> {
@@ -897,7 +961,7 @@ export async function voidSlot(db: Db, actor: string, id: number, reason: string
     if (!x || x.status === 'void') throw new BookingError('NOT_FOUND', '找不到這個劃位序');
     if (x.sentAt) throw new BookingError('INVALID', '這一席已送年代。請先取消「已送年代」，並通知年代作廢這張票。');
     if (x.seatId) await tx.update(t.eventSeat).set({ status: 'free', orderId: null, version: sql`${t.eventSeat.version} + 1` }).where(and(eq(t.eventSeat.eventId, x.eventId), eq(t.eventSeat.seatId, x.seatId)));
-    await tx.update(t.joinSlot).set({ status: 'void', seatId: null }).where(eq(t.joinSlot.id, id));
+    await tx.update(t.joinSlot).set({ status: 'void', seatId: null, voidReason: why }).where(eq(t.joinSlot.id, id));
     await tx.insert(t.auditLog).values({ actor, action: 'join_slot_void', target: `join_slot:${id}`, detail: `${x.no}：${why}` });
     return true;
   });
@@ -971,7 +1035,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
       group: r ? reg.get(r.regId)?.venueName ?? '' : '', reportStatus: r?.status ?? '' };
   });
   const locked = await isLocked(db, ev.id);
-  const plan = locked ? { list: [] as ProvSlot[], over: 0 } : await slotPlan(db, ev.id, settings.perSeat);
+  const plan = locked ? { list: [] as ProvSlot[], over: 0 } : await slotPlan(db, ev.id, settings.perSeat, settings.auto);
   const prov = plan.list;
   const totals = regState.regs.filter((r) => r.status === 'approved').map((r) => {
     const mine = reports.filter((x) => x.r.regId === r.id);
@@ -995,7 +1059,7 @@ export async function joinAdminState(db: Db, base = '', now = new Date()) {
       const r = reg.get(x.regId); const st = x.seatId ? label.get(x.seatId) : undefined;
       return { id: x.id, no: x.no, regId: x.regId, venue: r?.venueName ?? '', headName: r?.headName ?? '', status: x.status, pos: x.pos, misses: x.misses,
         seatId: x.seatId, seat: st?.label ?? '', rowNo: st ? st.row : null, seatNo: st?.no ?? '', repName: x.repName, repPhone: x.repPhone,
-        pickedAt: x.pickedAt?.toISOString() ?? null, sentAt: x.sentAt?.toISOString() ?? null, earnedAt: x.earnedAt.toISOString(), round: x.round, createdAt: x.createdAt.toISOString() };
+        pickedAt: x.pickedAt?.toISOString() ?? null, sentAt: x.sentAt?.toISOString() ?? null, earnedAt: x.earnedAt.toISOString(), round: x.round, createdAt: x.createdAt.toISOString(), voidReason: x.voidReason };
     }),
     seats, totals, inHours: inHours(settings, now), locked,
     provisional: prov.filter((x) => !x.fixed).map((x) => ({ no: x.no, venue: reg.get(x.regId)?.venueName ?? '', at: x.at.toISOString() })),

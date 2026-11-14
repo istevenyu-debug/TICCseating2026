@@ -485,6 +485,7 @@ export const joinSlot = pgTable('join_slot', {
   round: integer('round').notNull().default(1), // 第幾輪鎖定的
   extraMin: integer('extra_min').notNull().default(0), // 後台多給的分鐘（輪到這一次）
   draft: text('draft').notNull().default(''), // 選位中已點選的座位（JSON：seats、repName、repPhone），時間到時先存這些
+  voidReason: text('void_reason').notNull().default(''), // 取消原因；'refund'＝自動模式：已核對張數減少（退票），移到退票區
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   misses: integer('misses').notNull().default(0),
   turnAt: timestamp('turn_at', { withTimezone: true }),
