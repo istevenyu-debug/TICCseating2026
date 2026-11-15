@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, createLink, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
@@ -106,5 +107,24 @@ describe('斷線備案：入場名單', () => {
     expect(r.rows[0].entered).toBeNull();
     const s = await checkinList(db, 'seat');
     expect(s.rows.map((x) => x.serial)).toEqual(['T1-00001-01', 'T1-00001-02']);
+  });
+});
+
+describe('重寄 QR code', () => {
+  it('預設寄到訂單 Email、內容沿用原本劃位成功通知；可改寄別的信箱、不改訂單；未劃位成功不能重寄；格式錯擋下', async () => {
+    const r = await A.resendTicketMail(db, 'admin', orderId);
+    expect(r.to).toBe('a@b.co');
+    const ns = await db.select().from(t.notification);
+    const mine = ns.filter((n) => n.orderId === orderId && n.template === 'order_confirmed' && n.channel === 'email');
+    expect(mine).toHaveLength(2);
+    expect(mine[1].content).toBe(mine[0].content);
+    const r2 = await A.resendTicketMail(db, 'admin', orderId, ' other@x.tw ');
+    expect(r2.to).toBe('other@x.tw');
+    const [o] = await db.select().from(t.orders).where(eq(t.orders.id, orderId));
+    expect(o.buyerEmail).toBe('a@b.co');
+    await expect(A.resendTicketMail(db, 'admin', orderId, 'bad')).rejects.toThrow('Email 格式不正確');
+    const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
+    const h = await holdSeats(db, 'AAA111', ['3-9'], single, T0);
+    await expect(A.resendTicketMail(db, 'admin', h.orderId)).rejects.toThrow('劃位成功');
   });
 });

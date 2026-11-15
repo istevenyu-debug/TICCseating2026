@@ -708,6 +708,33 @@ export async function confirmPayment(db: Db, actor: string, id: number, v: { dat
   });
 }
 
+/**
+ * 重寄 QR code：已劃位成功的訂單，再寄一封「劃位成功」Email（附每張票 QR，與原本相同、不會失效）。
+ * to 空白＝寄到訂單 Email；填別的信箱只寄這一次，不改訂單資料。回傳新通知的 id（由呼叫端寄出）。
+ */
+export async function resendTicketMail(db: Db, actor: string, id: number, to = '', base?: string) {
+  const ev = await currentEvent(db);
+  const [o] = await db.select().from(t.orders).where(and(eq(t.orders.id, id), eq(t.orders.eventId, ev.id)));
+  if (!o) throw new BookingError('NOT_FOUND', '找不到此訂單');
+  if (o.status !== 'paid') throw new BookingError('INVALID', '只有「劃位成功」的訂單才有 QR code 可以重寄。');
+  const email = (to.trim() || o.buyerEmail || '').trim();
+  if (!email) throw new BookingError('INVALID', '這筆訂單沒有 Email，請在欄位填寫要寄到的信箱。');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BookingError('INVALID', 'Email 格式不正確');
+  const [prev] = await db.select({ content: t.notification.content }).from(t.notification)
+    .where(and(eq(t.notification.orderId, id), eq(t.notification.template, 'order_confirmed'))).orderBy(desc(t.notification.id)).limit(1);
+  let content = prev?.content;
+  if (!content) {
+    const seats = await db.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, holder: t.orderSeat.holderName })
+      .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(eq(t.orderSeat.orderId, id));
+    const seatText = seats.map((x) => `${seatLabel(x)}（${x.code}，出席貴賓 ${x.holder ?? ''}）`).join('、');
+    const [lk] = await db.select({ code: t.inviteLink.code }).from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
+    content = confirmMessage(ev.name, o, o.amount, seatText, ev.showAt, lk && (base || process.env.PUBLIC_BASE_URL) ? linkUrl(lk.code, base) : undefined);
+  }
+  const [n] = await db.insert(t.notification).values({ orderId: id, linkId: o.linkId, channel: 'email', template: 'order_confirmed', recipient: email, content }).returning({ id: t.notification.id });
+  await db.insert(t.auditLog).values({ actor, action: 'ticket_resend', target: `order:${id}`, detail: JSON.stringify({ to: email, orderEmail: o.buyerEmail ?? '' }) });
+  return { notificationId: n.id, to: email };
+}
+
 /** 取消訂單（暫存中或待確認到帳）：釋放座位，待確認的訂單會通知消費者 */
 /** 取消劃位：原因必填（記在操作紀錄；待確認的會寫進寄給買方的通知） */
 export async function cancelOrder(db: Db, actor: string, id: number, reason = '') {

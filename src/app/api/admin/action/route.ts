@@ -69,6 +69,7 @@ const action = z.discriminatedUnion('action', [
   }).partial() }),
   z.object({ action: z.literal('order.seen'), id }),
   z.object({ action: z.literal('order.confirm'), id }),
+  z.object({ action: z.literal('order.resendQr'), id, to: z.string().max(120).optional() }),
   z.object({ action: z.literal('order.cancel'), id, reason: z.string({ required_error: '請填寫取消原因' }).trim().min(2, '請填寫取消原因').max(100) }),
   z.object({ action: z.literal('order.delete'), id }),
   z.object({ action: z.literal('notify.save'), values: z.object({
@@ -247,6 +248,12 @@ export async function POST(req: Request) {
         return A.updateInviteLink(db, who, a.id, { ...rest, ...(expiresAt ? { expiresAt: endOfDay(expiresAt) } : {}) });
       }
       case 'order.seen': return A.markOrderSeen(db, a.id);
+      case 'order.resendQr': {
+        const r = await A.resendTicketMail(db, who, a.id, a.to ?? '', originOf(req));
+        await dispatchQueued(db); await dispatchQueued(db);
+        const [n] = await db.select({ status: t.notification.status, error: t.notification.error }).from(t.notification).where(eq(t.notification.id, r.notificationId));
+        return { to: r.to, status: n?.status ?? 'queued', error: n?.error ?? null };
+      }
       case 'order.confirm': { const r = await A.confirmPayment(db, who, a.id, {}, new Date(), originOf(req)); return { ...r, delivery: await deliver(db, { orderId: a.id }) }; }
       case 'vip.create': {
         mustBeAdmin();

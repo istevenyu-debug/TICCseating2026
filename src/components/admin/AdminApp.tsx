@@ -854,7 +854,11 @@ function Links() {
 const ORDER_RANK: Record<string, number> = { pending: 0, held: 1, paid: 2, cancelled: 3, expired: 4 };
 function Orders() {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
-  const list = st.orders.filter((o) => filter === 'all' || o.status === filter)
+  const [q, setQ] = useState('');
+  const k = q.trim().toLowerCase(); const kd = k.replace(/\D/g, '');
+  const hit = (o: Order) => !k || [o.orderNo, o.buyerName, o.buyerEmail, ...o.seats.map((x) => x.holderName ?? ''), ...o.seats.map((x) => x.code)].some((v) => (v ?? '').toLowerCase().includes(k))
+    || (kd.length >= 3 && (o.buyerPhone ?? '').replace(/\D/g, '').includes(kd));
+  const list = st.orders.filter((o) => (filter === 'all' || o.status === filter) && hit(o))
     .sort((a, b) => (ORDER_RANK[a.status] ?? 9) - (ORDER_RANK[b.status] ?? 9) || (a.status === 'pending' ? Date.parse(a.submittedAt ?? a.createdAt) - Date.parse(b.submittedAt ?? b.createdAt) : b.id - a.id));
   const o = st.orders.find((x) => x.id === openId) ?? null;
   const [modal, setModal] = useState<number | null>(() => (st.orders.find((x) => x.id === openId)?.status === 'pending' ? openId : null));
@@ -884,6 +888,7 @@ function Orders() {
             {[['all', '全部'], ['held', '選位中'], ['pending', '待確認劃位'], ['paid', '劃位成功'], ['cancelled', '已取消'], ['expired', '逾時取消']].map(([k, n]) => <option key={k} value={k}>{n}</option>)}
           </select>
         </h2>
+        <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋姓名、持票人、手機、Email、劃位編號" aria-label="搜尋劃位" style={{ width: '100%', maxWidth: 360, marginBottom: 8 }} />
         <div className="tbl"><table>
           <thead><tr><th>劃位編號</th><th>姓名</th><th>座位</th><th>金額</th><th>狀態</th></tr></thead>
           <tbody>
@@ -897,7 +902,7 @@ function Orders() {
                   {x.status === 'held' && x.holdUntil && <><br /><span className="small muted">剩 {mmss(Date.parse(x.holdUntil) - now)}</span></>}</td>
               </tr>
             ))}
-            {!list.length && <tr><td colSpan={5} className="muted">沒有符合的劃位</td></tr>}
+            {!list.length && <tr><td colSpan={5} className="muted">沒有符合的劃位{k ? '（可把上方下拉改成「全部」再找）' : ''}</td></tr>}
           </tbody>
         </table></div>
       </div>
@@ -964,6 +969,31 @@ function ConfirmModal({ o, onClose, onDone }: { o: Order; onClose: () => void; o
 }
 
 
+/** 重寄 QR code：預設寄到訂單 Email；可改填別的信箱（只寄這次，不改訂單資料） */
+function ResendQr({ o }: { o: Order }) {
+  const { st, act, busy, setMsg } = useAdmin();
+  const [to, setTo] = useState(o.buyerEmail);
+  const sent = st.notifications.filter((n) => n.orderId === o.id && n.template === 'order_confirmed' && n.channel === 'email');
+  return (
+    <>
+      <h3>QR code 寄到哪裡</h3>
+      {sent.length ? sent.map((n) => (
+        <div key={n.id} className="small">{tw(n.sentAt ?? n.createdAt)}　<span className="mono">{n.recipient || '（沒有 Email）'}</span>　{nStatus(n.channel, n.status)}</div>
+      )) : <div className="small muted">通知紀錄裡沒有（可能超過最近 300 則）。訂單 Email：<span className="mono">{o.buyerEmail || '—'}</span></div>}
+      {!st.notify.email.ready && <div className="note err" style={{ margin: '6px 0' }}>尚未設定 Gmail，重寄不會真的寄出。</div>}
+      <form className="row" style={{ marginTop: 6 }} onSubmit={async (e) => {
+        e.preventDefault();
+        const r = await act({ action: 'order.resendQr', id: o.id, to: to.trim() }) as { to: string; status: string; error: string | null } | null;
+        if (r) setMsg({ kind: r.status === 'sent' ? 'ok' : 'err', text: r.status === 'sent' ? `已重寄 QR code 到 ${r.to}` : `重寄結果：${N_STATUS[r.status] ?? r.status}${r.error ? `（${r.error}）` : ''}` });
+      }}>
+        <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="寄到的 Email" style={{ flex: 1, minWidth: 180 }} aria-label="重寄 QR 的 Email" />
+        <button className="btn" disabled={busy || !to.trim()}>重寄 QR code</button>
+      </form>
+      <p className="small muted" style={{ margin: '4px 0 0' }}>QR 和原本的一樣（舊信仍有效）。改填別的信箱只寄這一次，不會改訂單資料。</p>
+    </>
+  );
+}
+
 function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   return (
@@ -1006,6 +1036,8 @@ function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
           <ReasonCancel label="取消劃位" go="確定取消並通知他" hint="原因會寫在寄給買方的通知裡。" onGo={async (reason) => { const r = await act({ action: 'order.cancel', id: o.id, reason }) as { delivery?: Delivery } | null; if (r) { const d = deliveryText(r.delivery); setMsg({ kind: d.bad ? 'err' : 'ok', text: `已取消劃位，座位已釋放。${d.text}` }); } }} />
         </div>
       </>}
+
+      {o.status === 'paid' && <ResendQr key={o.id} o={o} />}
 
       {o.status === 'paid' && o.payment && <>
         <h3>到帳紀錄</h3>
