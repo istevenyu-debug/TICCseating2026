@@ -31,7 +31,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; sales: import('@/lib/sales').SalesOverview | null };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; sales: import('@/lib/sales').SalesOverview | null };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -188,6 +188,7 @@ export default function AdminApp() {
         </div>
         <div className="row">
           <a className="btn" href="/" target="_blank" rel="noreferrer">網站首頁</a>
+          <MyPassword />
           <button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button>
         </div>
       </header>
@@ -1886,7 +1887,7 @@ function BankRecon({ rec }: { rec: Rec }) {
   const stOf = (p: Pre) => rec.state.get(p.id)?.state;
   const okTodo = live.filter((p) => stOf(p) === 'ok' && !p.paidOkAt);
   const okDone = live.filter((p) => stOf(p) === 'ok' && p.paidOkAt);
-  const diffGroups = rec.groups.filter((g) => g.deposits.length && g.got !== g.due);
+  const diffGroups = rec.groups.filter((g) => g.deposits.length && g.got !== g.due && g.orders.some((id) => byId.has(id))); // 財務畫面只列看得到的訂單
   const waiting = live.filter((p) => stOf(p) === 'waiting' && !p.paidOkAt);
   const nolast5 = live.filter((p) => stOf(p) === 'nolast5' && !p.paidOkAt);
   const unknown = rec.unknown.map((id) => dep.get(id)!).filter(Boolean);
@@ -1960,9 +1961,9 @@ function BankRecon({ rec }: { rec: Rec }) {
         {sec('nolast5', '🔢 沒填後五碼', nolast5.length, <><div className="small muted" style={{ marginBottom: 4 }}>確認信裡有補填連結；也可以問到後在訂單裡補填。</div>{nolast5.map(pre)}</>)}
         {sec('ignored', '已略過的入帳', ignored.length, ignored.map((d) => <div key={d.id} className="row">{dp(d)}
           <button className="btn small" disabled={busy} onClick={() => act({ action: 'bank.ignore', id: d.id, on: false }, '已復原這筆入帳')}>復原</button></div>))}
-        <div style={{ marginTop: 10 }}>
+        {st.user.role !== 'finance' && <div style={{ marginTop: 10 }}>
           <button className="btn small danger" disabled={busy} onClick={() => confirm2('bankClear', () => act({ action: 'bank.clear' }, '已清除所有匯入的入帳（訂單不受影響）'))}>
-            {sure === 'bankClear' ? '再按一次：清除所有入帳' : '清除所有入帳（傳錯檔案時用）'}</button></div>
+            {sure === 'bankClear' ? '再按一次：清除所有入帳' : '清除所有入帳（傳錯檔案時用）'}</button></div>}
       </>}
     </div>
   );
@@ -2489,11 +2490,13 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
   );
 }
 
-type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[] };
+type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
 
 /** 財務帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
 function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | 'err' | 'warn'; text: string } | null; setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void }) {
   const { act, busy, sure, confirm2 } = useAdmin();
+  const [view, setView] = useState<'inv' | 'rec'>('inv');
+  const unpaid = fin.preorders.filter((p) => p.status !== 'cancelled' && !p.paidOkAt).length;
   const [filter, setFilter] = useState<'todo' | 'issued' | 'void' | 'all'>('todo');
   const [sel, setSel] = useState<Set<number>>(new Set());
   const c = fin.einvoice;
@@ -2516,11 +2519,16 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
           <h1>電子發票（財務）</h1>
           <div className="small muted">{fin.event.name}・{fin.user.displayName}・<span title="系統版本">{APP_VERSION}</span></div>
         </div>
-        <div className="row"><button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button></div>
+        <div className="row"><MyPassword /><button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button></div>
       </header>
+      <nav className="tabs">
+        <button className={view === 'inv' ? 'on' : ''} onClick={() => setView('inv')}>電子發票{todo.length ? <span className="badge">{todo.length}</span> : null}</button>
+        <button className={view === 'rec' ? 'on' : ''} onClick={() => setView('rec')}>對帳（已匯款）{unpaid ? <span className="badge">{unpaid}</span> : null}</button>
+      </nav>
       {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}
         style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
-      <div className="pstack">
+      {view === 'rec' && <FinanceRecon fin={fin} />}
+      {view === 'inv' && <div className="pstack">
         {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>，請聯絡主管。</div>
           : c.mode !== 'prod' ? <div className="note warn">目前是<b>{MODE_LABEL[c.mode]}</b>，開出的<b>不是正式發票</b>。</div>
           : <div className="note ok">正式模式：開出的是真的發票。課稅別：<b>{c.taxType === '3' ? '免稅' : '應稅'}</b></div>}
@@ -2551,8 +2559,91 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
             </tbody>
           </table></div>
         </div>
-      </div>
+      </div>}
     </main>
+  );
+}
+
+/** 財務：對帳（網銀比對＋勾已匯款＋下載） */
+function FinanceRecon({ fin }: { fin: FinState }) {
+  const ctx = useAdmin();
+  const { act, busy } = ctx;
+  const [q, setQ] = useState('');
+  const [only, setOnly] = useState<'all' | 'unpaid' | 'paid'>('all');
+  const st = { ...ctx.st, preorders: fin.preorders, bank: fin.bank, user: fin.user } as State;
+  const rec = reconcile([...fin.preorders.map((p) => ({ id: p.id, no: p.no, name: p.name, amount: p.amount, last5: p.last5, paidAmount: p.paidAmount, paidOk: !!p.paidOkAt, status: p.status, waitlist: p.waitlist })),
+    ...fin.others.map((o) => ({ ...o, name: '' }))], fin.bank);
+  const live = fin.preorders.filter((p) => p.status !== 'cancelled');
+  const k = q.trim().toLowerCase();
+  const list = live.filter((p) => (only === 'all' || (only === 'paid') === !!p.paidOkAt)
+    && (!k || [p.no, p.name, p.phone, p.last5, String(p.seq ?? '')].some((v) => (v ?? '').toLowerCase().includes(k))));
+  const recState: Record<string, string> = { ok: '✅ 對上', diff: '⚠ 金額不符', waiting: '⏳ 未見入帳', nolast5: '🔢 沒填後五碼' };
+  const csv = () => {
+    const rows = [['送單序', '訂單編號', '訂購人', '手機', '方案', '應付', '買方填的匯款金額', '後五碼', '網銀比對', '已匯款', '勾選人', '勾選時間', '發票']];
+    for (const p of live) rows.push([String(p.seq ?? ''), p.no, p.name, p.phone, p.items.map((i) => `${i.name}×${i.qty}`).join('、'), String(p.amount), String(p.paidAmount), p.last5,
+      (rec.state.get(p.id)?.state && recState[rec.state.get(p.id)!.state]) || '', p.paidOkAt ? '是' : '否', p.paidOkBy ?? '', p.paidOkAt ? tw(p.paidOkAt) : '', p.invoiceState ? `${INV_STATUS[p.invoiceState.status] ?? p.invoiceState.status} ${p.invoiceState.invoiceNo}` : '']);
+    const text = '\ufeff' + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
+    a.download = `對帳_${new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })}.csv`; a.click();
+  };
+  return (
+    <AdminCtx.Provider value={{ ...ctx, st }}>
+      <div className="pstack">
+        <div className="note">對帳範圍：<b>{fin.combos.join('、') || '（主管尚未開放）'}</b>。勾「已匯款」只是記錄（誰、何時），<b>不會寄信、不會開發票</b>；發劃位連結由主管處理。</div>
+        <BankRecon rec={rec} />
+        <div className="card">
+          <h2>訂單
+            <select value={only} style={{ width: 'auto' }} onChange={(e) => setOnly(e.target.value as typeof only)}>
+              <option value="all">全部（{live.length}）</option><option value="unpaid">未勾已匯款（{live.filter((p) => !p.paidOkAt).length}）</option><option value="paid">已勾已匯款</option>
+            </select>
+          </h2>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <input type="search" value={q} placeholder="搜尋姓名、手機、後五碼、訂單編號" style={{ flex: 1, minWidth: 180, maxWidth: 320 }} onChange={(e) => setQ(e.target.value)} />
+            <button className="btn small" onClick={csv}>下載 Excel（CSV）</button>
+          </div>
+          <div className="tbl"><table>
+            <thead><tr><th>訂購人</th><th>應付／後五碼</th><th>網銀</th><th>已匯款</th></tr></thead>
+            <tbody>
+              {list.map((p) => (
+                <tr key={p.id}>
+                  <td><b>{p.name}</b><div className="mono small muted">#{p.seq ?? '—'}・{p.no}・{p.phone}</div><div className="small">{p.items.map((i) => `${i.name}×${i.qty}`).join('、')}</div></td>
+                  <td className="mono">{money(p.amount)}{p.paidAmount !== p.amount && <div className="small err-text">填 {money(p.paidAmount)}</div>}<div className="small">{p.last5 || '—'}</div></td>
+                  <td className="small" style={{ whiteSpace: 'nowrap' }}>{recState[rec.state.get(p.id)?.state ?? ''] ?? '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}><label className="check"><input type="checkbox" disabled={busy} checked={!!p.paidOkAt} onChange={(e) => act({ action: 'preorder.check', id: p.id, paid: e.target.checked }, e.target.checked ? `已勾 ${p.name} 已匯款` : `已取消 ${p.name} 的已匯款`)} /> 已匯款</label>
+                    {p.paidOkAt && <div className="small muted">{p.paidOkBy}・{tw(p.paidOkAt)}</div>}</td>
+                </tr>
+              ))}
+              {!list.length && <tr><td colSpan={4} className="muted">沒有訂單</td></tr>}
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+    </AdminCtx.Provider>
+  );
+}
+
+/** 右上角「修改密碼」：每個帳號都有 */
+function MyPassword() {
+  const { act, busy } = useAdmin();
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ old: '', p: '', p2: '' });
+  if (!open) return <button className="btn" onClick={() => setOpen(true)}>修改密碼</button>;
+  const bad = f.p && f.p.length < 10 ? '新密碼至少 10 個字元' : f.p2 && f.p !== f.p2 ? '兩次輸入的新密碼不一樣' : '';
+  return (
+    <div className="card" style={{ position: 'fixed', top: 70, right: 16, zIndex: 60, width: 'min(340px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)' }}>
+      <h3 style={{ marginTop: 0 }}>修改密碼</h3>
+      <form onSubmit={async (e) => { e.preventDefault(); if (await act({ action: 'me.password', old: f.old, password: f.p }, '已修改密碼，下次請用新密碼登入')) { setOpen(false); setF({ old: '', p: '', p2: '' }); } }}>
+        <label className="f">目前的密碼<input type="password" value={f.old} autoComplete="current-password" onChange={(e) => setF({ ...f, old: e.target.value })} /></label>
+        <label className="f" style={{ marginTop: 6 }}>新密碼（至少 10 字）<input type="password" value={f.p} autoComplete="new-password" onChange={(e) => setF({ ...f, p: e.target.value })} /></label>
+        <label className="f" style={{ marginTop: 6 }}>再輸入一次新密碼<input type="password" value={f.p2} autoComplete="new-password" onChange={(e) => setF({ ...f, p2: e.target.value })} /></label>
+        {bad && <div className="small err-text" style={{ marginTop: 4 }}>{bad}</div>}
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn pri" disabled={busy || !f.old || !!bad || f.p.length < 10 || f.p !== f.p2}>儲存</button>
+          <button type="button" className="btn" onClick={() => { setOpen(false); setF({ old: '', p: '', p2: '' }); }}>取消</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -2581,43 +2672,55 @@ const ROLE_NAME: Record<string, string> = { admin: '主管／網管（全部）'
 /** 首頁（主管）：後台帳號 */
 function AccountsCard() {
   const { st, act, busy, setMsg } = useAdmin();
-  const [f, setF] = useState({ username: '', displayName: '', password: '', role: 'finance' });
+  const [f, setF] = useState({ username: '', displayName: '', role: 'finance' });
   const [pw, setPw] = useState<{ id: number; v: string } | null>(null);
+  const [link, setLink] = useState<{ id: number; url: string; exp: string } | null>(null);
+  const showLink = (id: number, r: { token: string; expiresAt: string } | null) => { if (r) setLink({ id, url: `${location.origin}/admin/setup/${r.token}`, exp: r.expiresAt }); };
+  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); setMsg({ kind: 'ok', text: '已複製，請私下傳給本人（1 小時內有效）' }); } catch { setMsg({ kind: 'warn', text: '無法自動複製，請長按連結複製' }); } };
   return (
     <div className="card" style={{ gridColumn: '1 / -1' }}>
       <h2>後台帳號</h2>
-      <div className="tbl"><table style={{ width: 'auto' }}>
-        <thead><tr><th>帳號</th><th>名稱</th><th>角色</th><th>狀態</th><th></th></tr></thead>
-        <tbody>{st.users.map((u) => (
-          <tr key={u.id} className={u.active ? '' : 'muted'}>
-            <td className="mono">{u.username}{u.username === st.user.username && <span className="small muted">（您）</span>}</td>
-            <td>{u.displayName}</td>
-            <td><select value={u.role} disabled={busy || u.username === st.user.username} style={{ width: 'auto' }} onChange={(e) => act({ action: 'user.update', id: u.id, role: e.target.value }, '已變更角色')}>
-              {Object.entries(ROLE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></td>
-            <td>{u.active ? '啟用' : '已停用'}</td>
-            <td className="row" style={{ gap: 6 }}>
-              {u.username !== st.user.username && <button className="btn small" disabled={busy} onClick={() => act({ action: 'user.update', id: u.id, active: !u.active }, u.active ? '已停用' : '已啟用')}>{u.active ? '停用' : '啟用'}</button>}
-              {pw?.id === u.id
-                ? <><input type="password" value={pw.v} placeholder="新密碼（至少 10 字）" autoComplete="new-password" style={{ width: 170 }} onChange={(e) => setPw({ id: u.id, v: e.target.value })} />
-                    <button className="btn small pri" disabled={busy || pw.v.length < 10} onClick={async () => { if (await act({ action: 'user.update', id: u.id, password: pw.v }, '已重設密碼')) setPw(null); }}>儲存</button>
-                    <button className="btn small" onClick={() => setPw(null)}>取消</button></>
-                : <button className="btn small" onClick={() => setPw({ id: u.id, v: '' })}>重設密碼</button>}
-            </td>
-          </tr>
-        ))}</tbody>
-      </table></div>
+      {st.users.map((u) => (
+        <div key={u.id} style={{ borderTop: '1px solid var(--line)', padding: '8px 0', opacity: u.active ? 1 : 0.55 }}>
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <b className="mono">{u.username}</b><span>{u.displayName}</span>
+            {u.username === st.user.username && <span className="small muted">（您）</span>}
+            {!u.active && <span className="pill p-cancelled">已停用</span>}
+            <select value={u.role} disabled={busy || u.username === st.user.username} style={{ width: 'auto' }} onChange={(e) => act({ action: 'user.update', id: u.id, role: e.target.value }, '已變更角色')}>
+              {Object.entries(ROLE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select>
+          </div>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            {u.username !== st.user.username && u.active && <button className="btn small" disabled={busy} onClick={async () => showLink(u.id, await act({ action: 'user.setupLink', id: u.id }) as { token: string; expiresAt: string } | null)}>{st.setups[u.id] ? '重寄設定連結' : '產生設定連結'}</button>}
+            {u.username !== st.user.username && <button className="btn small" disabled={busy} onClick={() => act({ action: 'user.update', id: u.id, active: !u.active }, u.active ? '已停用' : '已啟用')}>{u.active ? '停用' : '啟用'}</button>}
+            {pw?.id === u.id
+              ? <><input type="password" value={pw.v} placeholder="新密碼（至少 10 字）" autoComplete="new-password" style={{ width: 170 }} onChange={(e) => setPw({ id: u.id, v: e.target.value })} />
+                  <button className="btn small pri" disabled={busy || pw.v.length < 10} onClick={async () => { if (await act({ action: 'user.update', id: u.id, password: pw.v }, '已重設密碼')) setPw(null); }}>儲存</button>
+                  <button className="btn small" onClick={() => setPw(null)}>取消</button></>
+              : <button className="btn small" onClick={() => setPw({ id: u.id, v: '' })}>直接設密碼</button>}
+            {st.setups[u.id] && <span className="small muted">設定連結有效到 {tw(st.setups[u.id])}</span>}
+          </div>
+        </div>
+      ))}
+      {link && (
+        <div className="note ok" style={{ marginTop: 8, wordBreak: 'break-all' }}>
+          <b>{st.users.find((u) => u.id === link.id)?.username}</b> 的設定連結（{tw(link.exp)} 前有效，只能用一次）：
+          <div className="mono small" style={{ margin: '4px 0' }}>{link.url}</div>
+          <div className="row"><button className="btn small pri" onClick={() => copy(link.url)}>複製連結</button><button className="btn small" onClick={() => setLink(null)}>收起</button></div>
+          <div className="small">請私下傳給本人（LINE 私訊或 Email），不要貼到群組。本人打開後自己設定密碼。</div>
+        </div>
+      )}
       <h3>新增帳號</h3>
       <form className="fields" onSubmit={async (e) => {
         e.preventDefault();
-        if (await act({ action: 'user.create', ...f })) { setMsg({ kind: 'ok', text: `已新增帳號 ${f.username}，請把帳號密碼私下交給本人` }); setF({ username: '', displayName: '', password: '', role: 'finance' }); }
+        const r = await act({ action: 'user.create', ...f }) as { id: number; setup: { token: string; expiresAt: string } | null } | null;
+        if (r) { showLink(r.id, r.setup); setMsg({ kind: 'ok', text: `已新增帳號 ${f.username}，請複製設定連結傳給本人` }); setF({ username: '', displayName: '', role: 'finance' }); }
       }}>
         <label className="f">帳號（英數）<input value={f.username} autoComplete="off" onChange={(e) => setF({ ...f, username: e.target.value })} /></label>
         <label className="f">名稱<input value={f.displayName} placeholder="例：會計 王小姐" onChange={(e) => setF({ ...f, displayName: e.target.value })} /></label>
-        <label className="f">密碼（至少 10 字）<input type="password" value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} /></label>
         <label className="f">角色<select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{Object.entries(ROLE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></label>
-        <button className="btn pri" disabled={busy || !f.username.trim() || f.password.length < 10}>新增</button>
+        <button className="btn pri" disabled={busy || !f.username.trim()}>新增並產生設定連結</button>
       </form>
-      <p className="small muted" style={{ marginBottom: 0 }}>每人一個帳號，不要共用。停用後立刻不能再操作；操作紀錄會記下是哪個帳號做的。</p>
+      <p className="small muted" style={{ marginBottom: 0 }}>新增後會產生一條設定連結（1 小時有效、只能用一次），本人打開自己設密碼。每人一個帳號，不要共用；停用後立刻不能再操作；操作紀錄會記下是哪個帳號做的。每個人都可以在右上角「修改密碼」。</p>
     </div>
   );
 }

@@ -9,6 +9,8 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { currentEvent } from './admin';
 import { listInvoices, publicEinvConfig } from './einvoice';
+import { listPreorders } from './preorder';
+import { listBank } from './bank';
 
 const KEY = 'finance.combos';
 
@@ -42,7 +44,16 @@ export async function assertFinanceInvoices(db: Db, ids: number[]) {
   }
 }
 
-/** 財務登入後看到的資料：只有可開方案的發票 */
+/** 這幾張訂單（認購單）財務都能對帳嗎？ */
+export async function assertFinancePreorders(db: Db, ids: number[]) {
+  const allowed = await getFinanceCombos(db);
+  const rows = ids.length ? await db.select({ id: t.preorder.id, items: t.preorder.items }).from(t.preorder).where(inArray(t.preorder.id, ids)) : [];
+  if (rows.length !== new Set(ids).size || rows.some((r) => !itemsOk(r.items, allowed))) {
+    throw new BookingError('FORBIDDEN', '財務帳號只能處理後台開放的方案的訂單');
+  }
+}
+
+/** 財務登入後看到的資料：可開方案的發票、訂單（對帳）、網銀入帳 */
 export async function financeState(db: Db, user: { username: string; displayName: string; role: string }) {
   const allowed = await getFinanceCombos(db);
   const ev = await currentEvent(db);
@@ -50,10 +61,15 @@ export async function financeState(db: Db, user: { username: string; displayName
   const okPo = new Set(pos.filter((p) => itemsOk(p.items, allowed)).map((p) => p.id));
   const cs = await db.select({ id: t.combo.id, name: t.combo.name }).from(t.combo).where(eq(t.combo.eventId, ev.id));
   const e = await publicEinvConfig(db);
+  const all = await listPreorders(db);
   return {
     finance: true as const, user, event: { name: ev.name, showAt: ev.showAt.toISOString() },
     einvoice: { enabled: e.enabled, mode: e.mode, timing: e.timing, taxType: e.taxType },
     combos: cs.filter((c) => allowed.includes(c.id)).map((c) => c.name),
     invoices: (await listInvoices(db)).filter((x) => x.preorderId !== null && okPo.has(x.preorderId)),
+    preorders: all.filter((p) => okPo.has(p.id)).map((p) => ({ ...p, linkCode: null })), // 不給劃位連結代碼
+    // 其他方案的訂單只給比對用的欄位（沒有姓名），讓網銀入帳能正確歸屬、不會誤列成「找不到訂單」
+    others: all.filter((p) => !okPo.has(p.id)).map((p) => ({ id: p.id, no: p.no, amount: p.amount, last5: p.last5, paidAmount: p.paidAmount, paidOk: !!p.paidOkAt, status: p.status, waitlist: p.waitlist })),
+    bank: await listBank(db),
   };
 }
