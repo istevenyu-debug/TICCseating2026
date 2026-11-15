@@ -274,3 +274,17 @@ ol.flow li.on { font-weight: 700; }
 .join .check input { width: 20px; height: 20px; }
 select.need { border-color: var(--red); }
 .linkbtn { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+
+/* ---------- 入場名單（斷線備用） ---------- */
+.cl { color: #18213a; background: #fff; padding: 4mm; }
+.cl-h { font-size: 15pt; margin: 0 0 2mm; }
+.cl-sub { font-size: 9pt; color: #444; margin-bottom: 1.5mm; }
+.cl-t { width: 100%; border-collapse: collapse; font-size: 10pt; margin-top: 2mm; }
+.cl-t th, .cl-t td { border: 1px solid #999; padding: 1.2mm 1.6mm; text-align: left; vertical-align: top; }
+.cl-t thead { display: table-header-group; }
+.cl-t th { background: #eef1f6; font-size: 9pt; }
+.cl-t tr { break-inside: avoid; }
+.cl-box { width: 22mm; font-size: 12pt; white-space: nowrap; }
+.cl-done td { color: #888; }
+.cl-done .cl-box { font-size: 8pt; }
+.cl-zone { font-size: 8pt; color: #666; }

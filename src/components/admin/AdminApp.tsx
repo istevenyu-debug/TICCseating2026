@@ -2296,6 +2296,17 @@ function Gates() {
           )) : <p className="small muted" style={{ margin: 0 }}>尚無入場紀錄</p>}
         </div></div>
       </div>
+      <div className="card">
+        <h2>斷線備案：入場名單 <span className="small muted">網站連不上時，門口改用紙本人工核對</span></h2>
+        <div className="row">
+          <a className="btn pri small" href="/admin/checkin-list?sort=name" target="_blank" rel="noreferrer">依姓名列印</a>
+          <a className="btn small" href="/admin/checkin-list?sort=seat" target="_blank" rel="noreferrer">依座位列印</a>
+        </div>
+        <p className="small muted" style={{ marginBottom: 0 }}>
+          所有已確認的票：持票人、證後 4 碼、座位、序號、購票人；列印時已入場的會標出時間與門口。
+          建議活動當天開場前最後一刻再印（每門一份），內含個資，活動後收回銷毀。紙本無法防止同一張票在不同門重複入場。
+        </p>
+      </div>
     </div>
   );
 }

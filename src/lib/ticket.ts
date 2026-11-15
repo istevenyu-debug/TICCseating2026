@@ -165,3 +165,32 @@ export async function undoCheckin(db: Db, actor: string, id: number) {
   await db.insert(t.auditLog).values({ actor, action: 'checkin_undo', target: `ticket:${c.serial}`, detail: JSON.stringify(c) });
   return { serial: c.serial };
 }
+
+/* ---------- 斷線備案：可列印入場名單 ---------- */
+
+const byStroke = new Intl.Collator('zh-Hant-TW-u-co-stroke');
+
+/**
+ * 所有已確認（paid）訂單的每一張票，給斷線時人工核對用。
+ * sort：name＝持票人姓名（筆畫）；seat＝座位。列印時已入場的票標出時間與門口。
+ */
+export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name') {
+  const ev = await currentEvent(db);
+  const paid = await db.select({ id: t.orders.id, buyer: t.orders.buyerName }).from(t.orders)
+    .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
+  const { event, tickets } = await ticketData(db, paid.map((o) => o.id));
+  const used = await db.select({ serial: t.checkin.serial, at: t.checkin.at, gate: t.gate.name }).from(t.checkin)
+    .leftJoin(t.gate, eq(t.gate.id, t.checkin.gateId)).where(eq(t.checkin.eventId, ev.id));
+  const seatKey = (code: string) => code.split('-').map((p) => p.replace(/\d+/g, (d) => d.padStart(4, '0'))).join('-');
+  const rows = tickets.map((x) => {
+    const u = used.find((c) => c.serial === x.serial);
+    return {
+      serial: x.serial, holderName: x.holderName || '（未填）', holderId4: x.holderId4, label: x.label, code: x.code, zoneName: x.zoneName,
+      buyerName: paid.find((o) => o.id === x.orderId)?.buyer ?? '', entered: u ? { at: u.at.toISOString(), gate: u.gate ?? '後台' } : null,
+    };
+  });
+  rows.sort(sort === 'seat'
+    ? (a, b) => seatKey(a.code).localeCompare(seatKey(b.code)) || a.serial.localeCompare(b.serial)
+    : (a, b) => byStroke.compare(a.holderName, b.holderName) || a.serial.localeCompare(b.serial));
+  return { event, rows, entered: rows.filter((r) => r.entered).length };
+}

@@ -4,7 +4,7 @@ import { createEvent, createLink, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import * as A from '@/lib/admin';
 import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
-import { checkinSummary, createGates, listGates, qrSecret, qrValue, scan, searchTickets, sideOf, undoCheckin, updateGate } from '@/lib/ticket';
+import { checkinList, checkinSummary, createGates, listGates, qrSecret, qrValue, scan, searchTickets, sideOf, undoCheckin, updateGate } from '@/lib/ticket';
 
 const T0 = new Date('2026-11-15T10:00:00+08:00');
 let db: Db; let tok: Record<string, string>; let orderId: number;
@@ -90,5 +90,21 @@ describe('QR 入場', () => {
     expect(sideOf('03-15-L1')).toBe('左側門');
     expect(sideOf('03-02-C0')).toBe('右側門');
     expect(sideOf('WC-H12-R2')).toBe('右側門');
+  });
+});
+
+describe('斷線備案：入場名單', () => {
+  it('列出所有已確認的票，標出已入場；可依姓名或座位排序；未確認的訂單不列', async () => {
+    await paidOrder('AAA111', ['3-5'], '丁一');
+    const r0 = await checkinList(db);
+    expect(r0.rows.map((r) => r.serial)).toEqual(['T1-00001-01', 'T1-00001-02']);
+    await scan(db, tok['右1'], { serial: 'T1-00001-02' });
+    const r = await checkinList(db, 'name');
+    expect(r.entered).toBe(1);
+    expect(r.rows.map((x) => x.holderName)).toEqual(['王大明', '王大明2']);
+    expect(r.rows[1]).toMatchObject({ holderId4: 'A123', buyerName: '王大明', entered: { gate: '右1' } });
+    expect(r.rows[0].entered).toBeNull();
+    const s = await checkinList(db, 'seat');
+    expect(s.rows.map((x) => x.serial)).toEqual(['T1-00001-01', 'T1-00001-02']);
   });
 });
