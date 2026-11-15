@@ -615,6 +615,11 @@ describe('三樓座位用途：贈席只在左2、右2；一鍵設定；志工�
     // 年代銀區尚餘：中間 510 席 − 名單上已售的銀區張數（退票、非銀區不算）
     await uploadEra(db, '網管', [{ orderNo: 'E1', qty: 6, status: 'sold' }, { orderNo: 'E2', qty: 2, status: 'refunded' }, { orderNo: 'E3', qty: 0, otherQty: 3, otherNote: '4樓 3 張', status: 'sold' }]);
     expect(await eraSales(db, ev.id)).toMatchObject({ sold: 6, cap: 510, left: 504 });
+    // 有逐張座位明細時照座位算：單買、其他票價也算；退票不算
+    const midIds = mid.slice(0, 4).map((x) => x.id.split('-'));
+    const tk = (i: number, price: number, status: 'sold' | 'refunded' = 'sold') => ({ ticketNo: `T${i}`, orderNo: `S${i}`, floor: '3F', row: midIds[i][0], seat: midIds[i][1], price, status, soldAt: null });
+    await uploadEra(db, '網管', [{ orderNo: 'E1', qty: 6, status: 'sold' }], new Date(), '', [tk(0, 3000), tk(1, 3600), tk(2, 1800), tk(3, 3000, 'refunded')]);
+    expect(await eraSales(db, ev.id)).toMatchObject({ sold: 3, cap: 510, left: 507 });
   });
 });
 

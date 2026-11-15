@@ -388,10 +388,13 @@ export async function nextRound(db: Db, actor: string) {
 export async function eraSales(db: Db | Tx, eventId: number) {
   const [x] = await db.select({ sold: sql<number>`coalesce(sum(${t.joinEra.qty}) filter (where ${t.joinEra.status} = 'sold'), 0)::int`, at: sql<Date | null>`max(${t.joinEra.updatedAt})` })
     .from(t.joinEra).where(eq(t.joinEra.eventId, eventId));
-  const [c] = await db.select({ n: sql<number>`count(*)::int` }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+  const capSeats = await db.select({ id: t.eventSeat.seatId }).from(t.eventSeat).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
     .where(and(eq(t.eventSeat.eventId, eventId), eq(t.seatUsage.code, 'era-sold')));
   const at = x.at ? new Date(x.at).toISOString() : null;
-  return { sold: x.sold, cap: c.n, left: Math.max(0, c.n - x.sold), at };
+  // 有逐張明細（含座位）時，照座位算：年代賣出的每一張都算（不管票價、單買或揪團）
+  const soldIds = new Set(await eraSoldSeats(db, eventId));
+  const sold = soldIds.size ? capSeats.filter((c) => soldIds.has(c.id)).length : x.sold;
+  return { sold, cap: capSeats.length, left: Math.max(0, capSeats.length - sold), at };
 }
 
 /** 年代售出明細裡三樓已售的座位 id（排-號，例 13-33），給三樓座位圖標示 */
