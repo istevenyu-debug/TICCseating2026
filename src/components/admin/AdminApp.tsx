@@ -31,7 +31,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; sales: import('@/lib/sales').SalesOverview | null };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; sales: import('@/lib/sales').SalesOverview | null };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -116,6 +116,7 @@ const useAdmin = () => useContext(AdminCtx)!;
 
 export default function AdminApp() {
   const [st, setSt] = useState<State | null>(null);
+  const [fin, setFin] = useState<FinState | null>(null); // 財務帳號：只看發票
   const [empty, setEmpty] = useState(false); // 全新的系統（雲端剛建好）：還沒有場次，先上傳備份
   const [tab, setTab] = useState<Tab>('home');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'warn'; text: string } | null>(null);
@@ -130,7 +131,9 @@ export default function AdminApp() {
     const r = await fetch('/api/admin/state', { cache: 'no-store' }).then((x) => x.json()).catch(() => null);
     if (!r) { setMsg({ kind: 'err', text: '網路連線異常，請稍後再試。' }); return; }
     if (!r.ok) { if (r.code === 'UNAUTHORIZED') location.reload(); else if (r.code === 'NO_EVENT') setEmpty(true); else setMsg({ kind: 'err', text: r.message }); return; }
-    setEmpty(false); setSt(r.data);
+    setEmpty(false);
+    if (r.data?.finance) { setFin(r.data); return; }
+    setSt(r.data);
   }, []);
 
   useEffect(() => {
@@ -159,6 +162,11 @@ export default function AdminApp() {
     return r.data ?? true;
   }
   const confirm2 = (key: string, fn: () => void) => { if (sure === key) fn(); else setSure(key); };
+
+  if (fin) {
+    const fctx = { st: { einvoice: fin.einvoice, invoices: fin.invoices } as unknown as State, act, busy, sure, confirm2, go, setMsg, zoneById: {}, usageById: {}, now: Date.now(), filter, setFilter, openId, setOpenId, openOrder: () => undefined } as Ctx;
+    return <AdminCtx.Provider value={fctx}><FinanceApp fin={fin} msg={msg} setMsg={setMsg} /></AdminCtx.Provider>;
+  }
 
   if (!st && empty) return <main className="wrap" style={{ maxWidth: 640 }}><EmptyRestore onDone={load} /></main>;
   if (!st) return <main className="wrap"><div className="card muted">後台載入中…</div></main>;
@@ -384,6 +392,7 @@ function Home() {
       {st.dirty && <div className="note warn" style={{ gridColumn: '1 / -1' }}>開放設定有尚未發布的變更，消費者目前還看不到。請到「價格設定」的「四、開放劃位」按「發布到購票頁」。</div>}
       <SalesCard s={st.sales} act={act} admin={st.user.role === 'admin'} busy={busy} />
       {st.user.role === 'admin' && <UpdateCard />}
+      {st.user.role === 'admin' && <AccountsCard />}
       <BackupCard />
       <AuditCard />
       <ResetCard />
@@ -2480,6 +2489,139 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
   );
 }
 
+type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[] };
+
+/** 財務帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
+function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | 'err' | 'warn'; text: string } | null; setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void }) {
+  const { act, busy, sure, confirm2 } = useAdmin();
+  const [filter, setFilter] = useState<'todo' | 'issued' | 'void' | 'all'>('todo');
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const c = fin.einvoice;
+  const all = fin.invoices;
+  const list = all.filter((x) => filter === 'all' || (filter === 'todo' ? x.status === 'pending' || x.status === 'failed' : x.status === filter));
+  const todo = all.filter((x) => x.status === 'pending' || x.status === 'failed');
+  const flagged = all.filter((x) => sel.has(x.id) && x.checks.length);
+  const toggle = (id: number) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const issue = async (force: boolean) => {
+    const r = await act({ action: 'invoice.issue', ids: [...sel], force }) as { orderNo: string; status: string; error: string | null }[] | null;
+    if (!r) return;
+    const bad = r.filter((x) => x.status !== 'issued');
+    setMsg({ kind: bad.length ? 'err' : 'ok', text: `已開立 ${r.length - bad.length} 張${bad.length ? `；${bad.length} 張沒有開出：${bad.map((x) => `${x.orderNo} ${x.error ?? ''}`).join('；')}` : ''}` });
+    setSel(new Set());
+  };
+  return (
+    <main className="wrap">
+      <header className="top">
+        <div>
+          <h1>電子發票（財務）</h1>
+          <div className="small muted">{fin.event.name}・{fin.user.displayName}・<span title="系統版本">{APP_VERSION}</span></div>
+        </div>
+        <div className="row"><button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button></div>
+      </header>
+      {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}
+        style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
+      <div className="pstack">
+        {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>，請聯絡主管。</div>
+          : c.mode !== 'prod' ? <div className="note warn">目前是<b>{MODE_LABEL[c.mode]}</b>，開出的<b>不是正式發票</b>。</div>
+          : <div className="note ok">正式模式：開出的是真的發票。課稅別：<b>{c.taxType === '3' ? '免稅' : '應稅'}</b></div>}
+        <div className="card">
+          <h2>發票
+            <select value={filter} style={{ width: 'auto' }} onChange={(e) => { setFilter(e.target.value as typeof filter); setSel(new Set()); }}>
+              <option value="todo">待開立（{todo.length}）</option><option value="issued">已開立</option><option value="void">已作廢</option><option value="all">全部</option>
+            </select>
+          </h2>
+          <p className="small muted" style={{ margin: '0 0 8px' }}>
+            可處理的方案：<b>{fin.combos.join('、') || '（主管尚未開放）'}</b>。一筆訂單開一張，<b>發票日期是開立當天</b>。紅底＝電腦核對有異常，請確認後再開。
+          </p>
+          {filter === 'todo' && todo.length > 0 && (
+            <div className="row" style={{ marginBottom: 8 }}>
+              <button className="btn small" onClick={() => setSel(new Set(todo.filter((x) => !x.checks.length).map((x) => x.id)))}>選取全部無異常的（{todo.filter((x) => !x.checks.length).length}）</button>
+              <button className="btn small" disabled={!sel.size} onClick={() => setSel(new Set())}>清除選取</button>
+              {flagged.length === 0
+                ? <button className="btn pri small" disabled={busy || !sel.size} onClick={() => issue(false)}>開立選取的 {sel.size} 張</button>
+                : <button className="btn danger small" disabled={busy} onClick={() => confirm2('inv-force', () => issue(true))}>
+                    {sure === 'inv-force' ? `再按一次：已人工核對，開立 ${sel.size} 張` : `選取中有 ${flagged.length} 張有異常，確認後開立`}</button>}
+            </div>
+          )}
+          <div className="tbl"><table>
+            <thead><tr><th></th><th>訂單</th><th>訂購人</th><th>發票對象</th><th>金額</th><th>狀態</th><th></th></tr></thead>
+            <tbody>
+              {list.map((x) => <InvoiceRow key={x.id} x={x} on={sel.has(x.id)} toggle={() => toggle(x.id)} />)}
+              {!list.length && <tr><td colSpan={7} className="muted">沒有發票</td></tr>}
+            </tbody>
+          </table></div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/** 十、電子發票（主管）：財務帳號可開哪些方案 */
+function FinanceCombosCard() {
+  const { st, act, busy } = useAdmin();
+  const combos = st.combos.filter((x) => !x.isSingle);
+  const [ids, setIds] = useState<number[]>(st.financeCombos);
+  const dirty = [...ids].sort().join() !== [...st.financeCombos].sort().join();
+  return (
+    <div className="card">
+      <h2>財務帳號可開的方案</h2>
+      <p className="small muted" style={{ marginTop: 0 }}>財務登入只看得到、只能開（含作廢）勾選方案的發票；訂單裡有沒勾的方案或單張票就看不到。帳號在「首頁 → 後台帳號」新增，角色選「財務」。</p>
+      {combos.map((x) => (
+        <label key={x.id} className="check" style={{ display: 'block' }}>
+          <input type="checkbox" checked={ids.includes(x.id)} onChange={(e) => setIds(e.target.checked ? [...ids, x.id] : ids.filter((i) => i !== x.id))} /> {x.name}{x.hidden ? '（隱藏）' : ''}
+        </label>
+      ))}
+      <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy || !dirty} onClick={() => act({ action: 'finance.combos', ids }, '已儲存財務可開的方案')}>儲存</button>
+    </div>
+  );
+}
+
+const ROLE_NAME: Record<string, string> = { admin: '主管／網管（全部）', staff: '工作人員（不含發票、招待）', finance: '財務（只開發票）' };
+
+/** 首頁（主管）：後台帳號 */
+function AccountsCard() {
+  const { st, act, busy, setMsg } = useAdmin();
+  const [f, setF] = useState({ username: '', displayName: '', password: '', role: 'finance' });
+  const [pw, setPw] = useState<{ id: number; v: string } | null>(null);
+  return (
+    <div className="card" style={{ gridColumn: '1 / -1' }}>
+      <h2>後台帳號</h2>
+      <div className="tbl"><table style={{ width: 'auto' }}>
+        <thead><tr><th>帳號</th><th>名稱</th><th>角色</th><th>狀態</th><th></th></tr></thead>
+        <tbody>{st.users.map((u) => (
+          <tr key={u.id} className={u.active ? '' : 'muted'}>
+            <td className="mono">{u.username}{u.username === st.user.username && <span className="small muted">（您）</span>}</td>
+            <td>{u.displayName}</td>
+            <td><select value={u.role} disabled={busy || u.username === st.user.username} style={{ width: 'auto' }} onChange={(e) => act({ action: 'user.update', id: u.id, role: e.target.value }, '已變更角色')}>
+              {Object.entries(ROLE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></td>
+            <td>{u.active ? '啟用' : '已停用'}</td>
+            <td className="row" style={{ gap: 6 }}>
+              {u.username !== st.user.username && <button className="btn small" disabled={busy} onClick={() => act({ action: 'user.update', id: u.id, active: !u.active }, u.active ? '已停用' : '已啟用')}>{u.active ? '停用' : '啟用'}</button>}
+              {pw?.id === u.id
+                ? <><input type="password" value={pw.v} placeholder="新密碼（至少 10 字）" autoComplete="new-password" style={{ width: 170 }} onChange={(e) => setPw({ id: u.id, v: e.target.value })} />
+                    <button className="btn small pri" disabled={busy || pw.v.length < 10} onClick={async () => { if (await act({ action: 'user.update', id: u.id, password: pw.v }, '已重設密碼')) setPw(null); }}>儲存</button>
+                    <button className="btn small" onClick={() => setPw(null)}>取消</button></>
+                : <button className="btn small" onClick={() => setPw({ id: u.id, v: '' })}>重設密碼</button>}
+            </td>
+          </tr>
+        ))}</tbody>
+      </table></div>
+      <h3>新增帳號</h3>
+      <form className="fields" onSubmit={async (e) => {
+        e.preventDefault();
+        if (await act({ action: 'user.create', ...f })) { setMsg({ kind: 'ok', text: `已新增帳號 ${f.username}，請把帳號密碼私下交給本人` }); setF({ username: '', displayName: '', password: '', role: 'finance' }); }
+      }}>
+        <label className="f">帳號（英數）<input value={f.username} autoComplete="off" onChange={(e) => setF({ ...f, username: e.target.value })} /></label>
+        <label className="f">名稱<input value={f.displayName} placeholder="例：會計 王小姐" onChange={(e) => setF({ ...f, displayName: e.target.value })} /></label>
+        <label className="f">密碼（至少 10 字）<input type="password" value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} /></label>
+        <label className="f">角色<select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{Object.entries(ROLE_NAME).map(([k, n]) => <option key={k} value={k}>{n}</option>)}</select></label>
+        <button className="btn pri" disabled={busy || !f.username.trim() || f.password.length < 10}>新增</button>
+      </form>
+      <p className="small muted" style={{ marginBottom: 0 }}>每人一個帳號，不要共用。停用後立刻不能再操作；操作紀錄會記下是哪個帳號做的。</p>
+    </div>
+  );
+}
+
 function Invoices() {
   const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
   const [filter, setFilter] = useState<'todo' | 'issued' | 'void' | 'all'>('todo');
@@ -2534,7 +2676,7 @@ function Invoices() {
             </tbody>
           </table></div>
         </div>
-        <div className="side"><EinvSettings /></div>
+        <div className="side"><EinvSettings />{st.user.role === 'admin' && <FinanceCombosCard />}</div>
       </div>
     </div>
   );

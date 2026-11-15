@@ -3,6 +3,8 @@ import { createCardLink, updateCardLink } from '@/lib/cardLink';
 import { frameComboGroup, unframeComboGroup } from '@/lib/floor';
 import { z } from 'zod';
 import { handle, originOf, readJson } from '@/lib/api';
+import { assertFinanceInvoices, setFinanceCombos } from '@/lib/finance';
+import { createUser, updateUser } from '@/lib/accounts';
 import { requireAdmin } from '@/lib/adminApi';
 import { BookingError } from '@/lib/booking';
 import * as A from '@/lib/admin';
@@ -139,6 +141,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('app.update') }),
   z.object({ action: z.literal('preorder.check'), id, paid: z.boolean().optional(), line: z.array(z.string().max(20)).max(10).optional() }),
   z.object({ action: z.literal('invoice.print'), id }),
+  z.object({ action: z.literal('finance.combos'), ids: z.array(id).max(200) }),
+  z.object({ action: z.literal('user.create'), username: z.string().max(30), displayName: z.string().max(40), password: z.string().max(100), role: z.enum(['admin', 'staff', 'finance']) }),
+  z.object({ action: z.literal('user.update'), id, displayName: z.string().max(40).optional(), role: z.enum(['admin', 'staff', 'finance']).optional(), active: z.boolean().optional(), password: z.string().max(100).optional() }),
   z.object({ action: z.literal('invoice.lookup'), id }),
   z.object({ action: z.literal('preorder.restore'), id, notify: z.boolean() }),
   z.object({ action: z.literal('preorder.remits'), id, remits: z.array(z.unknown()).max(5) }),
@@ -204,7 +209,7 @@ const endOfDay = (s: string) => {
 
 export async function POST(req: Request) {
   return handle(async () => {
-    const { db, user } = await requireAdmin();
+    const { db, user } = await requireAdmin({ finance: true });
     await rememberOrigin(db, originOf(req));
     const p = action.safeParse(await readJson(req));
     if (!p.success) throw new BookingError('INVALID', p.error.issues[0]?.message ?? '資料格式不正確');
@@ -213,7 +218,22 @@ export async function POST(req: Request) {
     clearMenuCache(); // 後台改了設定：認購頁下一次就拿最新的
     // 主管／網管才能做的：電子發票、招待
     const mustBeAdmin = () => { if (user.role !== 'admin') throw new BookingError('FORBIDDEN', '這項操作需要主管或網管帳號'); };
+    // 財務帳號：只能操作「可開方案」的發票（開立、改買方、重新核對、作廢、看發票、向綠界查詢），其他一律擋下
+    if (user.role === 'finance') {
+      switch (a.action) {
+        case 'invoice.issue': await assertFinanceInvoices(db, a.ids); return issueBatch(db, a.ids, who, !!a.force);
+        case 'invoice.edit': await assertFinanceInvoices(db, [a.id]); return editInvoiceBuyer(db, a.id, who, a);
+        case 'invoice.recheck': await assertFinanceInvoices(db, [a.id]); return recheckInvoice(db, a.id, who);
+        case 'invoice.void': await assertFinanceInvoices(db, [a.id]); return voidInvoice(db, a.id, who, a.reason, !!a.reopen);
+        case 'invoice.print': await assertFinanceInvoices(db, [a.id]); return invoicePrintUrl(db, a.id);
+        case 'invoice.lookup': await assertFinanceInvoices(db, [a.id]); return invoiceLookup(db, a.id);
+        default: throw new BookingError('FORBIDDEN', '財務帳號只能處理電子發票');
+      }
+    }
     switch (a.action) {
+      case 'finance.combos': mustBeAdmin(); return setFinanceCombos(db, who, a.ids);
+      case 'user.create': mustBeAdmin(); return createUser(db, who, a);
+      case 'user.update': mustBeAdmin(); return updateUser(db, { id: user.id, username: who }, a.id, a);
       case 'event.update': return A.updateEventSettings(db, who, a.values);
       case 'publish': return A.publish(db, who);
       case 'floor3.frame': mustBeAdmin(); return frameComboGroup(db, who, a.seatIds);

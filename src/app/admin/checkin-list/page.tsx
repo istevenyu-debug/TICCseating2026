@@ -15,6 +15,7 @@ export default async function CheckinListPage({ searchParams }: { searchParams: 
   const db = await getDb();
   const user = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value);
   if (!user) return <main className="wrap"><div className="card">請先登入後台。<a href="/admin">前往登入</a></div></main>;
+  if (user.role === 'finance') return <main className="wrap"><div className="card">財務帳號只能處理電子發票。</div></main>;
   const sort = searchParams.sort === 'seat' ? 'seat' : 'name';
   const { event, rows, entered } = await checkinList(db, sort);
   const now = new Date().toISOString();
