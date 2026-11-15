@@ -43,6 +43,7 @@ describe('財務帳號：只能處理勾選方案的發票', () => {
     const st = await financeState(db, { username: 'acc', displayName: '會計', role: 'finance' });
     expect(st.invoices.map((x) => x.id)).toEqual([a]);
     expect(st.combos).toEqual(['尊榮席（1+2）']);
+    expect(st.plans.every((p) => p.id === vipCombo)).toBe(true);
     await expect(assertFinanceInvoices(db, [a])).resolves.toBeUndefined();
     await expect(assertFinanceInvoices(db, [b])).rejects.toThrow('財務帳號只能處理');
     await expect(assertFinanceInvoices(db, [a, b])).rejects.toThrow('財務帳號只能處理');

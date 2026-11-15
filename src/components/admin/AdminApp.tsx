@@ -2490,7 +2490,7 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
   );
 }
 
-type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
+type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; plans: import('@/lib/sales').SalesOverview['twoM']['plans']; at: string; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
 
 /** 財務帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
 function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | 'err' | 'warn'; text: string } | null; setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void }) {
@@ -2521,6 +2521,7 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
         </div>
         <div className="row"><MyPassword /><button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button></div>
       </header>
+      <FinanceStatus fin={fin} />
       <nav className="tabs">
         <button className={view === 'inv' ? 'on' : ''} onClick={() => setView('inv')}>電子發票{todo.length ? <span className="badge">{todo.length}</span> : null}</button>
         <button className={view === 'rec' ? 'on' : ''} onClick={() => setView('rec')}>對帳（已匯款）{unpaid ? <span className="badge">{unpaid}</span> : null}</button>
@@ -2561,6 +2562,37 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
         </div>
       </div>}
     </main>
+  );
+}
+
+/** 財務畫面最上方「目前進度」：可售組數、已開立發票（逐張列出）、待開立、未勾已匯款 — 即時，大家看同一套數字 */
+function FinanceStatus({ fin }: { fin: FinState }) {
+  const issued = fin.invoices.filter((x) => x.status === 'issued');
+  const todo = fin.invoices.filter((x) => x.status === 'pending' || x.status === 'failed').length;
+  const unpaid = fin.preorders.filter((p) => p.status !== 'cancelled' && !p.paidOkAt).length;
+  const n = (v: number) => v.toLocaleString('en-US');
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <h2 style={{ marginTop: 0 }}>目前進度 <span className="small muted">{tw(fin.at)} 更新・每 15 秒自動更新</span></h2>
+      {fin.plans.length > 0 && <div className="tbl"><table style={{ width: 'auto' }}>
+        <thead><tr><th>方案</th><th style={{ textAlign: 'right' }}>已售</th><th style={{ textAlign: 'right' }}>待確認</th><th style={{ textAlign: 'right' }}>已付未劃</th><th style={{ textAlign: 'right' }}>招待</th><th style={{ textAlign: 'right' }}>可售</th></tr></thead>
+        <tbody>{fin.plans.map((p) => (
+          <tr key={p.id}><td>{p.name}<div className="small muted">{p.size} 席一組</div></td>
+            <td className="mono" style={{ textAlign: 'right' }}>{n(p.sold)} 組</td>
+            <td className="mono" style={{ textAlign: 'right' }}>{n(p.pending)} 組</td>
+            <td className="mono" style={{ textAlign: 'right' }}>{n(p.owed)} 組</td>
+            <td className="mono" style={{ textAlign: 'right' }}>{n(p.vip)} 組</td>
+            <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{p.left === 0 ? '售完' : `${n(p.left)} 組`}<div className="small muted">{n(p.left * p.size)} 席</div></td></tr>
+        ))}</tbody>
+      </table></div>}
+      {fin.plans.length > 1 && <p className="small muted" style={{ margin: '4px 0 0' }}>各方案共用贈票區，賣出一組會影響其他方案的可售。</p>}
+      <div className="row" style={{ gap: 16, marginTop: 10, flexWrap: 'wrap' }}>
+        <span>已開立 <b>{issued.length}</b> 張</span><span>待開立 <b>{todo}</b> 張</span><span>還沒勾已匯款 <b>{unpaid}</b> 筆</span>
+      </div>
+      {issued.length > 0 && <div style={{ marginTop: 6 }}>{issued.map((x) => (
+        <div key={x.id} className="small">✓ <span className="mono">{x.invoiceNo}</span>・{x.orderNo}・{x.name}・{money(x.amount)}・{x.invoiceDate.slice(0, 10)} 由 {x.issuedBy ?? '—'} 開立{x.env !== 'prod' ? '（測試）' : ''}</div>
+      ))}</div>}
+    </div>
   );
 }
 

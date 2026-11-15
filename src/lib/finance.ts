@@ -11,6 +11,7 @@ import { currentEvent } from './admin';
 import { listInvoices, publicEinvConfig } from './einvoice';
 import { listPreorders } from './preorder';
 import { listBank } from './bank';
+import { salesOverview } from './sales';
 
 const KEY = 'finance.combos';
 
@@ -71,5 +72,8 @@ export async function financeState(db: Db, user: { username: string; displayName
     // 其他方案的訂單只給比對用的欄位（沒有姓名），讓網銀入帳能正確歸屬、不會誤列成「找不到訂單」
     others: all.filter((p) => !okPo.has(p.id)).map((p) => ({ id: p.id, no: p.no, amount: p.amount, last5: p.last5, paidAmount: p.paidAmount, paidOk: !!p.paidOkAt, status: p.status, waitlist: p.waitlist })),
     bank: await listBank(db),
+    // 可售組數（與首頁「全場銷售總覽」2M 方案同一套計算），只列財務負責的方案
+    plans: ((await salesOverview(db))?.twoM.plans ?? []).filter((p) => allowed.includes(p.id)),
+    at: new Date().toISOString(),
   };
 }
