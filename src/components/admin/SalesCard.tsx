@@ -22,7 +22,7 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
   return (
     <div className="card sales" style={{ gridColumn: '1 / -1', justifySelf: 'start', maxWidth: '100%', width: 'fit-content' }}>
       <h3 style={{ marginTop: 0 }}>全場銷售總覽</h3>
-      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖（共 3,122 席）。2M、3F 兩側：本系統即時；年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b>。</p>
+      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖。2M、3F 兩側：本系統即時；年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b>。</p>
       <div className="tbl" style={{ overflowX: 'auto' }}><table style={{ width: 'auto' }}>
         <thead><tr><th style={{ textAlign: 'left' }}>區域</th><th style={r}>總席數</th><th style={r}>已售</th><th style={r}>尚可售</th></tr></thead>
         <tbody>
@@ -46,7 +46,7 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
       {admin && (edit
         ? <div className="row" style={{ gap: 8, marginTop: 8 }}><button className="btn pri small" disabled={busy} onClick={save}>儲存總席數</button><button className="btn small" onClick={() => setEdit(false)}>取消</button></div>
         : <button className="btn small" style={{ marginTop: 8 }} onClick={startEdit}>改年代各區總席數</button>)}
-      {edit && <p className="small muted">預設依 TICC 座位圖（4F 748、5F 686、包廂 480）。年代實際開賣的席數不同時再改；清空＝用預設。</p>}
+      {edit && <p className="small muted">預設依 TICC 座位圖（4F 748、5F 686）。年代實際開賣的席數不同時再改；清空＝用預設。</p>}
 
       {s.daily.length > 0 && (
         <details style={{ marginTop: 10 }}>

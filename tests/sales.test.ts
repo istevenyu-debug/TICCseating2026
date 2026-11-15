@@ -13,6 +13,13 @@ describe('全場銷售總覽（依 TICC 座位圖）', () => {
     expect(['4F', '4樓', '４樓', '四樓', '5F'].map((f) => hallKey(f, '30'))).toEqual(['4F', '4F', '4F', '4F', '5F']);
     expect([hallKey('6F', 'B31'), hallKey('5F', 'B22'), hallKey('包廂', '1'), hallKey('3樓', '13')]).toEqual(['包廂', '包廂', '包廂', '3F']);
   });
+  it('名單沒有包廂票就不列包廂', async () => {
+    const db = await createPgliteDb();
+    await seedVenue(db);
+    await createEvent(db, { name: '萬變中', showAt: new Date('2026-12-09T19:30:00+08:00'), vipInstalled: false, holdMinutes: 60 });
+    await ensureFloor3(db);
+    expect((await salesOverview(db))!.hall.map((h) => h.key)).toEqual(['2M', '3F', '3F側', '4F', '5F']);
+  });
   it('2M、3F 中間／兩側、4F、5F、包廂；總席數預設、可改', async () => {
     const db = await createPgliteDb();
     await seedVenue(db);
@@ -33,7 +40,7 @@ describe('全場銷售總覽（依 TICC 座位圖）', () => {
     expect([row('4F').total, row('4F').sold, row('4F').left, row('4F').prices]).toEqual([748, 2, 746, [{ price: 2000, n: 1 }, { price: 1500, n: 1 }]]);
     expect([row('5F').sold, row('5F').refunded, row('5F').left]).toEqual([0, 1, 686]);
     expect([row('包廂').total, row('包廂').sold]).toEqual([480, 1]);
-    expect(s.hallSum.total).toBe(row('2M').total + 510 + 214 + 748 + 686 + 480);
+    expect(s.hallSum.total).toBe(row('2M').total + 510 + 214 + 748 + 686 + 480); // 名單有包廂票才列包廂
     await setCaps(db, '網管', { '4F': 700 });
     expect((await salesOverview(db))!.hall.find((h) => h.key === '4F')!.left).toBe(698);
   });

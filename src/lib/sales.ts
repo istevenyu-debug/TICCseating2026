@@ -144,7 +144,7 @@ export async function salesOverview(db: Db, now = new Date()) {
       note: `贈席已劃 ${giftPicked}・志工 ${vol}${other ? `・招待／保留 ${other}` : ''}` },
     { ...eraRow('4F', '4F（28–41 排）'), note: '' },
     { ...eraRow('5F', '5F（42–55 排）'), note: '' },
-    { ...eraRow('包廂', '包廂（B1–B35）'), note: '' },
+    ...(byKey.has('包廂') ? [{ ...eraRow('包廂', '包廂（B1–B35）'), note: '' }] : []), // 包廂不賣：名單裡有包廂票才顯示
     ...[...byKey.keys()].filter((k) => !['3F', '4F', '5F', '包廂'].includes(k)).map((k) => ({ ...eraRow(k, `${k}（年代）`), note: '樓層看不出來' })),
   ];
   const known = hall.filter((h) => h.total !== null);
