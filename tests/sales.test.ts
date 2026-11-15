@@ -7,6 +7,9 @@ import { ensureFloor3 } from '@/lib/floor';
 import { presetFloor3 } from '@/lib/join';
 import { uploadEra } from '@/lib/joinQueue';
 import { hallKey, salesOverview, setCaps } from '@/lib/sales';
+import * as A from '@/lib/admin';
+import { createVip } from '@/lib/vip';
+import { and, sql } from 'drizzle-orm';
 
 describe('全場銷售總覽（依 TICC 座位圖）', () => {
   it('年代樓層寫法都對得到；6 樓、B 排＝包廂', () => {
@@ -43,5 +46,24 @@ describe('全場銷售總覽（依 TICC 座位圖）', () => {
     expect(s.hallSum.total).toBe(row('2M').total + 510 + 214 + 748 + 686 + 480); // 名單有包廂票才列包廂
     await setCaps(db, '網管', { '4F': 700 });
     expect((await salesOverview(db))!.hall.find((h) => h.key === '4F')!.left).toBe(698);
+  });
+  it('2M 依組合方案：招待佔掉一組看得出來（34→33 這種）', async () => {
+    const db = await createPgliteDb();
+    await seedVenue(db);
+    const ev = await createEvent(db, { name: '萬變中', showAt: new Date('2026-12-09T19:30:00+08:00'), vipInstalled: false, holdMinutes: 60 });
+    const zones = await db.select().from(t.priceZone).where(eq(t.priceZone.eventId, ev.id));
+    const zA = zones.find((z) => z.name === 'A區')!.id, zB = zones.find((z) => z.name === 'B區')!.id;
+    const c = await A.createCombo(db, 'admin');
+    await A.updateCombo(db, 'admin', c.id, { name: '尊榮席', price: 9000, items: [{ zoneId: zA, qty: 1 }, { zoneId: zB, qty: 2 }] });
+    const seatsOf = async (z: number, k: number) => (await db.select({ id: t.eventSeat.seatId }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId))
+      .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.eventSeat.zoneId, z), eq(t.eventSeat.status, 'free'), eq(t.venueSeat.seatType, 'normal'), sql`coalesce(${t.eventSeat.bundle}, '') = ''`))).slice(0, k).map((x) => x.id);
+    const before = (await salesOverview(db))!.twoM.plans.find((p) => p.name === '尊榮席')!;
+    await createVip(db, 'admin', { name: '貴賓', phone: '0912345678', email: 'v@example.com', seatIds: [...await seatsOf(zA, 1), ...await seatsOf(zB, 2)], mode: 'none' as never });
+    const after = (await salesOverview(db))!;
+    const p = after.twoM.plans.find((x) => x.name === '尊榮席')!;
+    expect(p.size).toBe(3);
+    expect(p.vip).toBe(1);
+    expect(p.left).toBe(before.left - 1);
+    expect(after.twoM.vipSeats).toBe(3);
   });
 });

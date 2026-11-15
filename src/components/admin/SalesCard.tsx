@@ -1,6 +1,6 @@
 'use client';
 /** 後台首頁：全場銷售總覽（2M 本系統即時＋年代 2–5 樓依最後上傳的名單） */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { SalesOverview } from '@/lib/sales';
 
 type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
@@ -26,8 +26,8 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
       <div className="tbl" style={{ overflowX: 'auto' }}><table style={{ width: 'auto' }}>
         <thead><tr><th style={{ textAlign: 'left' }}>區域</th><th style={r}>總席數</th><th style={r}>已售</th><th style={r}>尚可售</th></tr></thead>
         <tbody>
-          {s.hall.map((h) => (
-            <tr key={h.key}>
+          {s.hall.map((h) => (<Fragment key={h.key}>
+            <tr>
               <td style={{ whiteSpace: 'nowrap' }}>{h.label}
                 <div className="small muted" style={{ whiteSpace: 'normal', maxWidth: 230 }}>
                   {[h.by, h.note, h.prices.map((p) => `${n(p.price)}×${n(p.n)}`).join('・'), h.refunded ? `退 ${n(h.refunded)}` : ''].filter(Boolean).join('｜')}</div>
@@ -38,7 +38,16 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
               <td style={r}>{n(h.sold)}</td>
               <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: h.left === 0 ? 'var(--red)' : undefined }}>{h.left === 0 ? '售完' : n(h.left)}</td>
             </tr>
-          ))}
+            {h.key === '2M' && s.twoM.plans.map((p) => (
+              <tr key={`p${p.id}`} className="small">
+                <td style={{ paddingLeft: 14 }}>{p.name}<span className="muted">（{p.size} 席一組）</span>
+                  <div className="muted" style={{ whiteSpace: 'normal', maxWidth: 230 }}>{[p.pending ? `待確認 ${p.pending}` : '', p.owed ? `已付未劃 ${p.owed}` : '', p.vip ? `招待佔 ${p.vip}` : ''].filter(Boolean).join('・') || '　'}</div></td>
+                <td style={r}>{n(p.sold + p.pending + p.owed + p.vip + p.left)} 組</td>
+                <td style={r}>{n(p.sold)} 組</td>
+                <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: p.left === 0 ? 'var(--red)' : undefined }}>{p.left === 0 ? '售完' : `${n(p.left)} 組`}</td>
+              </tr>
+            ))}
+          </Fragment>))}
           <tr style={{ fontWeight: 800, borderTop: '2px solid var(--line)' }}><td>全場</td><td style={r}>{n(s.hallSum.total)}</td><td style={r}>{n(s.hallSum.sold)}</td><td style={r}>{n(s.hallSum.left)}</td></tr>
         </tbody>
       </table></div>

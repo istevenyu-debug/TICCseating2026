@@ -2,12 +2,14 @@
  * 全場銷售總覽：2M（本系統，即時）＋年代售出明細（2–5 樓，依最後上傳的名單）。
  * 年代各樓層的總席數由後台自己填（sales.caps），填了才算「尚可售」。
  */
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { eraSales } from './joinQueue';
+import { loadCombos } from './booking';
+import { stock2MDetail } from './cardLink';
 
 const CAPS_KEY = 'sales.caps';
 /** TICC 大會堂座位示意圖（109/11/13）各區總席數；後台可改（sales.caps 同名鍵優先） */
@@ -112,6 +114,23 @@ export async function salesOverview(db: Db, now = new Date()) {
 
   const silver = await eraSales(db, ev.id);
 
+  /* 2M 依組合方案（尊榮席、感恩席…）：已售組、待確認組、已付未劃、招待佔用、還可賣幾組 */
+  const vipRows = await db.select({ zoneId: t.eventSeat.zoneId, n: sql<number>`count(*)::int` }).from(t.eventSeat)
+    .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.orders, eq(t.orders.id, t.eventSeat.orderId))
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '2M'), eq(t.orders.vip, true), inArray(t.eventSeat.status, ['sold', 'pending'])))
+    .groupBy(t.eventSeat.zoneId);
+  const vipSeats = vipRows.reduce((a, r) => a + Number(r.n), 0);
+  const st = await stock2MDetail(db, ev.id, now);
+  const stV = await stock2MDetail(db, ev.id, now, new Map(vipRows.map((r) => [r.zoneId, Number(r.n)])));
+  const ordRows = await db.select({ comboId: t.orders.comboId, status: t.orders.status, n: sql<number>`coalesce(sum(${t.orders.sets}), 0)::int` }).from(t.orders)
+    .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.vip, false), inArray(t.orders.status, ['held', 'pending', 'paid']))).groupBy(t.orders.comboId, t.orders.status);
+  const plans = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M' && !c.isSingle && c.price > 0).map((c) => {
+    const of = (ss: string[]) => ordRows.filter((r) => r.comboId === c.id && ss.includes(r.status)).reduce((a, r) => a + Number(r.n), 0);
+    const left = st.left[c.id] ?? 0;
+    return { id: c.id, name: c.name, size: c.items.reduce((a, i) => a + i.qty, 0), sold: of(['paid']), pending: of(['held', 'pending']), owed: st.owed[c.id] ?? 0,
+      vip: Math.max(0, (stV.left[c.id] ?? 0) - left), left, limit: c.limitSets || null };
+  });
+
   /* 全場（依 TICC 大會堂座位示意圖 109/11/13）：2M、3F 中間（年代）、3F 兩側（我們）、4F、5F、包廂 */
   const side = await db.select({ status: t.eventSeat.status, code: t.seatUsage.code, block: t.venueSeat.block }).from(t.eventSeat)
     .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
@@ -138,7 +157,7 @@ export async function salesOverview(db: Db, now = new Date()) {
   const mid = { key: '3F', label: '3F 中間（13–27 排）', by: '年代', total: silver.cap || HALL_CAPS['3F'], sold: silver.sold, left: Math.max(0, (silver.cap || HALL_CAPS['3F']) - silver.sold), refunded: byKey.get('3F')?.refunded ?? 0,
     prices: [...(byKey.get('3F')?.prices ?? new Map()).entries()].sort((a, b) => b[0] - a[0]).map(([price, n]) => ({ price, n })) };
   const hall = [
-    { key: '2M', label: '2M（1–12 排）', by: '本系統', total: twoM.total, sold: twoM.sold, left: twoM.free, refunded: 0, prices: [] as { price: number; n: number }[], note: `${twoM.pending ? `待確認 ${twoM.pending}・` : ''}${twoM.reserved ? `保留 ${twoM.reserved}` : ''}` },
+    { key: '2M', label: '2M（1–12 排）', by: '本系統', total: twoM.total, sold: twoM.sold, left: twoM.free, refunded: 0, prices: [] as { price: number; n: number }[], note: [twoM.pending ? `待確認 ${twoM.pending}` : '', vipSeats ? `其中招待 ${vipSeats}` : '', twoM.reserved ? `保留 ${twoM.reserved}` : ''].filter(Boolean).join('・') },
     { ...mid, note: '' },
     { key: '3F側', label: '3F 兩側（左2／右2）', by: '我們', total: sideSeats.length, sold: sideSeats.length - giftFree, left: giftFree, refunded: 0, prices: [] as { price: number; n: number }[],
       note: `贈席已劃 ${giftPicked}・志工 ${vol}${other ? `・招待／保留 ${other}` : ''}` },
@@ -150,6 +169,6 @@ export async function salesOverview(db: Db, now = new Date()) {
   const known = hall.filter((h) => h.total !== null);
   const hallSum = { total: known.reduce((a, h) => a + (h.total ?? 0), 0), sold: hall.reduce((a, h) => a + h.sold, 0), left: known.reduce((a, h) => a + (h.left ?? 0), 0) };
 
-  return { now: now.toISOString(), twoM, era, silver, daily, caps, hall, hallSum };
+  return { now: now.toISOString(), twoM: { ...twoM, plans, vipSeats }, era, silver, daily, caps, hall, hallSum };
 }
 export type SalesOverview = NonNullable<Awaited<ReturnType<typeof salesOverview>>>;

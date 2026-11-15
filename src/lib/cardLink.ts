@@ -46,6 +46,11 @@ async function ev0(db: Exec) {
  * 方案有限量組數時，也扣掉已劃與已付款未劃的組數。
  */
 export async function stock2M(db: Exec, eventId: number, now: Date) {
+  return (await stock2MDetail(db, eventId, now)).left;
+}
+
+/** stock2M 的細項：left 還能賣幾組、owed 已付款未劃的組數；bonus＝把這些座位也當空位算（例：算招待佔掉幾組） */
+export async function stock2MDetail(db: Exec, eventId: number, now: Date, bonus?: Map<number, number>) {
   const combos = (await loadCombos(db, eventId)).filter((c) => c.floor === '2M' && !c.isSingle);
   const all2M = new Map((await loadCombos(db, eventId)).filter((c) => c.floor === '2M').map((c) => [c.id, c]));
   const zones2M = new Set((await db.select({ id: t.priceZone.id }).from(t.priceZone).where(and(eq(t.priceZone.eventId, eventId), eq(t.priceZone.floor, '2M')))).map((z) => z.id));
@@ -55,6 +60,7 @@ export async function stock2M(db: Exec, eventId: number, now: Date) {
     .where(and(eq(t.eventSeat.eventId, eventId), eq(t.venueSeat.floor, '2M'), eq(t.eventSeat.status, 'free'), eq(t.seatUsage.sellable, true)))
     .groupBy(t.eventSeat.zoneId);
   for (const r of rows) free.set(r.zoneId, Number(r.n));
+  for (const [z, n] of bonus ?? []) free.set(z, (free.get(z) ?? 0) + n);
 
   const owedZone = new Map<number, number>();
   const owedSets = new Map<number, number>();
@@ -85,7 +91,7 @@ export async function stock2M(db: Exec, eventId: number, now: Date) {
     if (c.limitSets > 0) n = Math.min(n, c.limitSets - (used[c.id] ?? 0) - (owedSets.get(c.id) ?? 0));
     left[c.id] = Math.max(0, Number.isFinite(n) ? n : 0);
   }
-  return left;
+  return { left, owed: Object.fromEntries(owedSets) as Record<number, number> };
 }
 
 /* ---------- 後台：建立、修改、列出 ---------- */
