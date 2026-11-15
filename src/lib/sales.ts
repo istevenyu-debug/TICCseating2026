@@ -10,6 +10,18 @@ import { BookingError } from './booking';
 import { eraSales } from './joinQueue';
 
 const CAPS_KEY = 'sales.caps';
+/** TICC 大會堂座位示意圖（109/11/13）各區總席數；後台可改（sales.caps 同名鍵優先） */
+export const HALL_CAPS: Record<string, number> = { '3F': 510, '4F': 748, '5F': 686, '包廂': 480 };
+/** 年代明細的樓層／排 → 全場分區：B 開頭的排或寫「包廂」＝包廂；6 樓只有包廂；其餘照樓層數字 */
+export function hallKey(floor: string, row: string) {
+  const f = (floor || '').trim(), r = (row || '').trim();
+  if (/包廂/.test(f) || /^B\d/i.test(r)) return '包廂';
+  const m = f.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).match(/\d+/) ?? (/三/.test(f) ? ['3'] : /四/.test(f) ? ['4'] : /五/.test(f) ? ['5'] : /六/.test(f) ? ['6'] : null);
+  if (!m) return f || '（未標樓層）';
+  const n = Number(m[0]);
+  if (n === 6) return '包廂';
+  return n === 2 ? '2M' : `${n}F`;
+}
 /** 台北日期 M/D */
 const md = (d: Date) => {
   const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
@@ -62,8 +74,9 @@ export async function salesOverview(db: Db, now = new Date()) {
   const twoM = { zones, total: sum('total'), sold: sum('sold'), pending: sum('pending'), reserved: sum('reserved'), free: sum('free') };
 
   /* 年代：逐張票，依樓層、票價 */
-  const tk = await db.select({ floor: t.joinEraTicket.floor, price: t.joinEraTicket.price, status: t.joinEraTicket.status, soldAt: t.joinEraTicket.soldAt, at: t.joinEraTicket.updatedAt })
+  const tkAll = await db.select({ floor: t.joinEraTicket.floor, row: t.joinEraTicket.rowNo, price: t.joinEraTicket.price, status: t.joinEraTicket.status, soldAt: t.joinEraTicket.soldAt, at: t.joinEraTicket.updatedAt })
     .from(t.joinEraTicket).where(eq(t.joinEraTicket.eventId, ev.id));
+  const tk = tkAll;
   const caps = await getCaps(db);
   const fmap = new Map<string, Map<number, { sold: number; refunded: number }>>();
   let eraAt: Date | null = null;
@@ -97,6 +110,46 @@ export async function salesOverview(db: Db, now = new Date()) {
   for (const x of tk) if (x.status === 'sold') add(x.soldAt, 'era');
   const daily = [...day.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14).map(([d, v]) => ({ day: `${+d.slice(5, 7)}/${+d.slice(8, 10)}`, ...v }));
 
-  return { now: now.toISOString(), twoM, era, silver: await eraSales(db, ev.id), daily, caps };
+  const silver = await eraSales(db, ev.id);
+
+  /* 全場（依 TICC 大會堂座位示意圖 109/11/13）：2M、3F 中間（年代）、3F 兩側（我們）、4F、5F、包廂 */
+  const side = await db.select({ status: t.eventSeat.status, code: t.seatUsage.code, block: t.venueSeat.block }).from(t.eventSeat)
+    .innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+    .where(and(eq(t.eventSeat.eventId, ev.id), eq(t.venueSeat.floor, '3F')));
+  const sideSeats = side.filter((x) => x.block === 'L2' || x.block === 'R2'); // 兩側斜區 214 席（座位圖固定，不看塗色）
+  const giftPicked = sideSeats.filter((x) => x.code === 'join-gift' && x.status !== 'free').length;
+  const giftFree = sideSeats.filter((x) => x.code === 'join-gift' && x.status === 'free').length;
+  const vol = sideSeats.filter((x) => x.code === 'join-vol').length;
+  const other = sideSeats.length - giftPicked - giftFree - vol;
+  const byKey = new Map<string, { sold: number; refunded: number; prices: Map<number, number> }>();
+  for (const x of tkAll) {
+    const k = hallKey(x.floor, x.row);
+    const v = byKey.get(k) ?? { sold: 0, refunded: 0, prices: new Map() };
+    if (x.status === 'sold') { v.sold++; v.prices.set(x.price, (v.prices.get(x.price) ?? 0) + 1); } else v.refunded++;
+    byKey.set(k, v);
+  }
+  const eraRow = (key: string, label: string) => {
+    const v = byKey.get(key);
+    const total = caps[key] ?? HALL_CAPS[key] ?? null;
+    const sold = v?.sold ?? 0;
+    return { key, label, by: '年代', total, sold, left: total === null ? null : Math.max(0, total - sold), refunded: v?.refunded ?? 0,
+      prices: [...(v?.prices ?? new Map()).entries()].sort((a, b) => b[0] - a[0]).map(([price, n]) => ({ price, n })) };
+  };
+  const mid = { key: '3F', label: '3F 中間（13–27 排）', by: '年代', total: silver.cap || HALL_CAPS['3F'], sold: silver.sold, left: Math.max(0, (silver.cap || HALL_CAPS['3F']) - silver.sold), refunded: byKey.get('3F')?.refunded ?? 0,
+    prices: [...(byKey.get('3F')?.prices ?? new Map()).entries()].sort((a, b) => b[0] - a[0]).map(([price, n]) => ({ price, n })) };
+  const hall = [
+    { key: '2M', label: '2M（1–12 排）', by: '本系統', total: twoM.total, sold: twoM.sold, left: twoM.free, refunded: 0, prices: [] as { price: number; n: number }[], note: `${twoM.pending ? `待確認 ${twoM.pending}・` : ''}${twoM.reserved ? `保留 ${twoM.reserved}` : ''}` },
+    { ...mid, note: '' },
+    { key: '3F側', label: '3F 兩側（左2／右2）', by: '我們', total: sideSeats.length, sold: sideSeats.length - giftFree, left: giftFree, refunded: 0, prices: [] as { price: number; n: number }[],
+      note: `贈席已劃 ${giftPicked}・志工 ${vol}${other ? `・招待／保留 ${other}` : ''}` },
+    { ...eraRow('4F', '4F（28–41 排）'), note: '' },
+    { ...eraRow('5F', '5F（42–55 排）'), note: '' },
+    { ...eraRow('包廂', '包廂（B1–B35）'), note: '' },
+    ...[...byKey.keys()].filter((k) => !['3F', '4F', '5F', '包廂'].includes(k)).map((k) => ({ ...eraRow(k, `${k}（年代）`), note: '樓層看不出來' })),
+  ];
+  const known = hall.filter((h) => h.total !== null);
+  const hallSum = { total: known.reduce((a, h) => a + (h.total ?? 0), 0), sold: hall.reduce((a, h) => a + h.sold, 0), left: known.reduce((a, h) => a + (h.left ?? 0), 0) };
+
+  return { now: now.toISOString(), twoM, era, silver, daily, caps, hall, hallSum };
 }
 export type SalesOverview = NonNullable<Awaited<ReturnType<typeof salesOverview>>>;
