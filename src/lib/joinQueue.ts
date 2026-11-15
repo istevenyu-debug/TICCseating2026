@@ -660,6 +660,7 @@ export async function autoAssign(db: Db, base = '', now = new Date()) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
   if (!ev) return false;
   let added = 0;
+  const newRegs = new Set<number>();
   await db.transaction(async (tx) => {
     // 部分退票（張數變少＝張數不符）：先照年代剩下的張數算，只移走真的不夠的號碼
     const reps = await tx.select({ regId: t.joinReport.regId, qty: t.joinReport.qty, status: t.joinReport.status, eraQty: t.joinReport.eraQty }).from(t.joinReport)
@@ -686,7 +687,7 @@ export async function autoAssign(db: Db, base = '', now = new Date()) {
       const round = await curRound(tx);
       const maxPos = Number((await tx.select({ m: sql<number>`coalesce(max(${t.joinSlot.pos}), 0)` }).from(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id)))[0].m);
       let i = 0;
-      for (const x of prov) await tx.insert(t.joinSlot).values({ eventId: ev.id, regId: x.regId, no: x.no, pos: maxPos + ++i, earnedAt: x.at, round, createdAt: now });
+      for (const x of prov) { await tx.insert(t.joinSlot).values({ eventId: ev.id, regId: x.regId, no: x.no, pos: maxPos + ++i, earnedAt: x.at, round, createdAt: now }); newRegs.add(x.regId); }
       await tx.insert(t.auditLog).values({ actor: '系統', action: 'join_auto_assign', target: `event:${ev.id}`, detail: JSON.stringify({ from: prov[0].no, to: prov[prov.length - 1].no, over: plan.over }) });
       added = prov.length;
     }
@@ -701,7 +702,8 @@ export async function autoAssign(db: Db, base = '', now = new Date()) {
       }
     }
   });
-  if (added && base) return (await sendPickLinks(db, '系統', base, undefined, now)).sent > 0;
+  // 只寄給這次拿到新號碼的群（不用「全部未寄」，避免寄給早就劃好位、只是沒記錄寄過的群）
+  if (added && base && newRegs.size) return (await sendPickLinks(db, '系統', base, [...newRegs], now)).sent > 0;
   return false;
 }
 

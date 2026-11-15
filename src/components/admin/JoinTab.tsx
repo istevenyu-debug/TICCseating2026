@@ -156,7 +156,8 @@ function Regs({ j, act, busy, sure, confirm2, setMsg, copy, unsent }: { j: J; ac
     if (r) setMsg({ kind: r.noEmail ? 'warn' : 'ok', text: `已寄出 ${r.sent} 封劃位連結信${r.noEmail ? `；${r.noEmail} 位沒有 Email，請複製連結傳給負責人` : ''}` });
   };
   const withSlot = new Set(j.slots.filter((x) => x.status !== 'void').map((x) => x.regId));
-  const unsentPick = j.regs.filter((r) => r.status === 'approved' && withSlot.has(r.id) && (!r.pickSentAt || j.slots.some((x) => x.regId === r.id && x.status !== 'void' && x.createdAt > r.pickSentAt!))).length;
+  const pending = new Set(j.slots.filter((x) => x.status === 'wait' || x.status === 'turn').map((x) => x.regId));
+  const unsentPick = j.regs.filter((r) => r.status === 'approved' && pending.has(r.id) && (!r.pickSentAt || j.slots.some((x) => x.regId === r.id && x.status !== 'void' && x.createdAt > r.pickSentAt!))).length;
   return (
     <div className="card">
       <h3 style={{ marginTop: 0 }}>登記審核</h3>

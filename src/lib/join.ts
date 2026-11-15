@@ -404,12 +404,15 @@ export async function sendPickLinks(db: Db, actor: string, base: string, ids?: n
   let sent = 0, noEmail = 0;
   for (const r of regs) {
     const mineS = slots.filter((x) => x.regId === r.id && x.status !== 'void');
-    const mine = mineS.map((x) => x.no).sort((a, b) => a - b);
-    // 全部寄：沒寄過的，或寄過之後又有新一輪的劃位序
-    if (!mine.length || (!ids?.length && r.pickSentAt && !mineS.some((x) => x.createdAt > r.pickSentAt!))) continue;
+    // 只列還沒選位的號碼（排隊中、輪到中）；已選好的不再列，避免負責人以為還能選
+    const mine = mineS.filter((x) => x.status === 'wait' || x.status === 'turn').map((x) => x.no).sort((a, b) => a - b);
+    // 位子都選好了（沒有待選的號碼）→ 一律不寄（11/15：自動給號曾把連結寄給已劃完的群）
+    if (!mine.length) continue;
+    // 全部寄：沒寄過的，或寄過之後又有新的劃位序
+    if (!ids?.length && r.pickSentAt && !mineS.some((x) => x.createdAt > r.pickSentAt!)) continue;
     if (!r.email || !r.pickCode) { noEmail++; continue; }
     const venue = (r.venueId ? vs.find((v) => v.id === r.venueId)?.name : r.venueText) ?? '';
-    const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序已確定：第 ${mine.join('、')} 號，可選 ${mine.length} 席。`
+    const content = `【${ev.name}】${r.headName} 您好，「${venue}」的劃位序：第 ${mine.join('、')} 號，可選 ${mine.length} 席${mineS.length > mine.length ? `（另有 ${mineS.length - mine.length} 席已劃位完成）` : ''}。`
       + `劃位連結（只給您本人，請勿轉傳）：${pickUrl(base, r.pickCode)}　`
       + `快輪到時、輪到時都會再寄信通知。\n`
       + `【劃位步驟】\n`

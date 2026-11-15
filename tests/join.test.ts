@@ -406,6 +406,35 @@ describe('自動給號：核對通過就給號、寄連結、排隊；退票移�
     expect((await slotsOf(a.id)).filter((x) => x.status !== 'void').map((x) => x.no)).toEqual([1, 4]);
   });
 
+  it('11/15 漏洞：自動給號只寄給拿到新號碼的群；已劃完位（但沒記錄寄過）的群不會再收到；信只列待選號碼', async () => {
+    const a = await venueReg('A場');
+    const c = await venueReg('C場');
+    const seats = await giftSeats(6);
+    await eraList([['C1', 20], ['A1', 10]]);
+    await setJoinSettings(db, '網管', { auto: true, reportOpen: true, pickOpen: true, hourFrom: '', hourTo: '' });
+    await report(c.reportCode!, [['C1', 20]], '志工丙', T0);
+    await tickQueue(db, BASE, at(1));
+    await pickPage(db, c.pickCode!, at(1), BASE);
+    await submitPick(db, c.pickCode!, { seatIds: seats.slice(0, 2), repName: '陳', repPhone: '0912345678' }, at(2), BASE);
+    // 模擬第 1 輪手動傳連結：系統沒記錄寄過
+    await db.update(t.joinReg).set({ pickSentAt: null });
+    await db.delete(t.notification);
+    await report(a.reportCode!, [['A1', 10]], '志工甲', at(3));
+    await autoAssign(db, BASE, at(4));
+    const ms = await mails('join_plink');
+    expect(ms.map((x) => x.recipient)).toEqual(['A場@example.com']);
+    expect(ms[0].content).toContain('第 3 號，可選 1 席');
+    // 後台「寄出所有未寄的劃位連結」也不會寄給已劃完的 C
+    expect(await sendPickLinks(db, '網管', BASE)).toEqual({ sent: 0, noEmail: 0 });
+    // C 再拿到新號碼：信只列新號碼，並註明已劃完的席數
+    await eraList([['C1', 20], ['A1', 10], ['C2', 10]]);
+    await report(c.reportCode!, [['C2', 10]], '志工丙', at(5));
+    await autoAssign(db, BASE, at(6));
+    const mc = (await mails('join_plink')).filter((x) => x.recipient === 'C場@example.com');
+    expect(mc).toHaveLength(1);
+    expect(mc[0].content).toContain('第 4 號，可選 1 席（另有 2 席已劃位完成）');
+  });
+
   it('贈席分配完自動關閉回報；後台刪回報不擋（多的號碼移到退票區）', async () => {
     const a = await venueReg('A場');
     await giftSeats(2);
@@ -659,7 +688,7 @@ describe('分輪制：鎖定本輪 → 劃位 → 開放下一輪回報，號碼
     const pl = await mails('join_plink');
     expect(pl).toHaveLength(3);
     expect(pl[2].recipient).toBe('A場@example.com');
-    expect(pl[2].content).toContain('第 1、3 號');
+    expect(pl[2].content).toContain('第 3 號，可選 1 席（另有 1 席已劃位完成）');
     // 解除本輪鎖定只刪第 2 輪的
     expect(await unlockSlots(db, '網管')).toMatchObject({ removed: 1 });
     expect((await db.select().from(t.joinSlot)).length).toBe(2);
