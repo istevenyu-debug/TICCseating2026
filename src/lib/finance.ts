@@ -1,7 +1,7 @@
 /**
- * 財務帳號（role = finance）：只能處理「後台勾選的方案」的電子發票。
+ * 會計帳號（role = finance）：只能處理「後台勾選的方案」的電子發票。
  * - 可開的方案存在 app_setting finance.combos（JSON 陣列）；沒設定過＝名稱含「尊榮」「感恩」的組合方案。
- * - 一張發票的訂單內容「全部」都是可開方案，財務才看得到、才能操作（含混別的方案或單張票的都不行）。
+ * - 一張發票的訂單內容「全部」都是可開方案，會計才看得到、才能操作（含混別的方案或單張票的都不行）。
  */
 import { eq, inArray } from 'drizzle-orm';
 import type { Db } from '@/db/client';
@@ -35,26 +35,26 @@ export async function setFinanceCombos(db: Db, actor: string, ids: number[]) {
 const itemsOk = (items: { kind: string; id: number }[] | null | undefined, allowed: number[]) =>
   !!items?.length && items.every((it) => it.kind === 'combo' && allowed.includes(it.id));
 
-/** 這幾張發票財務都能操作嗎？不行就整批擋下 */
+/** 這幾張發票會計都能操作嗎？不行就整批擋下 */
 export async function assertFinanceInvoices(db: Db, ids: number[]) {
   const allowed = await getFinanceCombos(db);
   const rows = ids.length ? await db.select({ id: t.invoice.id, items: t.preorder.items }).from(t.invoice)
     .leftJoin(t.preorder, eq(t.preorder.id, t.invoice.preorderId)).where(inArray(t.invoice.id, ids)) : [];
   if (rows.length !== new Set(ids).size || rows.some((r) => !itemsOk(r.items, allowed))) {
-    throw new BookingError('FORBIDDEN', '財務帳號只能處理後台開放的方案的發票');
+    throw new BookingError('FORBIDDEN', '會計帳號只能處理後台開放的方案的發票');
   }
 }
 
-/** 這幾張訂單（認購單）財務都能對帳嗎？ */
+/** 這幾張訂單（認購單）會計都能對帳嗎？ */
 export async function assertFinancePreorders(db: Db, ids: number[]) {
   const allowed = await getFinanceCombos(db);
   const rows = ids.length ? await db.select({ id: t.preorder.id, items: t.preorder.items }).from(t.preorder).where(inArray(t.preorder.id, ids)) : [];
   if (rows.length !== new Set(ids).size || rows.some((r) => !itemsOk(r.items, allowed))) {
-    throw new BookingError('FORBIDDEN', '財務帳號只能處理後台開放的方案的訂單');
+    throw new BookingError('FORBIDDEN', '會計帳號只能處理後台開放的方案的訂單');
   }
 }
 
-/** 財務登入後看到的資料：可開方案的發票、訂單（對帳）、網銀入帳 */
+/** 會計登入後看到的資料：可開方案的發票、訂單（對帳）、網銀入帳 */
 export async function financeState(db: Db, user: { username: string; displayName: string; role: string }) {
   const allowed = await getFinanceCombos(db);
   const ev = await currentEvent(db);
@@ -72,7 +72,7 @@ export async function financeState(db: Db, user: { username: string; displayName
     // 其他方案的訂單只給比對用的欄位（沒有姓名），讓網銀入帳能正確歸屬、不會誤列成「找不到訂單」
     others: all.filter((p) => !okPo.has(p.id)).map((p) => ({ id: p.id, no: p.no, amount: p.amount, last5: p.last5, paidAmount: p.paidAmount, paidOk: !!p.paidOkAt, status: p.status, waitlist: p.waitlist })),
     bank: await listBank(db),
-    // 可售組數（與首頁「全場銷售總覽」2M 方案同一套計算），只列財務負責的方案
+    // 可售組數（與首頁「全場銷售總覽」2M 方案同一套計算），只列會計負責的方案
     plans: ((await salesOverview(db))?.twoM.plans ?? []).filter((p) => allowed.includes(p.id)),
     at: new Date().toISOString(),
   };

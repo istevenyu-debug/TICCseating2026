@@ -16,7 +16,7 @@ export default async function TicketsPage({ searchParams }: { searchParams: { id
   const db = await getDb();
   const user = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value);
   if (!user) return <main className="wrap"><div className="card">請先登入後台。<a href="/admin">前往登入</a></div></main>;
-  if (user.role === 'finance') return <main className="wrap"><div className="card">財務帳號只能處理電子發票。</div></main>;
+  if (user.role === 'finance') return <main className="wrap"><div className="card">會計帳號只能處理電子發票與對帳。</div></main>;
   const ids = (searchParams.ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0);
   const { event, tickets } = await ticketData(db, ids);
   const when = event.showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });

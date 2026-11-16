@@ -9,7 +9,7 @@ import { clearMenuCache, preorderMenu, preorderMenuShared, submitPreorder } from
 export const dynamic = 'force-dynamic';
 
 /** 已登入後台的人員（代填認購單用）；一般買方回傳 null，不查資料庫 */
-const staffOf = async (db: Db) => { const u = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value); return u && u.role !== 'finance' ? u : null; }; // 財務帳號不能代填
+const staffOf = async (db: Db) => { const u = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value); return u && u.role !== 'finance' ? u : null; }; // 會計帳號不能代填
 
 /** 公開訂購頁：可選項目（人多時共用同一份、壓縮後送出） */
 export async function GET(req: Request) {

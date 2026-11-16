@@ -8,7 +8,7 @@ export async function requireAdmin(opts: { finance?: boolean } = {}) {
   const db = await getDb();
   const user = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value);
   if (!user) throw new BookingError('UNAUTHORIZED', '請先登入後台。');
-  // 財務帳號只能用明確允許的 API（後台狀態、電子發票操作）
-  if (user.role === 'finance' && !opts.finance) throw new BookingError('FORBIDDEN', '財務帳號只能處理電子發票');
+  // 會計帳號只能用明確允許的 API（後台狀態、電子發票操作）
+  if (user.role === 'finance' && !opts.finance) throw new BookingError('FORBIDDEN', '會計帳號只能處理電子發票與對帳');
   return { db, user };
 }

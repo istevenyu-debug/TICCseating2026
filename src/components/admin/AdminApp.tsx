@@ -116,7 +116,7 @@ const useAdmin = () => useContext(AdminCtx)!;
 
 export default function AdminApp() {
   const [st, setSt] = useState<State | null>(null);
-  const [fin, setFin] = useState<FinState | null>(null); // 財務帳號：只看發票
+  const [fin, setFin] = useState<FinState | null>(null); // 會計帳號：只看發票
   const [empty, setEmpty] = useState(false); // 全新的系統（雲端剛建好）：還沒有場次，先上傳備份
   const [tab, setTab] = useState<Tab>('home');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err' | 'warn'; text: string } | null>(null);
@@ -1887,7 +1887,7 @@ function BankRecon({ rec }: { rec: Rec }) {
   const stOf = (p: Pre) => rec.state.get(p.id)?.state;
   const okTodo = live.filter((p) => stOf(p) === 'ok' && !p.paidOkAt);
   const okDone = live.filter((p) => stOf(p) === 'ok' && p.paidOkAt);
-  const diffGroups = rec.groups.filter((g) => g.deposits.length && g.got !== g.due && g.orders.some((id) => byId.has(id))); // 財務畫面只列看得到的訂單
+  const diffGroups = rec.groups.filter((g) => g.deposits.length && g.got !== g.due && g.orders.some((id) => byId.has(id))); // 會計畫面只列看得到的訂單
   const waiting = live.filter((p) => stOf(p) === 'waiting' && !p.paidOkAt);
   const nolast5 = live.filter((p) => stOf(p) === 'nolast5' && !p.paidOkAt);
   const unknown = rec.unknown.map((id) => dep.get(id)!).filter(Boolean);
@@ -2492,7 +2492,7 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
 
 type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; plans: import('@/lib/sales').SalesOverview['twoM']['plans']; at: string; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
 
-/** 財務帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
+/** 會計帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
 function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | 'err' | 'warn'; text: string } | null; setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void }) {
   const { act, busy, sure, confirm2 } = useAdmin();
   const [view, setView] = useState<'inv' | 'rec'>('inv');
@@ -2516,7 +2516,7 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
     <main className="wrap">
       <header className="top">
         <div>
-          <h1>電子發票（財務）</h1>
+          <h1>電子發票（會計）</h1>
           <div className="small muted">{fin.event.name}・{fin.user.displayName}・<span title="系統版本">{APP_VERSION}</span></div>
         </div>
         <div className="row"><MyPassword /><button className="btn" onClick={async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.reload(); }}>登出</button></div>
@@ -2530,7 +2530,7 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
         style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
       {view === 'rec' && <FinanceRecon fin={fin} />}
       {view === 'inv' && <div className="pstack">
-        {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>，請聯絡主管。</div>
+        {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>，請聯絡系統管理員。</div>
           : c.mode !== 'prod' ? <div className="note warn">目前是<b>{MODE_LABEL[c.mode]}</b>，開出的<b>不是正式發票</b>。</div>
           : <div className="note ok">正式模式：開出的是真的發票。課稅別：<b>{c.taxType === '3' ? '免稅' : '應稅'}</b></div>}
         <div className="card">
@@ -2540,7 +2540,7 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
             </select>
           </h2>
           <p className="small muted" style={{ margin: '0 0 8px' }}>
-            可處理的方案：<b>{fin.combos.join('、') || '（主管尚未開放）'}</b>。一筆訂單開一張，<b>發票日期是開立當天</b>。紅底＝電腦核對有異常，請確認後再開。
+            可處理的方案：<b>{fin.combos.join('、') || '（系統管理員尚未開放）'}</b>。一筆訂單開一張，<b>發票日期是開立當天</b>。紅底＝電腦核對有異常，請確認後再開。
           </p>
           {filter === 'todo' && todo.length > 0 && (
             <div className="row" style={{ marginBottom: 8 }}>
@@ -2565,7 +2565,7 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
   );
 }
 
-/** 財務畫面最上方「目前進度」：可售組數、已開立發票（逐張列出）、待開立、未勾已匯款 — 即時，大家看同一套數字 */
+/** 會計畫面最上方「目前進度」：可售組數、已開立發票（逐張列出）、待開立、未勾已匯款 — 即時，大家看同一套數字 */
 function FinanceStatus({ fin }: { fin: FinState }) {
   const issued = fin.invoices.filter((x) => x.status === 'issued');
   const todo = fin.invoices.filter((x) => x.status === 'pending' || x.status === 'failed').length;
@@ -2596,7 +2596,7 @@ function FinanceStatus({ fin }: { fin: FinState }) {
   );
 }
 
-/** 財務：對帳（網銀比對＋勾已匯款＋下載） */
+/** 會計：對帳（網銀比對＋勾已匯款＋下載） */
 function FinanceRecon({ fin }: { fin: FinState }) {
   const ctx = useAdmin();
   const { act, busy } = ctx;
@@ -2622,7 +2622,7 @@ function FinanceRecon({ fin }: { fin: FinState }) {
   return (
     <AdminCtx.Provider value={{ ...ctx, st }}>
       <div className="pstack">
-        <div className="note">對帳範圍：<b>{fin.combos.join('、') || '（主管尚未開放）'}</b>。勾「已匯款」只是記錄（誰、何時），<b>不會寄信、不會開發票</b>；發劃位連結由主管處理。</div>
+        <div className="note">對帳範圍：<b>{fin.combos.join('、') || '（系統管理員尚未開放）'}</b>。勾「已匯款」只是記錄（誰、何時），<b>不會寄信、不會開發票</b>；發劃位連結由票務處理。</div>
         <BankRecon rec={rec} />
         <div className="card">
           <h2>訂單
@@ -2679,7 +2679,7 @@ function MyPassword() {
   );
 }
 
-/** 十、電子發票（主管）：財務帳號可開哪些方案 */
+/** 十、電子發票（主管）：會計帳號可開哪些方案 */
 function FinanceCombosCard() {
   const { st, act, busy } = useAdmin();
   const combos = st.combos.filter((x) => !x.isSingle);
@@ -2687,19 +2687,19 @@ function FinanceCombosCard() {
   const dirty = [...ids].sort().join() !== [...st.financeCombos].sort().join();
   return (
     <div className="card">
-      <h2>財務帳號可開的方案</h2>
-      <p className="small muted" style={{ marginTop: 0 }}>財務登入只看得到、只能開（含作廢）勾選方案的發票；訂單裡有沒勾的方案或單張票就看不到。帳號在「首頁 → 後台帳號」新增，角色選「財務」。</p>
+      <h2>會計帳號可開的方案</h2>
+      <p className="small muted" style={{ marginTop: 0 }}>會計登入只看得到、只能開（含作廢）勾選方案的發票；訂單裡有沒勾的方案或單張票就看不到。帳號在「首頁 → 後台帳號」新增，角色選「會計」。</p>
       {combos.map((x) => (
         <label key={x.id} className="check" style={{ display: 'block' }}>
           <input type="checkbox" checked={ids.includes(x.id)} onChange={(e) => setIds(e.target.checked ? [...ids, x.id] : ids.filter((i) => i !== x.id))} /> {x.name}{x.hidden ? '（隱藏）' : ''}
         </label>
       ))}
-      <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy || !dirty} onClick={() => act({ action: 'finance.combos', ids }, '已儲存財務可開的方案')}>儲存</button>
+      <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy || !dirty} onClick={() => act({ action: 'finance.combos', ids }, '已儲存會計可開的方案')}>儲存</button>
     </div>
   );
 }
 
-const ROLE_NAME: Record<string, string> = { admin: '主管／網管（全部）', staff: '工作人員（不含發票、招待）', finance: '財務（只開發票）' };
+const ROLE_NAME: Record<string, string> = { admin: '系統管理員（全部）', staff: '工作人員（不含發票、招待）', finance: '會計（發票與對帳）' };
 
 /** 首頁（主管）：後台帳號 */
 function AccountsCard() {
@@ -2865,7 +2865,7 @@ function Vips() {
   const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '' });
   const [info, setInfo] = useState<{ id: number; name: string; phone: string; email: string; referrer: string; note: string } | null>(null);
   const [days, setDays] = useState(String(v.days));
-  if (st.user.role !== 'admin') return <div className="note err">招待由主管或網管安排，這個帳號沒有權限。</div>;
+  if (st.user.role !== 'admin') return <div className="note err">招待由系統管理員安排，這個帳號沒有權限。</div>;
 
   const vipOf = new Map<string, VipRow>();
   v.list.filter((x) => x.status === 'paid').forEach((x) => x.seats.forEach((s) => vipOf.set(s.id, x)));

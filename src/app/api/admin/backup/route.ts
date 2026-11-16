@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const { db, user } = await requireAdmin();
-    if (user.role !== 'admin') return new Response('這項操作需要主管或網管帳號', { status: 403 });
+    if (user.role !== 'admin') return new Response('這項操作需要系統管理員帳號', { status: 403 });
     const gz = toGz(await exportAll(db));
     const name = `ticc-${new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).replace(/[-: ]/g, '').slice(0, 12)}.json.gz`;
     return new Response(gz, {

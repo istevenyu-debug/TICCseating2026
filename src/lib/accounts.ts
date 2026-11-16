@@ -1,5 +1,5 @@
 /**
- * 後台帳號管理（只有 admin 能用）。角色：admin 主管／網管、staff 工作人員、finance 財務（只能開發票）。
+ * 後台帳號管理（只有 admin 能用）。角色：admin 主管／網管、staff 工作人員、finance 會計（只能開發票）。
  * 防呆：不能停用或降級自己；至少要留一個啟用中的 admin。
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -69,7 +69,7 @@ export async function setupInfo(db: Db, token: string, now = new Date()) {
 /** 本人用設定連結設密碼：成功後連結立刻失效，回傳帳號 id（呼叫端幫他登入） */
 export async function redeemSetup(db: Db, token: string, password: string, now = new Date()) {
   const u = await findSetup(db, token, now);
-  if (!u) throw new BookingError('INVALID', '這個連結已失效（超過 1 小時或已用過），請找主管重寄設定連結。');
+  if (!u) throw new BookingError('INVALID', '這個連結已失效（超過 1 小時或已用過），請找系統管理員重寄設定連結。');
   pwOk(password);
   await db.update(t.adminUser).set({ passwordHash: hashPassword(password) }).where(eq(t.adminUser.id, u.id));
   await db.delete(t.appSetting).where(eq(t.appSetting.key, SETUP_KEY(u.id)));
@@ -103,7 +103,7 @@ export async function updateUser(db: Db, actor: { id: number; username: string }
   const losesAdmin = u.role === 'admin' && u.active && ((v.role && v.role !== 'admin') || v.active === false);
   if (losesAdmin) {
     const others = await db.select({ id: t.adminUser.id }).from(t.adminUser).where(and(eq(t.adminUser.role, 'admin'), eq(t.adminUser.active, true), ne(t.adminUser.id, id)));
-    if (!others.length) throw new BookingError('INVALID', '至少要留一個啟用中的主管（admin）帳號');
+    if (!others.length) throw new BookingError('INVALID', '至少要留一個啟用中的系統管理員（admin）帳號');
   }
   const set: Partial<typeof t.adminUser.$inferInsert> = {};
   const what: string[] = [];

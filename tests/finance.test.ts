@@ -35,7 +35,7 @@ async function invoiceFor(comboId: number, name: string) {
   return inv!.id;
 }
 
-describe('財務帳號：只能處理勾選方案的發票', () => {
+describe('會計帳號：只能處理勾選方案的發票', () => {
   it('預設＝名稱含尊榮／感恩；只看得到、只能操作這些發票；主管可改勾選', async () => {
     expect(await getFinanceCombos(db)).toEqual([vipCombo]);
     const a = await invoiceFor(vipCombo, '尊榮買方');
@@ -45,9 +45,9 @@ describe('財務帳號：只能處理勾選方案的發票', () => {
     expect(st.combos).toEqual(['尊榮席（1+2）']);
     expect(st.plans.every((p) => p.id === vipCombo)).toBe(true);
     await expect(assertFinanceInvoices(db, [a])).resolves.toBeUndefined();
-    await expect(assertFinanceInvoices(db, [b])).rejects.toThrow('財務帳號只能處理');
-    await expect(assertFinanceInvoices(db, [a, b])).rejects.toThrow('財務帳號只能處理');
-    await expect(assertFinanceInvoices(db, [99999])).rejects.toThrow('財務帳號只能處理');
+    await expect(assertFinanceInvoices(db, [b])).rejects.toThrow('會計帳號只能處理');
+    await expect(assertFinanceInvoices(db, [a, b])).rejects.toThrow('會計帳號只能處理');
+    await expect(assertFinanceInvoices(db, [99999])).rejects.toThrow('會計帳號只能處理');
     expect(st.preorders.map((p) => p.name)).toEqual(['尊榮買方']);
     expect(st.preorders[0].linkCode).toBeNull();
     expect(st.others.map((o) => o.amount)).toHaveLength(1);
@@ -55,7 +55,7 @@ describe('財務帳號：只能處理勾選方案的發票', () => {
     const [pa] = await db.select().from(t.preorder).where(eq(t.preorder.name, '尊榮買方'));
     const [pb] = await db.select().from(t.preorder).where(eq(t.preorder.name, '其他買方'));
     await expect(assertFinancePreorders(db, [pa.id])).resolves.toBeUndefined();
-    await expect(assertFinancePreorders(db, [pa.id, pb.id])).rejects.toThrow('財務帳號只能處理');
+    await expect(assertFinancePreorders(db, [pa.id, pb.id])).rejects.toThrow('會計帳號只能處理');
     await setFinanceCombos(db, 'admin', [vipCombo, otherCombo]);
     await expect(assertFinanceInvoices(db, [a, b])).resolves.toBeUndefined();
     await setFinanceCombos(db, 'admin', []);

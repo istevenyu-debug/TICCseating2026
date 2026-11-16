@@ -219,13 +219,13 @@ export async function POST(req: Request) {
     const who = user.username;
     clearMenuCache(); // 後台改了設定：認購頁下一次就拿最新的
     // 主管／網管才能做的：電子發票、招待
-    const mustBeAdmin = () => { if (user.role !== 'admin') throw new BookingError('FORBIDDEN', '這項操作需要主管或網管帳號'); };
-    // 財務帳號：只能操作「可開方案」的發票（開立、改買方、重新核對、作廢、看發票、向綠界查詢），其他一律擋下
+    const mustBeAdmin = () => { if (user.role !== 'admin') throw new BookingError('FORBIDDEN', '這項操作需要系統管理員帳號'); };
+    // 會計帳號：只能操作「可開方案」的發票（開立、改買方、重新核對、作廢、看發票、向綠界查詢），其他一律擋下
     if (a.action === 'me.password') return changeOwnPassword(db, user.id, a.old, a.password); // 每個帳號都能改自己的密碼
     if (user.role === 'finance') {
       switch (a.action) {
         case 'preorder.check':
-          if (a.paid === undefined || a.line) throw new BookingError('FORBIDDEN', '財務帳號只能勾「已匯款」');
+          if (a.paid === undefined || a.line) throw new BookingError('FORBIDDEN', '會計帳號只能勾「已匯款」');
           await assertFinancePreorders(db, [a.id]); return checkPreorder(db, who, a.id, { paid: a.paid });
         case 'preorder.checkMany': await assertFinancePreorders(db, a.ids); return checkPaidMany(db, who, a.ids, a.paid);
         case 'preorder.remits': await assertFinancePreorders(db, [a.id]); return setPreorderRemits(db, who, a.id, a.remits);
@@ -237,7 +237,7 @@ export async function POST(req: Request) {
         case 'invoice.void': await assertFinanceInvoices(db, [a.id]); return voidInvoice(db, a.id, who, a.reason, !!a.reopen);
         case 'invoice.print': await assertFinanceInvoices(db, [a.id]); return invoicePrintUrl(db, a.id);
         case 'invoice.lookup': await assertFinanceInvoices(db, [a.id]); return invoiceLookup(db, a.id);
-        default: throw new BookingError('FORBIDDEN', '財務帳號只能處理電子發票');
+        default: throw new BookingError('FORBIDDEN', '會計帳號只能處理電子發票與對帳');
       }
     }
     switch (a.action) {
