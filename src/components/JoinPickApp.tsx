@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import SeatMap from './SeatMap';
-import TicketQR from './TicketQR';
+import GiftCard from './GiftCard';
 import { fmtDate } from './JoinApp';
 import { phoneProblem } from '@/lib/validation';
 
@@ -164,7 +164,7 @@ export default function JoinPickApp({ code }: { code: string }) {
         </div>
       )}
 
-      {page.gift && <GiftSection code={code} gift={page.gift} contact={s.contact} reload={load} />}
+      {page.gift && <GiftSection code={code} gift={page.gift} contact={s.contact} reload={load} event={page.event} group={page.venue} />}
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>我的劃位序</h2>
@@ -219,7 +219,7 @@ type Row = { slotId: number; optionKey: string; name: string; email: string; pho
 const rowOf = (x: GiftSeat): Row => ({ slotId: x.slotId, optionKey: x.optionKey || x.effectiveKey, name: x.name, email: x.email, phone: x.phone, address: x.address });
 
 /** 贈票取票方式：每席選方式、填實際入座的人（預設負責人）；QR 可填 Email、複製連結用 LINE 傳 */
-function GiftSection({ code, gift, contact, reload }: { code: string; gift: Gift; contact: string; reload: () => Promise<void> }) {
+function GiftSection({ code, gift, contact, reload, event, group }: { code: string; gift: Gift; contact: string; reload: () => Promise<void>; event: { name: string; showAt: string }; group: string }) {
   const [rows, setRows] = useState<Row[]>(() => gift.seats.map(rowOf));
   const [dirty, setDirty] = useState(false);
   const [all, setAll] = useState('');
@@ -229,7 +229,6 @@ function GiftSection({ code, gift, contact, reload }: { code: string; gift: Gift
   useEffect(() => { if (!dirty) setRows(gift.seats.map(rowOf)); }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
   const opt = (k: string) => gift.options.find((o) => o.key === k);
   const edit = (i: number, v: Partial<Row>) => { setRows((r) => r.map((x, j) => (j === i ? { ...x, ...v } : x))); setDirty(true); setMsg(null); };
-  const copy = async (text: string) => { try { await navigator.clipboard.writeText(text); setMsg({ kind: 'ok', text: '已複製連結，可以貼到 LINE 傳給入座的人' }); } catch { window.prompt('請長按複製', text); } };
   async function save() {
     const miss = rows.findIndex((r) => !r.optionKey);
     if (gift.open && miss >= 0) { setMsg({ kind: 'err', text: `${gift.seats[miss].label} 還沒選取票方式` }); return; }
@@ -288,17 +287,9 @@ function GiftSection({ code, gift, contact, reload }: { code: string; gift: Gift
               </>}
             </div>
             {x.qr && !dirty && (
-              <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
-                <TicketQR serial={x.qr.serial} value={x.qr.value} size={110} />
-                <div className="small">
-                  <div className="mono">序號 {x.qr.serial}</div>
-                  {x.mailedTo && <div className="muted">已寄到 {x.mailedTo}</div>}
-                  <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                    <button className="btn small" onClick={() => copy(x.qr!.url)}>複製連結（LINE 傳）</button>
-                    <a className="btn small" href={x.qr.url} target="_blank" rel="noreferrer">開啟電子票</a>
-                    {x.email && <button className="btn small" disabled={busy} onClick={() => mail(x.slotId)}>重寄 Email</button>}
-                  </div>
-                </div>
+              <div className="small" style={{ marginTop: 4, color: '#d9467a' }}>
+                已有電子票（序號 {x.qr.serial}），見下方票卡{x.mailedTo ? `・已寄到 ${x.mailedTo}` : ''}
+                {x.email && <button className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={() => mail(x.slotId)}>重寄 Email</button>}
               </div>
             )}
           </div>
@@ -307,6 +298,17 @@ function GiftSection({ code, gift, contact, reload }: { code: string; gift: Gift
       {msg && <div className={`note${msg.kind === 'err' ? ' err' : ''}`} style={{ margin: '8px 0' }}>{msg.text}</div>}
       <button className="btn pri" style={{ width: '100%', padding: 12, fontSize: 17 }} disabled={busy || !dirty} onClick={save}>{busy ? '儲存中…' : dirty ? '儲存' : '已儲存'}</button>
       <p className="small muted" style={{ margin: '8px 0 0' }}>電子票每席一個 QR，只能入場一次。改了姓名，該席會換新 QR、舊的失效。</p>
+      {!dirty && gift.seats.some((x) => x.qr) && (
+        <div style={{ marginTop: 18 }}>
+          <h2 style={{ margin: '0 0 4px' }}>電子票卡</h2>
+          <p style={{ margin: '0 0 12px' }}>每一席一張，<b>截圖後用 LINE 傳給入座的人</b>。</p>
+          {gift.seats.filter((x) => x.qr).map((x) => (
+            <div key={x.slotId} style={{ padding: '14px 0 28px' }}>
+              <GiftCard seat={x.label} name={x.name} group={group} serial={x.qr!.serial} value={x.qr!.value} eventName={event.name} showAt={event.showAt} entered={x.entered} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

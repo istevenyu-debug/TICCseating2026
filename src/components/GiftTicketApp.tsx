@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import TicketQR from './TicketQR';
+import GiftCard from './GiftCard';
 import { fmtDate } from './JoinApp';
 
 type T = { event: { name: string; showAt: string }; group: string; name: string; seat: string; entrance: string; serial: string; value: string; entered: string | null; contact: string };
@@ -18,14 +18,8 @@ export default function GiftTicketApp({ code }: { code: string }) {
   if (!tk) return <main className="wrap join" style={{ maxWidth: 480 }}><div className="card muted">載入中…</div></main>;
   return (
     <main className="wrap join" style={{ maxWidth: 480 }}>
-      <div className="card" style={{ border: '3px solid #d9467a', textAlign: 'center' }}>
-        <div style={{ display: 'inline-block', background: '#d9467a', color: '#fff', borderRadius: 999, padding: '3px 14px', fontWeight: 700, fontSize: 14 }}>揪團贈席入場 QR（非年代票）</div>
-        <h1 style={{ margin: '10px 0 2px', fontSize: 30 }}>三樓 {tk.seat}</h1>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>{tk.name}</div>
-        <div className="muted small">{tk.group}</div>
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '14px 0 6px' }}><TicketQR serial={tk.serial} value={tk.value} size={240} /></div>
-        <div className="mono small muted">序號 {tk.serial}</div>
-        {tk.entered && <p className="note" style={{ marginTop: 10 }}>已於 {new Date(tk.entered).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false })} 入場</p>}
+      <div style={{ padding: '8px 0 16px' }}>
+        <GiftCard seat={tk.seat} name={tk.name} group={tk.group} serial={tk.serial} value={tk.value} eventName={tk.event.name} showAt={tk.event.showAt} entered={tk.entered} />
       </div>
       <div className="card small">
         <div><b>{tk.event.name}</b></div>
