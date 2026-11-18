@@ -94,6 +94,7 @@ const SUBJECT: Record<string, string> = {
   join_kept: '揪團贈票：已為您保留座位',
   join_gift: '揪團贈票：請選擇取票方式',
   join_qr: '揪團贈席：您的入場電子票',
+  join_gift_ok: '揪團贈票：已收到您的取票方式回覆',
   test: '測試信',
 };
 
@@ -217,7 +218,7 @@ const MAIL_TITLE: Record<string, string> = {
   preorder_received: '已收到您的認購登記', preorder_link: '輪到您劃位了', preorder_cancelled: '認購登記取消通知', preorder_restored: '您的認購登記仍然有效',
   order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
   join_links: '揪團贈票連結', join_rlink: '揪團回報連結', join_plink: '揪團劃位連結', join_report: '收到訂單回報', join_fix: '需補完整訂單編號', join_issue: '回報需要修正', join_group: '揪團群已建立', join_soon: '快輪到您劃位了', join_turn: '輪到您劃位了', join_missed: '劃位已延後', join_kept: '已為您保留座位',
-  join_gift: '請選擇贈票取票方式', join_qr: '您的入場電子票',
+  join_gift: '請選擇贈票取票方式', join_qr: '您的入場電子票', join_gift_ok: '已收到您的取票方式回覆',
 };
 
 /** 把系統訊息拆成：演出名稱、稱呼、內文段落、連結 */
@@ -236,7 +237,7 @@ export function mailLayout(o: { ev: string; title: string; greet?: string; paras
   const C = { ink: '#1f2a44', muted: '#6b7488', line: '#e3e7ef', brand: '#7a5a1e', bg: '#f6f3ec', btn: '#8a6a2a' };
   // 「您選的座位：A、B、C。」這類清單：拆成一行一個，方便核對
   const p = (x: string) => {
-    const m = x.match(/^(您選的座位|劃位成功)[：:](.+?)。?$/);
+    const m = x.match(/^(您選的座位|劃位成功|回覆內容)[：:](.+?)。?$/);
     if (m && m[2].includes('、')) return `<p style="margin:0 0 6px;font-weight:700">${esc(m[1])}</p><table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;width:100%;border:1px solid ${C.line};border-radius:8px;background:#fbfaf6">${m[2].split('、').map((it) => `<tr><td style="padding:8px 14px;border-bottom:1px solid ${C.line}">${esc(it)}</td></tr>`).join('')}</table>`;
     const b = x.match(/^請依以下帳戶完成匯款[：:](.+?)\s*帳號\s*(\S+?)，戶名\s*(.+?)。?$/);
     if (b) return `<p style="margin:0 0 6px;font-weight:700">請依以下帳戶完成匯款</p><table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 14px;width:100%;border:1px solid ${C.line};border-radius:8px;background:#fbfaf6">
@@ -270,7 +271,7 @@ export function mailLayout(o: { ev: string; title: string; greet?: string; paras
 export function niceMail(template: string, text: string, fromName = ''): MailExtra {
   const { ev, url, greet, paras } = partsOf(text);
   const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' || template === 'join_issue' || template === 'join_group' ? '開啟回報頁'
-    : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept'].includes(template) ? '開啟劃位頁'
+    : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept', 'join_gift_ok'].includes(template) ? '開啟劃位頁'
       : template === 'join_gift' ? '選擇取票方式' : '開啟連結';
   return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button, fromName }) };
 }

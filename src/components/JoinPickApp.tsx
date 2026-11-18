@@ -19,7 +19,7 @@ type Page = {
   seats: { id: string; x: number; y: number; no: string; type: string; code: string; label: string; bundle: string | null; zoneId: number; status: 'free' | 'sold' | 'blocked' }[];
 };
 type GiftOpt = { key: string; name: string; desc: string; kind: 'qr' | 'paper'; needAddress: boolean; active: boolean };
-type GiftSeat = { slotId: number; no: number; label: string; optionKey: string; effectiveKey: string; defaulted: boolean; name: string; email: string; phone: string; address: string;
+type GiftSeat = { slotId: number; no: number; label: string; optionKey: string; effectiveKey: string; defaulted: boolean; name: string; email: string; phone: string; address: string; self: boolean; isQr: boolean; serial: string;
   qr: { serial: string; value: string; url: string } | null; mailedTo: string; entered: string | null };
 type Gift = { deadline: string; open: boolean; defaultName: string; options: GiftOpt[]; seats: GiftSeat[] };
 type Res<T> = { ok: true; data: T } | { ok: false; code: string; message: string; detail?: unknown };
@@ -97,6 +97,8 @@ export default function JoinPickApp({ code }: { code: string }) {
   const cur = page.current;
   const left = cur?.deadline ? new Date(cur.deadline).getTime() - (Date.now() + offset.current) : 0;
   const mineTurn = !!cur?.mine;
+  // 調查信寄出、本群座位都選好了：只留標題＋贈票取票方式（劃位排序、其他群、座位圖都不顯示）
+  const giftMode = !!page.gift && page.mine.length > 0 && page.mine.every((x) => x.status === 'done');
   const skipped = page.mine.filter((x) => x.status === 'skip');
   const next = page.queue.filter((x) => x.status === 'wait').slice(0, 3);
 
@@ -135,12 +137,12 @@ export default function JoinPickApp({ code }: { code: string }) {
       <div className="card">
         <h1 style={{ margin: '0 0 4px' }}>揪團劃位・{page.venue}</h1>
         <div className="muted">{page.event.name}・{fmtDate(page.event.showAt)}・負責人 {page.headName}</div>
-        <a href="/join/board" className="small" style={{ display: 'inline-block', marginTop: 6 }}>📊 看劃位現況（大家選到哪裡）</a>
+        {!giftMode && <a href="/join/board" className="small" style={{ display: 'inline-block', marginTop: 6 }}>📊 看劃位現況（大家選到哪裡）</a>}
       </div>
 
       {msg && <div className={`note${msg.kind === 'err' ? ' err' : ''}`} style={{ marginBottom: 12 }}>{msg.text}</div>}
 
-      {mineTurn ? (
+      {giftMode ? null : mineTurn ? (
         <div className="card" style={{ border: '3px solid var(--red)' }}>
           <h2 style={{ margin: 0, color: 'var(--red)' }}>輪到您了！請選 {page.pickCount} 席</h2>
           <p style={{ margin: '6px 0 0' }}>劃位序第 {cur!.nos.join('、')} 號・剩 <b className="mono" style={{ fontSize: 20 }}>{mmss(left)}</b></p>
@@ -157,16 +159,16 @@ export default function JoinPickApp({ code }: { code: string }) {
         </div>
       )}
 
-      {skipped.length > 0 && (
+      {!giftMode && skipped.length > 0 && (
         <div className="card" style={{ borderTop: '4px solid var(--warn)' }}>
           <p style={{ marginTop: 0 }}>您的劃位序第 {skipped.map((x) => x.no).join('、')} 號因為叫不到，暫停排隊。</p>
           <button className="btn pri" disabled={busy} onClick={rejoin}>我回來了，重新排隊</button>
         </div>
       )}
 
-      {page.gift && <GiftSection code={code} gift={page.gift} contact={s.contact} reload={load} event={page.event} group={page.venue} />}
+      {page.gift && <GiftSection code={code} gift={page.gift} contact={s.contact} reload={load} event={page.event} group={page.venue} headName={page.headName} />}
 
-      <div className="card">
+      {!giftMode && <div className="card">
         <h2 style={{ marginTop: 0 }}>我的劃位序</h2>
         {!page.mine.length ? <p className="muted" style={{ margin: 0 }}>{page.locked ? `本群沒有劃位序（已核對 ${page.tickets} 張）。有疑義請洽 ${s.contact}` : `回報截止後才會確定劃位序。目前已核對 ${page.tickets} 張。`}</p> : (
           <div className="tbl"><table>
@@ -174,7 +176,7 @@ export default function JoinPickApp({ code }: { code: string }) {
             <tbody>{page.mine.map((x) => <tr key={x.no}><td className="mono">第 {x.no} 號</td><td>{statusText(x, x.place)}</td></tr>)}</tbody>
           </table></div>
         )}
-      </div>
+      </div>}
 
       {mineTurn && rep && (
         <>
@@ -193,7 +195,7 @@ export default function JoinPickApp({ code }: { code: string }) {
         </>
       )}
 
-      <div className="card">
+      {!giftMode && <div className="card">
         <h2 style={{ marginTop: 0 }}>劃位排序（最初順序）</h2>
         {!page.board.length ? <p className="muted" style={{ margin: 0 }}>還沒有劃位序。</p> : (
           <div className="tbl"><table>
@@ -205,8 +207,8 @@ export default function JoinPickApp({ code }: { code: string }) {
             })}</tbody>
           </table></div>
         )}
-      </div>
-      {!mineTurn && page.seats.length > 0 && (
+      </div>}
+      {!giftMode && !mineTurn && page.seats.length > 0 && (
         <SeatMap seats={page.seats as unknown as MapProps['seats']} zones={page.zones as unknown as MapProps['zones']} vipInstalled={false} floor="3F" view selected={new Set()} onToggle={() => undefined} locked />
       )}
       <p className="small muted" style={{ textAlign: 'center' }}>這是您專屬的劃位連結，請勿轉傳。有問題請聯絡{s.contact}。</p>
@@ -217,27 +219,48 @@ export default function JoinPickApp({ code }: { code: string }) {
 const fmtDl = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 type Row = { slotId: number; optionKey: string; name: string; email: string; phone: string; address: string };
 const rowOf = (x: GiftSeat): Row => ({ slotId: x.slotId, optionKey: x.optionKey || x.effectiveKey, name: x.name, email: x.email, phone: x.phone, address: x.address });
+const same = (a: string, b: string) => a.replace(/\s/g, '') === b.replace(/\s/g, '');
 
-/** 贈票取票方式：每席選方式、填實際入座的人（預設負責人）；QR 可填 Email、複製連結用 LINE 傳 */
-function GiftSection({ code, gift, contact, reload, event, group }: { code: string; gift: Gift; contact: string; reload: () => Promise<void>; event: { name: string; showAt: string }; group: string }) {
+/**
+ * 贈票取票方式：每席選方式、填實際入座的人（預設負責人）。
+ * 按「儲存」先看摘要、再「確認送出」。已回覆的席顯示固定文字（小小的「修改」可再改）。
+ * QR：負責人自己持有的才在這頁顯示票卡；設給別人的 Email 必填，電子票只寄給對方。
+ */
+function GiftSection({ code, gift, contact, reload, event, group, headName }: { code: string; gift: Gift; contact: string; reload: () => Promise<void>; event: { name: string; showAt: string }; group: string; headName: string }) {
+  const answered = (x: GiftSeat) => !!(x.optionKey || x.defaulted);
   const [rows, setRows] = useState<Row[]>(() => gift.seats.map(rowOf));
+  const [editAll, setEditAll] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [review, setReview] = useState(false);
   const [all, setAll] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const sig = JSON.stringify(gift.seats.map(rowOf));
   useEffect(() => { if (!dirty) setRows(gift.seats.map(rowOf)); }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
   const opt = (k: string) => gift.options.find((o) => o.key === k);
-  const edit = (i: number, v: Partial<Row>) => { setRows((r) => r.map((x, j) => (j === i ? { ...x, ...v } : x))); setDirty(true); setMsg(null); };
-  async function save() {
-    const miss = rows.findIndex((r) => !r.optionKey);
-    if (gift.open && miss >= 0) { setMsg({ kind: 'err', text: `${gift.seats[miss].label} 還沒選取票方式` }); return; }
+  const editing = (x: GiftSeat) => editAll || !answered(x);
+  const anyEdit = gift.seats.some(editing);
+  const edit = (i: number, v: Partial<Row>) => { setRows((r) => r.map((x, j) => (j === i ? { ...x, ...v } : x))); setDirty(true); setMsg(null); setReview(false); };
+  function check() {
+    for (const [i, r] of rows.entries()) {
+      if (!editing(gift.seats[i])) continue;
+      const o = opt(r.optionKey);
+      const lb = gift.seats[i].label;
+      if (gift.open && !o) return `${lb} 還沒選取票方式`;
+      if (!r.name.trim()) return `${lb} 請填入座者姓名`;
+      if (o?.kind === 'qr' && !same(r.name, headName) && !r.email.trim()) return `${lb}：設給別人的電子票，請填入座者 Email（電子票只寄給本人）`;
+      if (o?.needAddress && (!r.address.trim() || !r.phone.trim())) return `${lb}：請填收件手機和地址`;
+    }
+    return '';
+  }
+  async function send() {
     setBusy(true); setMsg(null);
-    const r = await call<{ changed: number; mailed: number }>(code, { action: 'gift.save', seats: rows });
+    const seats = rows.filter((_, i) => editing(gift.seats[i]));
+    const r = await call<{ changed: number; mailed: number }>(code, { action: 'gift.save', seats });
     setBusy(false);
-    if (!r.ok) { setMsg({ kind: 'err', text: r.message }); return; }
-    setDirty(false);
-    setMsg({ kind: 'ok', text: r.data.changed ? `已儲存${r.data.mailed ? `，已寄出 ${r.data.mailed} 封電子票 Email` : ''}。` : '沒有變更。' });
+    if (!r.ok) { setMsg({ kind: 'err', text: r.message }); setReview(false); return; }
+    setDirty(false); setReview(false); setEditAll(false);
+    setMsg({ kind: 'ok', text: r.data.changed ? `已收到您的回覆，確認信已寄到您的信箱${r.data.mailed ? `；電子票已寄出 ${r.data.mailed} 封` : ''}。` : '沒有變更。' });
     await reload();
   }
   async function mail(slotId: number) {
@@ -246,63 +269,91 @@ function GiftSection({ code, gift, contact, reload, event, group }: { code: stri
     setBusy(false);
     setMsg(r.ok ? { kind: 'ok', text: `已重寄到 ${r.data.to}` } : { kind: 'err', text: r.message });
   }
+  const mine = gift.seats.filter((x) => x.qr && !dirty);
   return (
     <div className="card" style={{ border: '3px solid #d9467a' }}>
       <h2 style={{ margin: '0 0 4px' }}>贈票取票方式</h2>
-      {gift.open
+      {anyEdit && (gift.open
         ? <p style={{ margin: '0 0 8px' }}>請在 <b>{fmtDl(gift.deadline)}</b> 前，為每一席選擇取票方式，並填寫實際入座的人（預設為您）。逾期未回覆視為「{gift.defaultName}」。</p>
-        : <p style={{ margin: '0 0 8px' }}>回覆已截止（{fmtDl(gift.deadline)}），取票方式不能再改；入座者姓名、Email 仍可修改。如需更改方式請洽{contact}。</p>}
-      <ol className="small" style={{ margin: '0 0 10px', paddingLeft: 20 }}>
+        : <p style={{ margin: '0 0 8px' }}>回覆已截止（{fmtDl(gift.deadline)}），取票方式不能再改，入座者姓名、Email 仍可修改。如需更改方式請洽{contact}。</p>)}
+      {anyEdit && <ol className="small" style={{ margin: '0 0 10px', paddingLeft: 20 }}>
         {gift.options.filter((o) => o.active).map((o) => <li key={o.key}><b>{o.name}</b>{o.desc ? `：${o.desc}` : ''}</li>)}
-      </ol>
-      {gift.open && gift.seats.length > 1 && (
+      </ol>}
+      {anyEdit && gift.open && gift.seats.filter(editing).length > 1 && (
         <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10, background: '#fff5f8', padding: 8, borderRadius: 8 }}>
           <span>全部套用：</span>
           <select value={all} onChange={(e) => setAll(e.target.value)}>
             <option value="">請選擇</option>
             {gift.options.filter((o) => o.active).map((o) => <option key={o.key} value={o.key}>{o.name}</option>)}
           </select>
-          <button className="btn small" disabled={!all} onClick={() => { setRows((r) => r.map((x) => ({ ...x, optionKey: all }))); setDirty(true); setMsg(null); }}>套用到 {gift.seats.length} 席</button>
+          <button className="btn small" disabled={!all} onClick={() => { setRows((r) => r.map((x, i) => (editing(gift.seats[i]) ? { ...x, optionKey: all } : x))); setDirty(true); setMsg(null); setReview(false); }}>套用</button>
         </div>
       )}
       {gift.seats.map((x, i) => {
         const r = rows[i] ?? rowOf(x);
         const o = opt(r.optionKey);
+        if (!editing(x)) {
+          const how = opt(x.effectiveKey)?.name.replace(/（推薦）/, '') ?? '';
+          return (
+            <div key={x.slotId} style={{ borderTop: '1px solid var(--line, #e3e7ef)', padding: '8px 0' }}>
+              <b>三樓 {x.label}</b>｜{how}{x.defaulted ? '（逾期預設）' : ''}｜{x.name}
+              {x.isQr && (x.self ? <span className="small" style={{ color: '#d9467a' }}>｜您本人持有，票卡在下方</span>
+                : x.email ? <span className="small">｜電子票已寄到 {x.email}{x.mailedTo ? '' : '（尚未寄出）'}</span> : <span className="small" style={{ color: 'var(--warn)' }}>｜請按「修改」補 Email</span>)}
+              {o?.needAddress && <div className="small muted">寄到：{x.phone} {x.address}</div>}
+              {x.entered && <span className="small" style={{ color: 'var(--ok)' }}>｜已入場</span>}
+              {x.isQr && !x.self && x.email && !x.entered && <button className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={() => mail(x.slotId)}>重寄</button>}
+            </div>
+          );
+        }
+        const qr = o?.kind === 'qr';
         return (
           <div key={x.slotId} style={{ borderTop: '1px solid var(--line, #e3e7ef)', padding: '10px 0' }}>
-            <div style={{ fontWeight: 700 }}>三樓 {x.label} <span className="muted small">・劃位序第 {x.no} 號{x.entered ? '・已入場' : ''}</span></div>
+            <div style={{ fontWeight: 700 }}>三樓 {x.label}{x.entered ? <span className="small muted">・已入場</span> : null}</div>
             <div className="fields" style={{ marginTop: 6 }}>
               <label className="f">取票方式
                 <select value={r.optionKey} disabled={!gift.open || !!x.entered} onChange={(e) => edit(i, { optionKey: e.target.value })}>
                   <option value="">請選擇</option>
                   {gift.options.filter((y) => y.active || y.key === r.optionKey).map((y) => <option key={y.key} value={y.key}>{y.name}</option>)}
                 </select>
-                {x.defaulted && <span className="small muted">（逾期未選，系統預設）</span>}
               </label>
               <label className="f">入座者姓名<input value={r.name} maxLength={30} disabled={!!x.entered} onChange={(e) => edit(i, { name: e.target.value })} /></label>
-              {o?.kind === 'qr' && <label className="f">入座者 Email（選填，填了會寄電子票）<input type="email" value={r.email} maxLength={120} onChange={(e) => edit(i, { email: e.target.value })} /></label>}
+              {qr && <label className="f">入座者 Email{same(r.name, headName) ? '（選填）' : '（必填：電子票只寄給本人）'}<input type="email" value={r.email} maxLength={120} onChange={(e) => edit(i, { email: e.target.value })} /></label>}
               {o?.needAddress && <>
                 <label className="f">收件人手機<input value={r.phone} inputMode="tel" onChange={(e) => edit(i, { phone: e.target.value })} /></label>
                 <label className="f">收件地址<input value={r.address} maxLength={150} onChange={(e) => edit(i, { address: e.target.value })} /></label>
               </>}
             </div>
-            {x.qr && !dirty && (
-              <div className="small" style={{ marginTop: 4, color: '#d9467a' }}>
-                已有電子票（序號 {x.qr.serial}），見下方票卡{x.mailedTo ? `・已寄到 ${x.mailedTo}` : ''}
-                {x.email && <button className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={() => mail(x.slotId)}>重寄 Email</button>}
-              </div>
-            )}
           </div>
         );
       })}
       {msg && <div className={`note${msg.kind === 'err' ? ' err' : ''}`} style={{ margin: '8px 0' }}>{msg.text}</div>}
-      <button className="btn pri" style={{ width: '100%', padding: 12, fontSize: 17 }} disabled={busy || !dirty} onClick={save}>{busy ? '儲存中…' : dirty ? '儲存' : '已儲存'}</button>
-      <p className="small muted" style={{ margin: '8px 0 0' }}>電子票每席一個 QR，只能入場一次。改了姓名，該席會換新 QR、舊的失效。</p>
-      {!dirty && gift.seats.some((x) => x.qr) && (
+      {anyEdit && !review && (
+        <button className="btn pri" style={{ width: '100%', padding: 12, fontSize: 17 }} disabled={busy}
+          onClick={() => { const e = check(); if (e) { setMsg({ kind: 'err', text: e }); return; } setMsg(null); setReview(true); }}>儲存</button>
+      )}
+      {review && (
+        <div style={{ border: '2px solid #d9467a', borderRadius: 10, padding: 12, background: '#fff5f8' }}>
+          <b>請確認以下內容：</b>
+          <ul style={{ margin: '6px 0 10px', paddingLeft: 20 }}>
+            {rows.map((r, i) => editing(gift.seats[i]) && (
+              <li key={r.slotId}>三樓 {gift.seats[i].label}：{opt(r.optionKey)?.name.replace(/（推薦）/, '') ?? '尚未選擇'}・{r.name}
+                {opt(r.optionKey)?.kind === 'qr' ? (same(r.name, headName) ? '（您本人持有）' : `（電子票寄到 ${r.email}）`) : ''}
+                {opt(r.optionKey)?.needAddress ? `（寄到 ${r.address}）` : ''}</li>
+            ))}
+          </ul>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn pri" style={{ flex: 1, padding: 12, fontSize: 17 }} disabled={busy} onClick={send}>{busy ? '送出中…' : '確認送出'}</button>
+            <button className="btn" style={{ flex: 1, padding: 12 }} disabled={busy} onClick={() => setReview(false)}>返回修改</button>
+          </div>
+        </div>
+      )}
+      {!anyEdit && <div style={{ textAlign: 'right', marginTop: 6 }}><button className="small" style={{ background: 'none', border: 0, color: 'var(--muted, #6b7488)', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { setEditAll(true); setMsg(null); }}>修改</button></div>}
+      {editAll && <div style={{ textAlign: 'right', marginTop: 6 }}><button className="small" style={{ background: 'none', border: 0, color: 'var(--muted, #6b7488)', textDecoration: 'underline', cursor: 'pointer' }} onClick={() => { setEditAll(false); setDirty(false); setReview(false); setRows(gift.seats.map(rowOf)); setMsg(null); }}>取消修改</button></div>}
+      {mine.length > 0 && !anyEdit && (
         <div style={{ marginTop: 18 }}>
-          <h2 style={{ margin: '0 0 4px' }}>電子票卡</h2>
-          <p style={{ margin: '0 0 12px' }}>每一席一張，<b>截圖後用 LINE 傳給入座的人</b>。</p>
-          {gift.seats.filter((x) => x.qr).map((x) => (
+          <h2 style={{ margin: '0 0 4px' }}>您的電子票卡</h2>
+          <p style={{ margin: '0 0 12px' }}>入場時出示票卡上的 QR 即可（可截圖保存）。</p>
+          {mine.map((x) => (
             <div key={x.slotId} style={{ padding: '14px 0 28px' }}>
               <GiftCard seat={x.label} name={x.name} group={group} serial={x.qr!.serial} value={x.qr!.value} eventName={event.name} showAt={event.showAt} entered={x.entered} />
             </div>

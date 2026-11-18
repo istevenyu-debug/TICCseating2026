@@ -2273,6 +2273,27 @@ function Preorders() {
 }
 
 /* ---------- 九、驗票 ---------- */
+/** 測驗票用：刪除全部入場紀錄（截止時間後停用；個別撤銷照常可用） */
+function TestClear({ until, open }: { until: string; open: boolean }) {
+  const { act, busy, sure, confirm2 } = useAdmin();
+  const [edit, setEdit] = useState(false);
+  const [v, setV] = useState(() => new Date(until).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(' ', 'T'));
+  const fmt = new Date(until).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  return (
+    <div style={{ borderTop: '1px solid var(--line, #e3e7ef)', marginTop: 12, paddingTop: 10 }}>
+      <b>測驗票後清除</b>
+      <p className="small muted" style={{ margin: '4px 0 8px' }}>刪除全部入場紀錄（所有票種），讓測試掃過的票可以再掃。{fmt} 後自動停用，避免活動當天誤按；上面的個別「撤銷」一直都能用。</p>
+      <button className="btn small" disabled={busy || !open} onClick={() => confirm2('ck-clear-all', () => act({ action: 'checkin.clearAll' }, '已刪除全部入場紀錄'))}>
+        {!open ? `已停用（${fmt} 後）` : sure === 'ck-clear-all' ? '確定刪除全部入場紀錄？再按一次' : '刪除全部入場紀錄（測試用）'}</button>
+      <button className="btn small" style={{ marginLeft: 6 }} onClick={() => setEdit(!edit)}>改停用時間</button>
+      {edit && <div className="row" style={{ gap: 6, marginTop: 6 }}>
+        <input type="datetime-local" value={v} onChange={(e) => setV(e.target.value)} />
+        <button className="btn small pri" disabled={busy || !v} onClick={async () => { if (await act({ action: 'checkin.testUntil', until: `${v}:00+08:00` }, '已更新停用時間')) setEdit(false); }}>儲存</button>
+      </div>}
+    </div>
+  );
+}
+
 function Gates() {
   const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
   const [name, setName] = useState('');
@@ -2336,6 +2357,7 @@ function Gates() {
               <button className="btn small" disabled={busy} onClick={() => confirm2(`cu${x.id}`, () => act({ action: 'checkin.undo', id: x.id }, `已撤銷 ${x.serial} 的入場，這張票可以再掃一次`))}>{sure === `cu${x.id}` ? '確認撤銷' : '撤銷'}</button>
             </div>
           )) : <p className="small muted" style={{ margin: 0 }}>尚無入場紀錄</p>}
+          {st.gift?.testUntil && <TestClear until={st.gift.testUntil} open={st.gift.testOpen} />}
         </div></div>
       </div>
       <div className="card">

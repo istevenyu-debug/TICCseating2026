@@ -98,6 +98,8 @@ export const giftSerial = (no: number, ver: number) => `JG${String(no).padStart(
 export const isGiftSerial = (s: string) => /^JG\d{3,}-\d+$/.test(s);
 export const giftUrl = (base: string, code: string) => `${base}/join/q/${code}`;
 const newCode = () => randomBytes(12).toString('base64url');
+/** 入座者是不是群主本人（比對時去空白） */
+export const isSelf = (name: string, headName: string) => clean(name).replace(/\s/g, '') === clean(headName).replace(/\s/g, '');
 export const deadlineOf = (sentAt: Date | null, hours: number) => (sentAt ? new Date(sentAt.getTime() + hours * 3600_000) : null);
 
 type Gift = typeof t.joinGift.$inferSelect;
@@ -173,10 +175,12 @@ export async function giftForLeader(db: Db, reg: Reg, now = new Date(), base = '
       const e = effectiveOf(r.gift, reg, s, now);
       const serial = giftSerial(r.slot.no, r.gift.ver);
       const qr = e.opt?.kind === 'qr';
+      // 群主自己持有（入座者＝群主）才在群主頁顯示 QR；設給別人的只寄到對方信箱，群主頁不給 QR
+      const self = isSelf(r.gift.name, reg.headName);
       return {
         slotId: r.slot.id, no: r.slot.no, label: seatLabel(r), optionKey: r.gift.optionKey, effectiveKey: e.opt?.key ?? '', defaulted: e.defaulted,
-        name: r.gift.name, email: r.gift.email, phone: r.gift.phone, address: r.gift.address,
-        qr: qr ? { serial, value: qrValue(secret, serial), url: base ? giftUrl(base, r.gift.code) : `/join/q/${r.gift.code}` } : null,
+        name: r.gift.name, email: r.gift.email, phone: r.gift.phone, address: r.gift.address, self, isQr: qr, serial: qr ? serial : '',
+        qr: qr && self ? { serial, value: qrValue(secret, serial), url: base ? giftUrl(base, r.gift.code) : `/join/q/${r.gift.code}` } : null,
         mailedTo: qr && r.gift.mailedVer === r.gift.ver ? r.gift.mailedTo : '', entered: entered.get(serial)?.toISOString() ?? null,
       };
     }),
@@ -232,6 +236,9 @@ export async function saveGiftSeats(db: Db, actor: string, regId: number | null,
       if (x.address.length < 6) throw new BookingError('INVALID', `選「${opt.name}」的座位，請填寫收件地址。`);
       if (!/^09\d{8}$/.test(x.phone)) throw new BookingError('INVALID', `選「${opt.name}」的座位，請填寫收件人手機（09 開頭 10 碼）。`);
     }
+    if (!admin && (opt ?? cur.opt)?.kind === 'qr' && !isSelf(x.name, r.reg.headName) && !email) {
+      throw new BookingError('INVALID', `${x.name}：設給別人的電子票，請填入座者 Email（電子票只寄給本人）。`);
+    }
     const wasQr = cur.opt?.kind === 'qr';
     const nowQr = (opt ?? cur.opt)?.kind === 'qr';
     const nameChanged = x.name !== g.name;
@@ -257,6 +264,24 @@ export async function saveGiftSeats(db: Db, actor: string, regId: number | null,
     }
   }
   for (const m of mails) await db.insert(t.notification).values({ channel: 'email', template: 'join_qr', recipient: m.to, content: m.content });
+  // 負責人確認送出：寄一封「已收到您的回覆」給負責人（後台修改不寄；沒有變更不寄）
+  if (!admin && regId !== null && changed && base) {
+    const reg = rows[0].reg;
+    if (reg.email) {
+      const now2 = await db.select({ gift: t.joinGift, slot: t.joinSlot }).from(t.joinGift).innerJoin(t.joinSlot, eq(t.joinSlot.id, t.joinGift.slotId))
+        .where(and(eq(t.joinSlot.regId, reg.id), eq(t.joinSlot.status, 'done')));
+      const seatRowsAll = await seatRows(db, ev.id, [reg.id]);
+      const lines = seatRowsAll.map((r) => {
+        const g = now2.find((x) => x.gift.slotId === r.slot.id)?.gift ?? r.gift;
+        const e = effectiveOf(g, reg, s, now);
+        const how = e.opt ? e.opt.name.replace(/（推薦）/, '') : '尚未選擇';
+        const to = e.opt?.kind === 'qr' ? (isSelf(g.name, reg.headName) ? '（您本人持有，請在劃位頁查看票卡）' : g.email ? `（電子票已寄到 ${g.email}）` : '') : '';
+        return `三樓 ${seatLabel(r)}：${how}・${g.name}${to}`;
+      });
+      const content = `【${ev.name}】${reg.headName} 您好，已收到您的贈票取票方式回覆，謝謝您。回覆內容：${lines.join('、')}。設給別人的電子票只寄到對方信箱。劃位頁：${pickUrl(base, reg.pickCode ?? '')}`;
+      await db.insert(t.notification).values({ channel: 'email', template: 'join_gift_ok', recipient: reg.email, content });
+    }
+  }
   if (changed) await db.insert(t.auditLog).values({ actor, action: 'join_gift_save', target: regId ? `join_reg:${regId}` : 'join_gift', detail: JSON.stringify({ seats: p.data.seats.map((x) => ({ ...x, address: x.address ? '（已填）' : '' })), mailed: mails.length }) });
   return { changed, mailed: mails.length };
 }
@@ -411,7 +436,7 @@ export async function sendGiftSurvey(db: Db, actor: string, base: string, o: { i
 export async function giftAdminState(db: Db, base: string, now = new Date()) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
   const settings = await getGiftSettings(db);
-  if (!ev) return { settings, groups: [], seats: [], tally: [], undecided: 0, sendable: 0 };
+  if (!ev) return { testUntil: '', testOpen: false, settings, groups: [], seats: [], tally: [], undecided: 0, sendable: 0 };
   const rows = await seatRows(db, ev.id);
   const regs = await db.select().from(t.joinReg).where(eq(t.joinReg.eventId, ev.id));
   const vs = await db.select().from(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
@@ -430,6 +455,13 @@ export async function giftAdminState(db: Db, base: string, now = new Date()) {
     };
   });
   const groupIds = [...new Set(rows.map((r) => r.slot.regId))];
+  const allIn = await db.select({ serial: t.checkin.serial }).from(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like 'JG%'`));
+  const checkinsByReg = new Map<number, number>();
+  for (const c of allIn) {
+    const no = parseInt(c.serial.slice(2), 10);
+    const r = rows.find((x) => x.slot.no === no);
+    if (r) checkinsByReg.set(r.slot.regId, (checkinsByReg.get(r.slot.regId) ?? 0) + 1);
+  }
   const groups = groupIds.map((id) => {
     const r = regs.find((x) => x.id === id)!;
     const mine = seats.filter((x) => x.regId === id);
@@ -437,11 +469,83 @@ export async function giftAdminState(db: Db, base: string, now = new Date()) {
       regId: id, group: gname(r), headName: r.headName, email: r.email, seats: mine.length, decided: mine.filter((x) => x.effectiveKey).length,
       sentAt: r.giftSentAt?.toISOString() ?? null, deadline: deadlineOf(r.giftSentAt, settings.hours)?.toISOString() ?? null,
       pickUrl: r.pickCode && base ? pickUrl(base, r.pickCode) : '',
+      checkins: checkinsByReg.get(id) ?? 0,
     };
   }).sort((a, b) => a.group.localeCompare(b.group, 'zh-Hant'));
   const tally = settings.options.map((o) => ({ key: o.key, name: o.name, kind: o.kind, active: o.active, seats: seats.filter((x) => x.effectiveKey === o.key).length, groups: new Set(seats.filter((x) => x.effectiveKey === o.key).map((x) => x.regId)).size }));
+  const until = await testUntil(db);
   return {
+    testUntil: until.toISOString(), testOpen: now < until,
     settings, groups, seats, tally, undecided: seats.filter((x) => !x.effectiveKey).length,
     sendable: groups.filter((g) => g.email && !g.sentAt).length,
   };
+}
+
+/* ---------- 測試用：重設一群、刪除全部入場紀錄（截止時間前才能用） ---------- */
+
+const TEST_KEY = 'checkin.testUntil';
+
+/** 測試清除的截止時間：預設演出當天 16:00（台北） */
+export async function testUntil(db: Db) {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, TEST_KEY));
+  if (r?.value && !Number.isNaN(Date.parse(r.value))) return new Date(r.value);
+  const ev = await ev0(db);
+  const d = ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+  return new Date(`${d}T16:00:00+08:00`);
+}
+export async function setTestUntil(db: Db, actor: string, iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) throw new BookingError('INVALID', '時間格式不正確');
+  await db.insert(t.appSetting).values({ key: TEST_KEY, value: d.toISOString() }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: d.toISOString() } });
+  await db.insert(t.auditLog).values({ actor, action: 'checkin_test_until', target: 'app_setting', detail: d.toISOString() });
+  return { until: d.toISOString() };
+}
+async function mustBeforeTestUntil(db: Db, now: Date) {
+  const u = await testUntil(db);
+  if (now >= u) throw new BookingError('INVALID', `已過 ${u.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}，測試用的清除功能已停用（個別入場紀錄仍可撤銷）。`);
+}
+
+/**
+ * 重設一群（重新測試）：回到「還沒寄調查信」。取票方式、入座者、Email 清空（姓名回到負責人），
+ * 版本號繼續往上加（舊 QR、截圖永遠失效），一併刪除這群的贈席入場紀錄。不寄任何信。
+ */
+export async function resetGiftGroup(db: Db, actor: string, regId: number, now = new Date()) {
+  await mustBeforeTestUntil(db, now);
+  const ev = await ev0(db);
+  const [reg] = await db.select().from(t.joinReg).where(and(eq(t.joinReg.id, regId), eq(t.joinReg.eventId, ev.id)));
+  if (!reg) throw new BookingError('NOT_FOUND', '找不到這一群');
+  await ensureGifts(db, ev.id);
+  const rows = await db.select({ slot: t.joinSlot, gift: t.joinGift }).from(t.joinSlot).innerJoin(t.joinGift, eq(t.joinGift.slotId, t.joinSlot.id)).where(eq(t.joinSlot.regId, regId));
+  let checkins = 0;
+  await db.transaction(async (tx) => {
+    for (const r of rows) {
+      await tx.update(t.joinGift).set({
+        optionKey: '', name: reg.headName, email: '', phone: '', address: '', ver: r.gift.ver + 1, code: newCode(),
+        chosenBy: '', chosenAt: null, mailedTo: '', mailedVer: 0, mailedAt: null, updatedAt: now,
+      }).where(eq(t.joinGift.slotId, r.slot.id));
+      const del = await tx.delete(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like ${`JG${String(r.slot.no).padStart(3, '0')}-%`}`)).returning({ id: t.checkin.id });
+      checkins += del.length;
+    }
+    await tx.update(t.joinReg).set({ giftSentAt: null }).where(eq(t.joinReg.id, regId));
+    await tx.insert(t.auditLog).values({ actor, action: 'join_gift_reset', target: `join_reg:${regId}`, detail: JSON.stringify({ seats: rows.length, checkins }) });
+  });
+  return { seats: rows.length, checkins };
+}
+
+/** 這一群目前有幾筆贈席入場紀錄（重設前的確認畫面用） */
+export async function giftCheckinsOf(db: Db, regId: number) {
+  const slots = await db.select({ no: t.joinSlot.no }).from(t.joinSlot).where(eq(t.joinSlot.regId, regId));
+  if (!slots.length) return 0;
+  const rows = await db.select({ serial: t.checkin.serial }).from(t.checkin).where(and(eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like 'JG%'`));
+  const pre = slots.map((x) => `JG${String(x.no).padStart(3, '0')}-`);
+  return rows.filter((r) => pre.some((p) => r.serial.startsWith(p))).length;
+}
+
+/** 刪除全部入場紀錄（下週測驗票用）。截止時間後停用 */
+export async function clearAllCheckins(db: Db, actor: string, now = new Date()) {
+  await mustBeforeTestUntil(db, now);
+  const ev = await ev0(db);
+  const del = await db.delete(t.checkin).where(eq(t.checkin.eventId, ev.id)).returning({ id: t.checkin.id });
+  await db.insert(t.auditLog).values({ actor, action: 'checkin_clear_all', target: 'checkin', detail: JSON.stringify({ count: del.length }) });
+  return { count: del.length };
 }

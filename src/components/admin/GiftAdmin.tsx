@@ -66,6 +66,11 @@ export default function GiftAdmin({ g, act, busy, sure, confirm2, setMsg }: Prop
           {oneG && !oneG.sentAt && <button className="btn pri small" disabled={busy || !oneG.email} onClick={() => sendOne(false)}>寄給 {oneG.headName}</button>}
           {oneG?.sentAt && <button className="btn small" disabled={busy} onClick={() => confirm2(`gift-resend-${oneG.regId}`, () => sendOne(true))}>{sure === `gift-resend-${oneG.regId}` ? '確定重寄？再按一次' : '重寄這一群（截止時間不變）'}</button>}
           {oneG?.pickUrl && <button className="btn small" onClick={() => copy(oneG.pickUrl)}>複製劃位頁連結</button>}
+          {oneG && (oneG.sentAt || oneG.decided > 0) && <button className="btn small" disabled={busy || !g.testOpen} title="測試用：這一群回到還沒寄調查信，舊 QR 全部失效"
+            onClick={() => confirm2(`gift-reset-${oneG.regId}`, async () => {
+              const r = await act({ action: 'join.gift.reset', id: oneG.regId }) as { seats: number; checkins: number } | null;
+              if (r) setMsg({ kind: 'ok', text: `已重設 ${oneG.group}：${r.seats} 席回到未選、舊 QR 全部失效${r.checkins ? `、刪除 ${r.checkins} 筆入場紀錄` : ''}。可以再按「寄給 ${oneG.headName}」重新測試。` });
+            })}>{!g.testOpen ? '重設已停用（活動當天）' : sure === `gift-reset-${oneG.regId}` ? `確定重設？${oneG.checkins ? `將一併刪除 ${oneG.checkins} 筆入場紀錄，` : ''}再按一次` : '重設這一群（重新測試）'}</button>}
         </div>
         {oneG?.sentAt && <p className="small" style={{ margin: '-6px 0 12px' }}>{oneG.sentAt ? `已寄 ${tw(oneG.sentAt)}・截止 ${tw(oneG.deadline)}・已決定 ${oneG.decided}／${oneG.seats} 席` : ''}</p>}
         <b>② 寄給全部群主</b>

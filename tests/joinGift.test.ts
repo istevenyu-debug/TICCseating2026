@@ -8,6 +8,7 @@ import { ensureFloor3 } from '@/lib/floor';
 import { addVenues, decideReg, paintFloor3, setJoinSettings, submitJoin } from '@/lib/join';
 import { clearJoinTest, pickPage, submitPick, submitReport, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import {
+  clearAllCheckins, resetGiftGroup, setTestUntil, testUntil,
   getGiftSettings, giftAdminState, giftSerial, giftTicketPage, resendGiftQr, saveGiftSeats, saveGiftSettings, sendGiftSurvey, DEFAULT_GIFT,
 } from '@/lib/joinGift';
 import { checkinList, checkinSummary, createGates, listGates, scan, searchTickets } from '@/lib/ticket';
@@ -70,6 +71,12 @@ async function gate() {
   return (await listGates(db))[0].token;
 }
 const leader = async (code: string, now: Date) => (await pickPage(db, code, now, BASE)).gift;
+/** 測試用：直接從資料庫算出某一席目前的 QR（群主頁不一定會給） */
+async function qrOf(slotId: number) {
+  const [r] = await db.select({ g: t.joinGift, s: t.joinSlot }).from(t.joinGift).innerJoin(t.joinSlot, eq(t.joinSlot.id, t.joinGift.slotId)).where(eq(t.joinGift.slotId, slotId));
+  const serial = giftSerial(r.s.no, r.g.ver);
+  return { serial, value: qrValue(await qrSecret(db), serial), code: r.g.code };
+}
 
 describe('調查信：先試寄一群，再一鍵寄全部（不重寄、不誤寄）', () => {
   it('試寄只寄那一群；寄全部只寄沒寄過、有座位、有 Email 的；再按一次 0 封', async () => {
@@ -121,30 +128,57 @@ describe('負責人劃位頁：每席選方式、填入座者', () => {
     expect(g.options.map((o) => o.key)).toEqual(['qr', 'shop', 'mail', 'onsite']);
   });
 
-  it('選 QR＋Email：寄一次 QR 信；同樣內容再存不重寄；換 Email 才再寄', async () => {
+  it('選 QR＋Email：寄一次 QR 信；同樣內容再存不重寄；換 Email 才再寄；群主收一封回覆確認', async () => {
     const { a } = await setup();
     await sendGiftSurvey(db, '網管', BASE, { ids: [a.id] }, at(10));
     const s = (await leader(a.pickCode!, at(11)))!.seats;
-    const rows = s.map((x, i) => ({ slotId: x.slotId, optionKey: 'qr', name: ['王一', '王二', '王三'][i], email: i === 0 ? 'one@example.com' : '' }));
+    const rows = s.map((x, i) => ({ slotId: x.slotId, optionKey: 'qr', name: ['王一', '王二', '王三'][i], email: ['one@example.com', 'two@example.com', 'three@example.com'][i] }));
     const r = await saveGiftSeats(db, '負責人', a.id, { seats: rows }, at(12), BASE);
-    expect(r).toEqual({ changed: 3, mailed: 1 });
+    expect(r).toEqual({ changed: 3, mailed: 3 });
     const qm = await mails('join_qr');
-    expect(qm.map((x) => x.recipient)).toEqual(['one@example.com']);
+    expect(qm.map((x) => x.recipient)).toEqual(['one@example.com', 'two@example.com', 'three@example.com']);
     expect(qm[0].content).toContain('王一 您好');
+    // 回覆確認信：只寄給負責人一封
+    const ok = await mails('join_gift_ok');
+    expect(ok.map((x) => x.recipient)).toEqual(['A場@example.com']);
+    expect(ok[0].content).toContain('電子票已寄到 one@example.com');
     const g = (await leader(a.pickCode!, at(13)))!;
-    expect(g.seats.every((x) => x.qr)).toBe(true);
+    // 設給別人：群主頁不給 QR
+    expect(g.seats.every((x) => x.isQr && !x.self && x.qr === null)).toBe(true);
+    expect(JSON.stringify(g)).not.toContain((await qrOf(s[0].slotId)).value);
     expect(g.seats[0].mailedTo).toBe('one@example.com');
     expect((await saveGiftSeats(db, '負責人', a.id, { seats: rows }, at(14), BASE)).mailed).toBe(0);
+    expect(await mails('join_gift_ok')).toHaveLength(1); // 沒有變更不寄
     rows[0].email = 'new@example.com';
     expect((await saveGiftSeats(db, '負責人', a.id, { seats: rows }, at(15), BASE)).mailed).toBe(1);
-    expect((await mails('join_qr')).map((x) => x.recipient)).toEqual(['one@example.com', 'new@example.com']);
-    // QR 信內容：內嵌 QR、連結是這一席
-    const html = await giftQrMail(db, (await mails('join_qr'))[1].content);
+    expect((await mails('join_qr')).map((x) => x.recipient)).toEqual(['one@example.com', 'two@example.com', 'three@example.com', 'new@example.com']);
+    expect(await mails('join_gift_ok')).toHaveLength(2);
+    const html = await giftQrMail(db, (await mails('join_qr'))[3].content);
     expect(html.attachments).toHaveLength(1);
     expect(html.html).toContain('揪團贈席入場 QR');
-    // 重寄（負責人）：2 分鐘內擋下
     expect(await msg(resendGiftQr(db, '負責人', a.id, s[0].slotId, at(16), BASE))).toContain('2 分鐘');
     expect((await resendGiftQr(db, '負責人', a.id, s[0].slotId, at(20), BASE)).to).toBe('new@example.com');
+  });
+
+  it('設給別人一定要填 Email；群主本人持有才在群主頁顯示票卡', async () => {
+    const { a } = await setup();
+    await sendGiftSurvey(db, '網管', BASE, { ids: [a.id] }, at(10));
+    const s = (await leader(a.pickCode!, at(11)))!.seats;
+    expect(await msg(saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '王一' }] }, at(12), BASE))).toContain('Email');
+    await saveGiftSeats(db, '負責人', a.id, { seats: [
+      { slotId: s[0].slotId, optionKey: 'qr', name: 'A場負責人' },
+      { slotId: s[1].slotId, optionKey: 'qr', name: ' A場 負責人 ' }, // 空白不影響
+      { slotId: s[2].slotId, optionKey: 'qr', name: '王三', email: 'three@example.com' },
+    ] }, at(12), BASE);
+    let g = (await leader(a.pickCode!, at(13)))!;
+    expect(g.seats.map((x) => !!x.qr)).toEqual([true, true, false]);
+    // 改回群主本人：顯示新 QR（舊的失效）
+    const old = await qrOf(s[2].slotId);
+    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[2].slotId, optionKey: 'qr', name: 'A場負責人', email: '' }] }, at(14), BASE);
+    g = (await leader(a.pickCode!, at(15)))!;
+    expect(g.seats[2].qr!.serial).not.toBe(old.serial);
+    // 後台不受 Email 必填限制
+    expect((await saveGiftSeats(db, '網管', null, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '長輩' }] }, at(16), BASE, true)).changed).toBe(1);
   });
 
   it('改姓名：QR 換新版、舊 QR 與舊連結失效；舊 QR 信不寄出', async () => {
@@ -153,28 +187,25 @@ describe('負責人劃位頁：每席選方式、填入座者', () => {
     const s = (await leader(a.pickCode!, at(11)))!.seats;
     const rows = s.map((x) => ({ slotId: x.slotId, optionKey: 'qr', name: '王一', email: 'one@example.com' }));
     await saveGiftSeats(db, '負責人', a.id, { seats: rows }, at(12), BASE);
-    const old = (await leader(a.pickCode!, at(13)))!.seats[0];
+    const old = await qrOf(s[0].slotId);
     const oldMail = (await mails('join_qr'))[0];
-    const [g0] = await db.select().from(t.joinGift).where(eq(t.joinGift.slotId, old.slotId));
     rows[0].name = '李四';
     await saveGiftSeats(db, '負責人', a.id, { seats: rows }, at(14), BASE);
-    const now = (await leader(a.pickCode!, at(15)))!.seats[0];
-    expect(now.qr!.serial).not.toBe(old.qr!.serial);
-    expect(now.qr!.serial).toBe(giftSerial(old.no, 2));
-    expect(await msg(giftTicketPage(db, g0.code))).toContain('已更換或無效');
+    const now = await qrOf(s[0].slotId);
+    expect(now.serial).not.toBe(old.serial);
+    expect(now.serial).toBe(giftSerial(s[0].no, 2));
+    expect(await msg(giftTicketPage(db, old.code))).toContain('已更換或無效');
     await expect(giftQrMail(db, oldMail.content)).rejects.toThrow('已更換');
-    const tk = await giftTicketPage(db, now.qr!.url.split('/').pop()!, at(15));
+    const tk = await giftTicketPage(db, now.code, at(15));
     expect(tk.name).toBe('李四');
     const token = await gate();
-    const sec = await qrSecret(db);
-    const bad = await scan(db, token, { qr: qrValue(sec, old.qr!.serial) }, at(16));
+    const bad = await scan(db, token, { qr: old.value }, at(16));
     expect(bad.result).toBe('invalid');
     expect(bad.result === 'invalid' && bad.reason).toContain('已更換');
-    const ok = await scan(db, token, { qr: now.qr!.value }, at(17));
+    const ok = await scan(db, token, { qr: now.value }, at(17));
     expect(ok.result).toBe('ok');
     expect(ok.result === 'ok' && ok.holderName).toBe('李四');
-    expect((await scan(db, token, { qr: now.qr!.value }, at(18))).result).toBe('used');
-    // 入場後不能再改姓名、不能改成紙本
+    expect((await scan(db, token, { qr: now.value }, at(18))).result).toBe('used');
     rows[0].name = '張五';
     expect(await msg(saveGiftSeats(db, '負責人', a.id, { seats: [rows[0]] }, at(19), BASE))).toContain('已經入場');
     expect(await msg(saveGiftSeats(db, '負責人', a.id, { seats: [{ ...rows[0], name: '李四', optionKey: 'shop' }] }, at(19), BASE))).toContain('已經入場');
@@ -188,20 +219,20 @@ describe('負責人劃位頁：每席選方式、填入座者', () => {
     await saveGiftSeats(db, '負責人', a.id, { seats: [
       { slotId: s[0].slotId, optionKey: 'mail', name: '王一', phone: '0911-222-333', address: '台北市信義區信義路五段 7 號' },
       { slotId: s[1].slotId, optionKey: 'shop', name: '王二' },
-      { slotId: s[2].slotId, optionKey: 'qr', name: '王三' },
+      { slotId: s[2].slotId, optionKey: 'qr', name: 'A場負責人' },
     ] }, at(12), BASE);
     let g = (await leader(a.pickCode!, at(13)))!;
     expect(g.seats.map((x) => !!x.qr)).toEqual([false, false, true]);
     expect(g.seats[0].phone).toBe('0911222333');
     const qr = g.seats[2].qr!;
-    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[2].slotId, optionKey: 'onsite', name: '王三' }] }, at(14), BASE);
+    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[2].slotId, optionKey: 'onsite', name: 'A場負責人' }] }, at(14), BASE);
     g = (await leader(a.pickCode!, at(15)))!;
     expect(g.seats[2].qr).toBeNull();
     const token = await gate();
     const r = await scan(db, token, { qr: qr.value }, at(16));
     expect(r.result).toBe('invalid');
     // 再改回 QR：新版序號（舊截圖仍無效）
-    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[2].slotId, optionKey: 'qr', name: '王三' }] }, at(17), BASE);
+    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[2].slotId, optionKey: 'qr', name: 'A場負責人' }] }, at(17), BASE);
     g = (await leader(a.pickCode!, at(18)))!;
     expect(g.seats[2].qr!.serial).not.toBe(qr.serial);
     expect((await scan(db, token, { qr: qr.value }, at(19))).result).toBe('invalid');
@@ -235,12 +266,11 @@ describe('回覆截止（做活的：寄出後幾小時）', () => {
     expect(g.seats.map((x) => x.effectiveKey)).toEqual(['shop', 'qr', 'qr']);
     expect(g.seats[1].defaulted).toBe(true);
     expect(await msg(saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '王一' }] }, late, BASE))).toContain('截止');
-    expect((await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[1].slotId, optionKey: 'qr', name: '陳二' }] }, late, BASE)).changed).toBe(1);
+    expect((await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[1].slotId, optionKey: 'qr', name: '陳二', email: 'chen@example.com' }] }, late, BASE)).changed).toBe(1);
     // 後台不受截止限制
     expect((await saveGiftSeats(db, '網管', null, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '王一' }] }, late, BASE, true)).changed).toBe(1);
     const token = await gate();
-    const g2 = (await leader(a.pickCode!, late))!;
-    expect((await scan(db, token, { qr: g2.seats[2].qr!.value }, late)).result).toBe('ok');
+    expect((await scan(db, token, { qr: (await qrOf(s[2].slotId)).value }, late)).result).toBe('ok');
     // 改成 48 小時：又可以改
     await saveGiftSettings(db, '網管', { ...DEFAULT_GIFT, hours: 48 });
     expect((await leader(a.pickCode!, late))!.open).toBe(true);
@@ -276,10 +306,10 @@ describe('驗票、入場名單、後台', () => {
     const { a } = await setup();
     await sendGiftSurvey(db, '網管', BASE, {}, at(10));
     const s = (await leader(a.pickCode!, at(11)))!.seats;
-    await saveGiftSeats(db, '負責人', a.id, { seats: s.map((x, i) => ({ slotId: x.slotId, optionKey: i === 2 ? 'onsite' : 'qr', name: ['王一', '王二', '王三'][i] })) }, at(12), BASE);
+    await saveGiftSeats(db, '負責人', a.id, { seats: s.map((x, i) => ({ slotId: x.slotId, optionKey: i === 2 ? 'onsite' : 'qr', name: ['王一', '王二', '王三'][i], email: `w${i}@example.com` })) }, at(12), BASE);
     const token = await gate();
-    const g = (await leader(a.pickCode!, at(13)))!;
-    const r = await scan(db, token, { serial: g.seats[0].qr!.serial }, at(14));
+    const q0 = await qrOf(s[0].slotId); const q1 = await qrOf(s[1].slotId);
+    const r = await scan(db, token, { serial: q0.serial }, at(14));
     expect(r.result).toBe('ok');
     expect(r.total).toBe(2); // 只算選 QR 的 2 席（C 群還沒選、未截止）
     expect(r.entered).toBe(1);
@@ -298,14 +328,14 @@ describe('驗票、入場名單、後台', () => {
     expect(st.groups.map((x) => x.group)).toEqual(['A場', 'C場']);
     // 後台取消劃位序：QR 失效
     await voidSlot(db, '網管', s[1].slotId, '測試');
-    expect((await scan(db, token, { qr: g.seats[1].qr!.value }, at(16))).result).toBe('invalid');
+    expect((await scan(db, token, { qr: q1.value }, at(16))).result).toBe('invalid');
   });
 
   it('清除揪團測試資料：連贈席入場紀錄、調查信寄出時間一起清', async () => {
     const { a } = await setup();
     await sendGiftSurvey(db, '網管', BASE, { ids: [a.id] }, at(10));
     const s = (await leader(a.pickCode!, at(11)))!.seats;
-    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '王一' }] }, at(12), BASE);
+    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: '王一', email: 'w@example.com' }] }, at(12), BASE);
     const token = await gate();
     await scan(db, token, { serial: giftSerial(s[0].no, 1) }, at(13));
     expect(await db.select().from(t.checkin)).toHaveLength(1);
@@ -329,5 +359,52 @@ describe('驗票、入場名單、後台', () => {
     const db3 = await createPgliteDb();
     await importAll(db3, old);
     expect(await db3.select().from(t.joinGift)).toHaveLength(0);
+  });
+});
+
+describe('測試用：重設一群、刪除全部入場紀錄（12/9 16:00 起停用）', () => {
+  it('重設一群：回到未寄、舊 QR 永久失效、刪掉這群的入場紀錄、不寄信；其他群不動', async () => {
+    const { a, c } = await setup();
+    await sendGiftSurvey(db, '網管', BASE, {}, at(10));
+    const s = (await leader(a.pickCode!, at(11)))!.seats;
+    await saveGiftSeats(db, '負責人', a.id, { seats: s.map((x, i) => ({ slotId: x.slotId, optionKey: 'qr', name: `王${i}`, email: `w${i}@example.com` })) }, at(12), BASE);
+    const cs = (await leader(c.pickCode!, at(11)))!.seats;
+    await saveGiftSeats(db, '負責人', c.id, { seats: [{ slotId: cs[0].slotId, optionKey: 'qr', name: '林一', email: 'l@example.com' }] }, at(12), BASE);
+    const token = await gate();
+    const oldA = await qrOf(s[0].slotId);
+    const qc = await qrOf(cs[0].slotId);
+    await scan(db, token, { qr: oldA.value }, at(13));
+    await scan(db, token, { qr: qc.value }, at(13));
+    const before = (await db.select().from(t.notification)).length;
+    const r = await resetGiftGroup(db, '網管', a.id, at(14));
+    expect(r).toEqual({ seats: 3, checkins: 1 });
+    expect((await db.select().from(t.notification)).length).toBe(before);
+    expect((await reg(a.id)).giftSentAt).toBeNull();
+    expect(await leader(a.pickCode!, at(15))).toBeNull();
+    const [g] = await db.select().from(t.joinGift).where(eq(t.joinGift.slotId, s[0].slotId));
+    expect(g).toMatchObject({ optionKey: '', name: 'A場負責人', email: '', ver: 2 });
+    expect((await scan(db, token, { qr: oldA.value }, at(16))).result).toBe('invalid');
+    // C 群的入場紀錄還在
+    expect(await db.select().from(t.checkin)).toHaveLength(1);
+    expect((await reg(c.id)).giftSentAt).not.toBeNull();
+    // 重新試寄
+    expect((await sendGiftSurvey(db, '網管', BASE, { ids: [a.id] }, at(17))).count).toBe(1);
+  });
+
+  it('刪除全部入場紀錄：預設演出當天 16:00 起停用（可改）；個別撤銷不受影響', async () => {
+    const { a } = await setup();
+    expect((await testUntil(db)).toISOString()).toBe(new Date('2026-12-09T16:00:00+08:00').toISOString());
+    await sendGiftSurvey(db, '網管', BASE, { ids: [a.id] }, at(10));
+    const s = (await leader(a.pickCode!, at(11)))!.seats;
+    await saveGiftSeats(db, '負責人', a.id, { seats: [{ slotId: s[0].slotId, optionKey: 'qr', name: 'A場負責人' }] }, at(12), BASE);
+    const token = await gate();
+    await scan(db, token, { qr: (await qrOf(s[0].slotId)).value }, at(13));
+    expect((await clearAllCheckins(db, '網管', at(14))).count).toBe(1);
+    await scan(db, token, { qr: (await qrOf(s[0].slotId)).value }, at(15));
+    const day = new Date('2026-12-09T16:00:00+08:00');
+    expect(await msg(clearAllCheckins(db, '網管', day))).toContain('已停用');
+    expect(await msg(resetGiftGroup(db, '網管', a.id, day))).toContain('已停用');
+    await setTestUntil(db, '網管', '2026-12-09T18:00:00+08:00');
+    expect((await clearAllCheckins(db, '網管', day)).count).toBe(1);
   });
 });

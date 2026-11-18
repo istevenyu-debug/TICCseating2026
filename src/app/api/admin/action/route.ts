@@ -21,7 +21,7 @@ import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
-import { resendGiftQr, saveGiftSeats, saveGiftSettings, sendGiftSurvey } from '@/lib/joinGift';
+import { clearAllCheckins, resendGiftQr, resetGiftGroup, saveGiftSeats, saveGiftSettings, sendGiftSurvey, setTestUntil } from '@/lib/joinGift';
 import { setCaps } from '@/lib/sales';
 import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
@@ -126,6 +126,9 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.gift.send'), ids: z.array(id).max(500).optional(), resend: z.boolean().optional(), dry: z.boolean().optional() }),
   z.object({ action: z.literal('join.gift.seat'), seat: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.gift.mail'), slotId: id }),
+  z.object({ action: z.literal('join.gift.reset'), id }),
+  z.object({ action: z.literal('checkin.clearAll') }),
+  z.object({ action: z.literal('checkin.testUntil'), until: z.string().max(40) }),
   z.object({ action: z.literal('invoice.issue'), ids: z.array(id).min(1).max(500), force: z.boolean().optional() }),
   z.object({ action: z.literal('invoice.edit'), id, invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']), invCode: z.string().max(20), invTitle: z.string().max(60) }),
   z.object({ action: z.literal('invoice.recheck'), id }),
@@ -350,6 +353,9 @@ export async function POST(req: Request) {
         return r;
       }
       case 'join.gift.seat': { const r = await saveGiftSeats(db, who, null, { seats: [a.seat] }, new Date(), joinBase(req), true); dispatchQueued(db).catch(() => undefined); return r; }
+      case 'join.gift.reset': mustBeAdmin(); return resetGiftGroup(db, who, a.id);
+      case 'checkin.clearAll': mustBeAdmin(); return clearAllCheckins(db, who);
+      case 'checkin.testUntil': mustBeAdmin(); return setTestUntil(db, who, a.until);
       case 'join.gift.mail': { const r = await resendGiftQr(db, who, null, a.slotId, new Date(), joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'invoice.issue': mustBeAdmin(); return issueBatch(db, a.ids, who, !!a.force);
       case 'invoice.edit': mustBeAdmin(); return editInvoiceBuyer(db, a.id, who, a);
