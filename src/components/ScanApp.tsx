@@ -180,10 +180,11 @@ export default function ScanApp({ token }: { token: string }) {
         </form>
         {found && (
           <div className="scan-found">
-            {found.length ? found.map((f) => (
-              <div key={f.serial} className="scan-item">
-                <span><b>{f.label}</b>　{f.holderName}（{f.holderId4}）<br /><span className="scan-sub">{f.serial}</span></span>
-                {f.entered ? <span className="scan-sub">已入場 {hhmm(f.entered)}</span>
+            {found.length ? found.map((f, i) => (
+              <div key={`${f.serial}|${f.label}|${i}`} className="scan-item">
+                <span><b>{f.label}</b>　{f.holderName}{f.holderId4 ? `（${f.holderId4}）` : ''}<br /><span className="scan-sub">{f.serial}</span></span>
+                {!f.serial ? <span className="scan-sub">持紙本票，請看紙本</span>
+                  : f.entered ? <span className="scan-sub">已入場 {hhmm(f.entered)}</span>
                   : <button className="scan-btn small" onClick={async () => { await submit({ serial: f.serial }); setFound(null); setQ(''); }}>入場</button>}
               </div>
             )) : <div className="scan-sub">查無資料</div>}

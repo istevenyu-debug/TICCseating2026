@@ -92,6 +92,8 @@ const SUBJECT: Record<string, string> = {
   join_turn: '揪團贈票：輪到您劃位了',
   join_missed: '揪團贈票：劃位已延後',
   join_kept: '揪團贈票：已為您保留座位',
+  join_gift: '揪團贈票：請選擇取票方式',
+  join_qr: '揪團贈席：您的入場電子票',
   test: '測試信',
 };
 
@@ -187,6 +189,7 @@ async function deliverOne(db: Db, n: typeof t.notification.$inferSelect, cfg: No
       n.template === 'order_confirmed' && n.orderId ? await ticketMail(db, n.orderId, n.content, (c as EmailConfig).fromName)
         : n.template === 'preorder_link' ? linkMail(n.content, (c as EmailConfig).fromName)
         : n.template === 'join_links' ? joinLinksMail(n.content, (c as EmailConfig).fromName)
+        : n.template === 'join_qr' ? await giftQrMail(db, n.content, (c as EmailConfig).fromName)
         : niceMail(n.template, n.content, (c as EmailConfig).fromName));
     await set({ status: 'sent', sentAt: now, error: null, attempts: n.attempts + 1 });
   } catch (e) {
@@ -214,6 +217,7 @@ const MAIL_TITLE: Record<string, string> = {
   preorder_received: '已收到您的認購登記', preorder_link: '輪到您劃位了', preorder_cancelled: '認購登記取消通知', preorder_restored: '您的認購登記仍然有效',
   order_received: '已收到您的劃位資料', order_confirmed: '劃位成功', order_cancelled: '劃位取消通知', order_expired: '劃位逾時取消', invite: '您的專屬劃位連結', test: '測試信',
   join_links: '揪團贈票連結', join_rlink: '揪團回報連結', join_plink: '揪團劃位連結', join_report: '收到訂單回報', join_fix: '需補完整訂單編號', join_issue: '回報需要修正', join_group: '揪團群已建立', join_soon: '快輪到您劃位了', join_turn: '輪到您劃位了', join_missed: '劃位已延後', join_kept: '已為您保留座位',
+  join_gift: '請選擇贈票取票方式', join_qr: '您的入場電子票',
 };
 
 /** 把系統訊息拆成：演出名稱、稱呼、內文段落、連結 */
@@ -266,7 +270,8 @@ export function mailLayout(o: { ev: string; title: string; greet?: string; paras
 export function niceMail(template: string, text: string, fromName = ''): MailExtra {
   const { ev, url, greet, paras } = partsOf(text);
   const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' || template === 'join_issue' || template === 'join_group' ? '開啟回報頁'
-    : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept'].includes(template) ? '開啟劃位頁' : '開啟連結';
+    : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept'].includes(template) ? '開啟劃位頁'
+      : template === 'join_gift' ? '選擇取票方式' : '開啟連結';
   return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button, fromName }) };
 }
 
@@ -338,6 +343,35 @@ export async function ticketMail(db: Db, orderId: number, text: string, fromName
     ev: event.name, title: '劃位成功', greet, paras: [`演出時間：${when}・台北國際會議中心 大會堂`, ...paras.filter((x) => !/QR code 請至|入場時請出示/.test(x))],
     extraHtml: `${invHtml}<p style="margin:6px 0 10px;font-weight:700">入場時請出示以下 QR code（每張票一個，可截圖保存）</p>${cards.join('')}`,
     note: '每個 QR code 只能入場一次，請勿轉傳給他人。', fromName,
+  });
+  return { html, attachments };
+}
+
+/**
+ * 揪團贈席電子票信：內嵌 QR。寄出當下再查一次連結：已改姓名（換新版）或改成紙本的，不寄舊 QR（標為失敗）。
+ */
+export async function giftQrMail(db: Db, text: string, fromName = ''): Promise<MailExtra> {
+  const { giftTicketPage } = await import('./joinGift');
+  const QR = (await import('qrcode')).default;
+  const { url, greet, paras } = partsOf(text);
+  const code = url.match(/\/join\/q\/([A-Za-z0-9_-]+)/)?.[1] ?? '';
+  const tk = await giftTicketPage(db, code).catch(() => null);
+  if (!tk) throw new Error('這一席的電子票已更換或改成紙本，舊信不寄出');
+  const cid = 'qr0@gift';
+  const attachments = [{ filename: `${tk.serial}.png`, content: await QR.toBuffer(tk.value, { type: 'png', margin: 1, width: 260 }), cid }];
+  const card = `<table role="presentation" style="border:2px solid #d9467a;border-radius:10px;margin:0 0 12px;width:100%;background:#fff5f8"><tr>
+      <td style="padding:12px;width:140px"><img src="cid:${cid}" width="130" height="130" alt="入場 QR code ${esc(tk.serial)}" style="display:block"></td>
+      <td style="padding:12px 12px 12px 0;font:14px/1.6 sans-serif;color:#18213a">
+        <div style="font-size:13px;color:#d9467a;font-weight:700">揪團贈席入場 QR（非年代票）</div>
+        <div style="font-size:18px;font-weight:700">三樓 ${esc(tk.seat)}</div>
+        <div>入座貴賓 ${esc(maskName(tk.name))}</div>
+        <div>${esc(tk.group)}</div>
+        <div style="color:#5b6579;font-family:monospace">序號 ${esc(tk.serial)}</div>
+      </td></tr></table>`;
+  const html = mailLayout({
+    ev: tk.event.name, title: MAIL_TITLE.join_qr, greet, paras: paras.filter((x) => !/電子票連結/.test(x)), url, button: '開啟電子票',
+    extraHtml: `<p style="margin:6px 0 10px;font-weight:700">入場時請出示以下 QR code（可截圖保存）</p>${card}`,
+    note: '每個 QR code 只能入場一次。如入座者更換，請負責人在劃位頁改姓名，舊 QR 會失效。', fromName,
   });
   return { html, attachments };
 }

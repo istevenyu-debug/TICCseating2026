@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { joinAdminState } from '@/lib/joinQueue';
 import AdminMap, { type SeatLook } from './AdminMap';
+import GiftAdmin, { type GiftState } from './GiftAdmin';
 import { eraRows, guessCols, parsePrices, type EraCols, type EraRow, type EraTicket } from '@/lib/eraParse';
 
 type J = Awaited<ReturnType<typeof joinAdminState>>;
@@ -10,10 +11,10 @@ type Reg = J['regs'][number];
 type Slot = J['slots'][number];
 type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
 interface Props {
-  j: J; act: Act; busy: boolean; base: string; sure: string | null; confirm2: (key: string, fn: () => void) => void;
+  j: J; gift?: GiftState; act: Act; busy: boolean; base: string; sure: string | null; confirm2: (key: string, fn: () => void) => void;
   setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void;
 }
-type Sec = 'set' | 'reg' | 'venue' | 'era' | 'report' | 'seats' | 'queue' | 'list';
+type Sec = 'set' | 'reg' | 'venue' | 'era' | 'report' | 'seats' | 'queue' | 'list' | 'gift';
 
 const tw = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
 const ph = (s: string) => s.replace(/^(\d{4})(\d{3})(\d{3})$/, '$1-$2-$3');
@@ -23,7 +24,7 @@ const SLOT: Record<string, string> = { wait: '排隊中', turn: '劃位中', don
 const byVenueSeat = (a: Slot, b: Slot) => a.venue.localeCompare(b.venue, 'zh-Hant') || (a.rowNo ?? 0) - (b.rowNo ?? 0) || Number(a.seatNo) - Number(b.seatNo);
 
 /** 後台「十二、揪團贈票」：設定、登記審核、團練場、年代名單、回報、三樓座位、劃位排隊、送年代名單 */
-export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: Props) {
+export default function JoinTab({ j, gift, act, busy, base, sure, confirm2, setMsg }: Props) {
   const [sec, setSec] = useState<Sec>('set');
   const n = (s: string) => j.regs.filter((r) => r.status === s).length;
   const unsentLinks = j.regs.filter((r) => r.status === 'approved' && !r.linksSentAt).length;
@@ -33,7 +34,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
     try { await navigator.clipboard.writeText(text); setMsg({ kind: 'ok', text: '已複製' }); } catch { window.prompt('請長按複製', text); }
   };
   const secs: [Sec, string][] = [['set', '設定'], ['reg', `登記審核${n('pending') ? `（${n('pending')}）` : ''}`], ['venue', '團練場'], ['era', '年代名單'],
-    ['report', '回報'], ['seats', '三樓座位'], ['queue', `劃位排隊${j.current ? '・進行中' : ''}`], ['list', '送年代名單']];
+    ['report', '回報'], ['seats', '三樓座位'], ['queue', `劃位排隊${j.current ? '・進行中' : ''}`], ['list', '送年代名單'], ['gift', '贈票取票方式']];
 
   return (
     <div>
@@ -63,6 +64,7 @@ export default function JoinTab({ j, act, busy, base, sure, confirm2, setMsg }: 
       {sec === 'seats' && <Seats j={j} act={act} />}
       {sec === 'queue' && <Queue j={j} act={act} busy={busy} queue={queue} setMsg={setMsg} />}
       {sec === 'list' && <List j={j} act={act} busy={busy} done={done} setMsg={setMsg} />}
+      {sec === 'gift' && gift && <GiftAdmin g={gift} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
     </div>
   );
 }

@@ -21,6 +21,7 @@ import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
+import { resendGiftQr, saveGiftSeats, saveGiftSettings, sendGiftSurvey } from '@/lib/joinGift';
 import { setCaps } from '@/lib/sales';
 import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
@@ -121,6 +122,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.reg.decide'), id, status: z.enum(['approved', 'rejected', 'pending']), reason: z.string().max(100).optional() }),
   z.object({ action: z.literal('join.reg.edit'), id, values: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.reg.delete'), id }),
+  z.object({ action: z.literal('join.gift.settings'), values: z.unknown() }),
+  z.object({ action: z.literal('join.gift.send'), ids: z.array(id).max(500).optional(), resend: z.boolean().optional(), dry: z.boolean().optional() }),
+  z.object({ action: z.literal('join.gift.seat'), seat: z.record(z.unknown()) }),
+  z.object({ action: z.literal('join.gift.mail'), slotId: id }),
   z.object({ action: z.literal('invoice.issue'), ids: z.array(id).min(1).max(500), force: z.boolean().optional() }),
   z.object({ action: z.literal('invoice.edit'), id, invType: z.enum(['member', 'mobile', 'cert', 'donate', 'company']), invCode: z.string().max(20), invTitle: z.string().max(60) }),
   z.object({ action: z.literal('invoice.recheck'), id }),
@@ -336,6 +341,16 @@ export async function POST(req: Request) {
       case 'join.reg.decide': return decideReg(db, who, a.id, a.status, a.reason ?? '');
       case 'join.reg.edit': return editReg(db, who, a.id, a.values);
       case 'join.reg.delete': return deleteReg(db, who, a.id);
+      case 'join.gift.settings': mustBeAdmin(); return saveGiftSettings(db, who, a.values);
+      case 'join.gift.send': {
+        // 寄全部只有系統管理員能按；試寄單一群、重寄單一群工作人員也可以
+        if (!a.dry && (!a.ids || a.ids.length !== 1)) mustBeAdmin();
+        const r = await sendGiftSurvey(db, who, joinBase(req), { ids: a.ids, resend: a.resend, dry: a.dry });
+        if (!a.dry) dispatchQueued(db).catch(() => undefined);
+        return r;
+      }
+      case 'join.gift.seat': { const r = await saveGiftSeats(db, who, null, { seats: [a.seat] }, new Date(), joinBase(req), true); dispatchQueued(db).catch(() => undefined); return r; }
+      case 'join.gift.mail': { const r = await resendGiftQr(db, who, null, a.slotId, new Date(), joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'invoice.issue': mustBeAdmin(); return issueBatch(db, a.ids, who, !!a.force);
       case 'invoice.edit': mustBeAdmin(); return editInvoiceBuyer(db, a.id, who, a);
       case 'invoice.recheck': mustBeAdmin(); return recheckInvoice(db, a.id, who);

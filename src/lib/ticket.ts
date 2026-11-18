@@ -11,6 +11,7 @@ import { BookingError } from './booking';
 import { ticketData } from './admin';
 
 import { qrSecret, readQr } from './qr';
+import { findGiftTicket, giftCheckRows, giftQrCount, isGiftSerial } from './joinGift';
 export { qrSecret, qrValue, readQr } from './qr';
 
 /** 入口建議：單號在左、雙號在右 */
@@ -80,8 +81,9 @@ async function counts(db: Db, eventId: number, gateId: number) {
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
     .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).where(and(eq(t.orders.eventId, eventId), eq(t.orders.status, 'paid')));
   const [{ entered }] = await db.select({ entered: sql<number>`count(*)::int` }).from(t.checkin).where(eq(t.checkin.eventId, eventId));
+  const gift = await giftQrCount(db, eventId); // 揪團贈席電子票（選 QR 的）
   const [{ here }] = await db.select({ here: sql<number>`count(*)::int` }).from(t.checkin).where(and(eq(t.checkin.eventId, eventId), eq(t.checkin.gateId, gateId)));
-  return { total, entered, here };
+  return { total: total + gift, entered, here };
 }
 
 export async function gateInfo(db: Db, token: string) {
@@ -108,6 +110,19 @@ export async function scan(db: Db, token: string, input: { qr?: string; serial?:
   } else {
     serial = (input.serial ?? '').trim().toUpperCase();
     if (!serial) return done({ result: 'invalid', reason: '請輸入序號' });
+  }
+  // 揪團贈席電子票（序號 JG…）
+  if (isGiftSerial(serial)) {
+    const { ticket: gt, reason } = await findGiftTicket(db, g.eventId, serial, now);
+    if (!gt) return done({ result: 'invalid', reason });
+    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: gt.seatId, gateId: g.id, manual, at: now }).onConflictDoNothing().returning();
+    const label = `三樓 ${gt.label}`;
+    if (!ins.length) {
+      const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
+      const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
+      return done({ result: 'used', serial, label, holderName: gt.holderName, at: prev.at.toISOString(), gate: pg?.name ?? '後台' });
+    }
+    return done({ result: 'ok', serial, label, code: gt.code, zoneName: gt.zoneName, side: '', holderName: gt.holderName, holderId4: '', orderNo: `${gt.group}・劃位序 ${gt.no}`, manual });
   }
   const { ticket, order } = await findTicket(db, serial);
   if (!ticket) {
@@ -138,24 +153,34 @@ export async function searchTickets(db: Db, token: string, q: string) {
       ilike(t.orders.orderNo, `%${k}%`), ilike(t.orders.buyerName, `%${k}%`), ilike(t.orders.buyerPhone, `%${k.replace(/\D/g, '') || k}%`),
       ilike(t.orderSeat.holderName, `%${k}%`),
     ))).limit(10);
-  if (!hit.length) return [];
+  // 揪團贈席：入座者、群名、負責人姓名或手機、序號（紙本的也列出，標「紙本票」、不能按入場）
+  const kd = k.replace(/\D/g, '');
+  const gifts = (await giftCheckRows(db, g.eventId)).filter((x) => x.holderName.includes(k) || x.group.includes(k) || x.headName.includes(k)
+    || (kd.length >= 3 && x.headPhone.includes(kd)) || (x.serial && x.serial.includes(k.toUpperCase()))).slice(0, 20);
+  const giftOut = gifts.map((x) => ({ serial: x.serial, label: `三樓 ${x.label}${x.serial ? '' : `（${x.paper}${x.paper === '尚未選擇' ? '' : '・紙本票'}）`}`, holderName: x.holderName, holderId4: x.group, entered: null as string | null }));
+  const giftUsed = giftOut.filter((x) => x.serial).length
+    ? await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, giftOut.filter((x) => x.serial).map((x) => x.serial)))) : [];
+  for (const x of giftOut) x.entered = giftUsed.find((u) => u.serial === x.serial)?.at.toISOString() ?? null;
+  if (!hit.length) return giftOut;
   const { tickets } = await ticketData(db, hit.map((h) => h.id));
   const used = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, tickets.map((x) => x.serial))));
-  return tickets.slice(0, 30).map((x) => ({ serial: x.serial, label: x.label, holderName: x.holderName, holderId4: x.holderId4, entered: used.find((u) => u.serial === x.serial)?.at.toISOString() ?? null }));
+  return [...tickets.slice(0, 30).map((x) => ({ serial: x.serial, label: x.label, holderName: x.holderName, holderId4: x.holderId4, entered: used.find((u) => u.serial === x.serial)?.at.toISOString() ?? null })), ...giftOut];
 }
 
 /* ---------- 後台 ---------- */
 
 export async function checkinSummary(db: Db) {
   const ev = await currentEvent(db);
-  const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
+  const [{ total: paidSeats }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
     .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
+  const giftRows = await giftCheckRows(db, ev.id);
+  const total = paidSeats + giftRows.filter((x) => x.serial).length;
   const recent = await db.select({ id: t.checkin.id, serial: t.checkin.serial, at: t.checkin.at, manual: t.checkin.manual, gate: t.gate.name, seatId: t.checkin.seatId, holder: t.orderSeat.holderName })
     .from(t.checkin).leftJoin(t.gate, eq(t.gate.id, t.checkin.gateId))
     .leftJoin(t.orderSeat, and(eq(t.orderSeat.orderId, t.checkin.orderId), eq(t.orderSeat.seatId, t.checkin.seatId)))
     .where(eq(t.checkin.eventId, ev.id)).orderBy(desc(t.checkin.id)).limit(50);
   const [{ entered }] = await db.select({ entered: sql<number>`count(*)::int` }).from(t.checkin).where(eq(t.checkin.eventId, ev.id));
-  return { total, entered, recent: recent.map((r) => ({ ...r, at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
+  return { total, entered, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? null, at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
 }
 
 /** 撤銷入場（誤掃）：這張票可以再掃一次 */
@@ -189,6 +214,14 @@ export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name') {
       buyerName: paid.find((o) => o.id === x.orderId)?.buyer ?? '', entered: u ? { at: u.at.toISOString(), gate: u.gate ?? '後台' } : null,
     };
   });
+  // 揪團贈席：電子票（QR）列序號；紙本的列「紙本：方式」，給門口核對
+  for (const x of await giftCheckRows(db, ev.id)) {
+    const u = x.serial ? used.find((c) => c.serial === x.serial) : undefined;
+    rows.push({
+      serial: x.serial || `紙本：${x.paper}`, holderName: x.holderName || '（未填）', holderId4: '', label: `三樓 ${x.label}`, code: x.code, zoneName: '揪團贈席',
+      buyerName: `${x.group}（${x.headName}）`, entered: u ? { at: u.at.toISOString(), gate: u.gate ?? '後台' } : null,
+    });
+  }
   rows.sort(sort === 'seat'
     ? (a, b) => seatKey(a.code).localeCompare(seatKey(b.code)) || a.serial.localeCompare(b.serial)
     : (a, b) => byStroke.compare(a.holderName, b.holderName) || a.serial.localeCompare(b.serial));

@@ -68,6 +68,7 @@ export async function resetSales(db: Db, actor: string, o: { keepLinkIds?: numbe
     // 揪團贈席：全部清除時一起清（回報、劃位序、年代名單）；保留部分連結時不動
     if (!keep.length) {
       await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id));
+      await tx.delete(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like 'JG%'`));
       await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id));
       await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id));
       await tx.delete(t.joinEraTicket).where(eq(t.joinEraTicket.eventId, ev.id));

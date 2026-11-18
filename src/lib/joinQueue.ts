@@ -15,6 +15,7 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { rowKey, seatLabel } from './layout';
 import { normalizePhone } from './validation';
+import { giftForLeader } from './joinGift';
 import { USAGE_GIFT, USAGE_VOL, clean, ev0, getJoinSettings, joinRegState, joinUsages, mailHead, pickUrl, rateLimit, reportUrl, sendPickLinks, type JoinSettings } from './join';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -568,6 +569,8 @@ export async function clearJoinTest(db: Db, actor: string, withRegs = false) {
     const seats = (await tx.select({ id: t.joinSlot.seatId }).from(t.joinSlot).where(and(eq(t.joinSlot.eventId, ev.id), sql`${t.joinSlot.seatId} is not null`))).map((x) => x.id!);
     if (seats.length) await tx.update(t.eventSeat).set({ status: 'free', orderId: null, version: sql`${t.eventSeat.version} + 1` }).where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, seats), sql`${t.eventSeat.orderId} is null`));
     const slots = await tx.delete(t.joinSlot).where(eq(t.joinSlot.eventId, ev.id)).returning({ id: t.joinSlot.id });
+    // 贈席電子票（跟著劃位序一起刪）的入場紀錄也清掉，否則重新給號後同序號會被當成已入場
+    await tx.delete(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like 'JG%'`));
     const reps = await tx.delete(t.joinReport).where(eq(t.joinReport.eventId, ev.id)).returning({ id: t.joinReport.id });
     const era = await tx.delete(t.joinEra).where(eq(t.joinEra.eventId, ev.id)).returning({ no: t.joinEra.orderNo });
     await tx.delete(t.joinEraTicket).where(eq(t.joinEraTicket.eventId, ev.id));
@@ -576,7 +579,7 @@ export async function clearJoinTest(db: Db, actor: string, withRegs = false) {
       regs = (await tx.delete(t.joinReg).where(eq(t.joinReg.eventId, ev.id)).returning({ id: t.joinReg.id })).length;
       await tx.delete(t.joinVenue).where(eq(t.joinVenue.eventId, ev.id));
     } else {
-      await tx.update(t.joinReg).set({ pickSentAt: null }).where(eq(t.joinReg.eventId, ev.id));
+      await tx.update(t.joinReg).set({ pickSentAt: null, giftSentAt: null }).where(eq(t.joinReg.eventId, ev.id));
     }
     for (const [k, v] of [['join.reportOpen', '0'], ['join.pickOpen', '0'], ['join.paused', '0'], ['join.round', '1']]) {
       await tx.insert(t.appSetting).values({ key: k, value: v }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: v } });
@@ -794,7 +797,7 @@ async function runTick(db: Db, base: string, now: Date): Promise<boolean> {
 
 /* ---------- 劃位頁（負責人） ---------- */
 
-async function regByPick(db: Db, code: string) {
+export async function regByPick(db: Db, code: string) {
   const [r] = await db.select().from(t.joinReg).where(eq(t.joinReg.pickCode, code));
   if (!r || r.status !== 'approved') throw new BookingError('NOT_FOUND', '劃位連結無效或已更換，請向主辦方確認。');
   return r;
@@ -850,6 +853,7 @@ export async function pickPage(db: Db, code: string, now = new Date(), base = ''
     draft: mineTurn ? readDraft(turn[0])?.seats ?? [] : [],
     rep: { name: myDone[0]?.repName || me.headName, phone: myDone[0]?.repPhone || me.headPhone },
     zones: [GIFT_ZONE, VOL_ZONE], seats,
+    gift: await giftForLeader(db, me, now, base), // 贈票取票方式（調查信寄出後才有）
   };
 }
 

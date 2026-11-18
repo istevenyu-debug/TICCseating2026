@@ -37,7 +37,7 @@ export default async function CheckinListPage({ searchParams }: { searchParams: 
         <thead><tr><th>入場</th><th>持票人</th><th>證後4碼</th><th>座位</th><th>序號</th><th>購票人</th></tr></thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.serial} className={r.entered ? 'cl-done' : ''}>
+            <tr key={`${r.serial}|${r.code}`} className={r.entered ? 'cl-done' : ''}>
               <td className="cl-box">{r.entered ? `✓ ${tw(r.entered.at, { hour: '2-digit', minute: '2-digit' })} ${r.entered.gate}` : '☐'}</td>
               <td><b>{r.holderName}</b></td>
               <td className="mono">{r.holderId4}</td>

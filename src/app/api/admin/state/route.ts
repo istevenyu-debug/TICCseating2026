@@ -6,6 +6,7 @@ import { listNotifications, publicNotifyConfig } from '@/lib/notify';
 import { listInvoices, publicEinvConfig } from '@/lib/einvoice';
 import { listVips } from '@/lib/vip';
 import { joinAdminState } from '@/lib/joinQueue';
+import { giftAdminState } from '@/lib/joinGift';
 import { salesOverview } from '@/lib/sales';
 import { backupDir, listBackups } from '@/lib/backup';
 import { listBank } from '@/lib/bank';
@@ -24,6 +25,6 @@ export async function GET(req: Request) {
     const { db, user } = await requireAdmin({ finance: true });
     if (user.role === 'finance') return financeState(db, user); // 會計：只給可開方案的發票
     await rememberOrigin(db, originOf(req));
-    return { user, users: user.role === 'admin' ? await listUsers(db) : [], setups: user.role === 'admin' ? await pendingSetups(db) : {}, financeCombos: await getFinanceCombos(db), ...(await getAdminState(db)), notify: await publicNotifyConfig(db), einvoice: await publicEinvConfig(db), invoices: await listInvoices(db), vips: await listVips(db), backups: { dir: backupDir(), list: listBackups().slice(0, 3), count: listBackups().length }, notifications: await listNotifications(db, 300), preorders: await listPreorders(db), bank: await listBank(db), preMenu: (await preorderMenuFull(db)).items, form: { key: await getFormKey(db), base: (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '') }, pushLink: await getPushLink(db), line: await getLineCfg(db), preorderSettings: await getPreorderSettings(db), flowImage: (await getFlowImage(db))?.ver ?? null, audit: await recentAudit(db), gates: await listGates(db), checkins: await checkinSummary(db), floor3: await floor3State(db), cardLinks: await listCardLinks(db), join: await joinAdminState(db, (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '')), sales: await salesOverview(db) };
+    return { user, users: user.role === 'admin' ? await listUsers(db) : [], setups: user.role === 'admin' ? await pendingSetups(db) : {}, financeCombos: await getFinanceCombos(db), ...(await getAdminState(db)), notify: await publicNotifyConfig(db), einvoice: await publicEinvConfig(db), invoices: await listInvoices(db), vips: await listVips(db), backups: { dir: backupDir(), list: listBackups().slice(0, 3), count: listBackups().length }, notifications: await listNotifications(db, 300), preorders: await listPreorders(db), bank: await listBank(db), preMenu: (await preorderMenuFull(db)).items, form: { key: await getFormKey(db), base: (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '') }, pushLink: await getPushLink(db), line: await getLineCfg(db), preorderSettings: await getPreorderSettings(db), flowImage: (await getFlowImage(db))?.ver ?? null, audit: await recentAudit(db), gates: await listGates(db), checkins: await checkinSummary(db), floor3: await floor3State(db), cardLinks: await listCardLinks(db), join: await joinAdminState(db, (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '')), gift: await giftAdminState(db, (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '')), sales: await salesOverview(db) };
   });
 }

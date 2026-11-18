@@ -428,6 +428,7 @@ export const joinReg = pgTable('join_reg', {
   pickCode: text('pick_code'), // 負責人劃位連結（綁 Email，請勿轉傳）
   linksSentAt: timestamp('links_sent_at', { withTimezone: true }), // 回報連結信寄出時間
   pickSentAt: timestamp('pick_sent_at', { withTimezone: true }), // 劃位連結信寄出時間（劃位序鎖定後才寄）
+  giftSentAt: timestamp('gift_sent_at', { withTimezone: true }), // 「贈票領取方式」調查信寄出時間（回覆截止＝這個時間＋設定的小時數）
   status: text('status').notNull().default('pending'), // pending 待審核 / approved 已核准 / rejected 已退回
   reason: text('reason').notNull().default(''), // 退回原因
   note: text('note').notNull().default(''), // 後台備註
@@ -521,3 +522,26 @@ export const joinSlot = pgTable('join_slot', {
   sentAt: timestamp('sent_at', { withTimezone: true }), // 已送年代：之後只有後台能改
   earnedAt: timestamp('earned_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ no: uniqueIndex('join_slot_no_idx').on(t.eventId, t.no), seat: uniqueIndex('join_slot_seat_idx').on(t.eventId, t.seatId), byReg: index('join_slot_reg_idx').on(t.regId) }));
+
+/**
+ * 揪團贈席的取票方式（每席一筆，跟著劃位序）：電子票 QR 或紙本（微風小站、郵寄、現場…，選項在後台設定）。
+ * 每席只有一種入場方式：選紙本的不出 QR；選 QR 的，紙本留在備用盒。
+ * 改姓名或改成紙本時 ver＋1、code 換新：舊 QR、舊連結都失效。
+ */
+export const joinGift = pgTable('join_gift', {
+  slotId: integer('slot_id').primaryKey().references(() => joinSlot.id, { onDelete: 'cascade' }),
+  eventId: integer('event_id').notNull().references(() => event.id, { onDelete: 'cascade' }),
+  optionKey: text('option_key').notNull().default(''), // 選的取票方式（空白＝還沒選；截止後視為預設選項）
+  name: text('name').notNull().default(''), // 實際入座的人（預設負責人）
+  email: text('email').notNull().default(''), // QR 寄到這裡（選填）
+  phone: text('phone').notNull().default(''), // 郵寄收件手機
+  address: text('address').notNull().default(''), // 郵寄地址
+  ver: integer('ver').notNull().default(1), // QR 版本：序號 JG<劃位序>-<ver>
+  code: text('code').notNull(), // 這一席的電子票連結 /join/q/<code>（給入座的人）
+  chosenBy: text('chosen_by').notNull().default(''),
+  chosenAt: timestamp('chosen_at', { withTimezone: true }),
+  mailedTo: text('mailed_to').notNull().default(''), // QR 信最後寄到哪裡、哪一版（同一版同一信箱不重寄）
+  mailedVer: integer('mailed_ver').notNull().default(0),
+  mailedAt: timestamp('mailed_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ code: uniqueIndex('join_gift_code_idx').on(t.code), byEvent: index('join_gift_event_idx').on(t.eventId) }));
