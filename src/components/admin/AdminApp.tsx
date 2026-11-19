@@ -2365,6 +2365,7 @@ function Gates() {
         <div className="row">
           <a className="btn pri small" href="/admin/checkin-list?sort=name" target="_blank" rel="noreferrer">依姓名列印</a>
           <a className="btn small" href="/admin/checkin-list?sort=seat" target="_blank" rel="noreferrer">依座位列印</a>
+          <a className="btn small" href="/admin/check-sheet" target="_blank" rel="noreferrer">驗票打勾圖（座位圖，一區一張）</a>
         </div>
         <p className="small muted" style={{ marginBottom: 0 }}>
           所有已確認的票：持票人、證後 4 碼、座位、序號、購票人；列印時已入場的會標出時間與門口。

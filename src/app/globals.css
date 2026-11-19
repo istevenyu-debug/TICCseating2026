@@ -288,3 +288,24 @@ select.need { border-color: var(--red); }
 .cl-done td { color: #888; }
 .cl-done .cl-box { font-size: 8pt; }
 .cl-zone { font-size: 8pt; color: #666; }
+
+/* ---------- 驗票打勾圖（A4 橫印，一區一張） ---------- */
+.cs-wrap { max-width: 297mm; margin: 0 auto; padding: 8px; background: #fff; color: #111; }
+.cs-sheet { width: 277mm; min-height: 190mm; margin: 0 auto 10mm; break-after: page; page-break-after: always; box-sizing: border-box; }
+.cs-sheet:last-child { break-after: auto; page-break-after: auto; }
+.cs-head h1 { font-size: 17pt; margin: 0 0 1mm; }
+.cs-head div { font-size: 9pt; }
+.cs-legend { color: #444; margin-top: 1mm; }
+.cs-stage { text-align: center; font-size: 9pt; letter-spacing: 2px; border: 1px solid #999; border-radius: 3mm; margin: 2mm auto 2mm; width: 60mm; padding: .6mm 0; background: #f2f2f2; }
+.cs-panels { display: flex; gap: 10mm; justify-content: center; align-items: flex-start; }
+.cs-panel { display: grid; position: relative; }
+.cs-row { display: flex; align-items: center; justify-content: center; font-size: 8pt; font-weight: 700; color: #333; }
+.cs-frame { border: .6mm solid #111; border-radius: 1.2mm; z-index: 2; pointer-events: none; display: flex; flex-direction: column; margin: 0 .25mm; }
+.cs-name { font-weight: 700; line-height: 1.15; padding: 0 .8mm; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background: #fff; border-bottom: .2mm solid #999; }
+.cs-seat { display: flex; flex-direction: column; align-items: center; justify-content: center; border: .2mm solid #aaa; margin: .25mm; line-height: 1.05; z-index: 1; }
+.cs-seat .cs-no { font-size: .75em; color: #333; }
+.cs-seat .cs-box { font-size: 1.15em; }
+.cs-none { background: #e4e4e4; color: #888; border-color: #ddd; }
+.cs-paper { background: #fff6d6; }
+.cs-in { background: #d9d9d9; }
+@media print { .cs-wrap { padding: 0; max-width: none; } .cs-sheet { margin: 0; } }
