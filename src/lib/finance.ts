@@ -12,6 +12,7 @@ import { listInvoices, publicEinvConfig } from './einvoice';
 import { listPreorders } from './preorder';
 import { listBank } from './bank';
 import { salesOverview } from './sales';
+import { buyerCheck } from './buyerCheck';
 
 const KEY = 'finance.combos';
 
@@ -74,6 +75,8 @@ export async function financeState(db: Db, user: { username: string; displayName
     bank: await listBank(db),
     // 可售組數（與首頁「全場銷售總覽」2M 方案同一套計算），只列會計負責的方案
     plans: ((await salesOverview(db))?.twoM.plans ?? []).filter((p) => allowed.includes(p.id)),
+    // 買方核對（二聯／三聯／招待）：全部方案都看得到（使用者 11/20 決定），只讀
+    buyerCheck: await buyerCheck(db),
     at: new Date().toISOString(),
   };
 }

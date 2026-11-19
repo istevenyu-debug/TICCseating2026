@@ -3,6 +3,7 @@ import { createCardLink, updateCardLink } from '@/lib/cardLink';
 import { frameComboGroup, unframeComboGroup } from '@/lib/floor';
 import { z } from 'zod';
 import { handle, originOf, readJson } from '@/lib/api';
+import { setInternalEmails } from '@/lib/buyerCheck';
 import { assertFinanceInvoices, assertFinancePreorders, setFinanceCombos } from '@/lib/finance';
 import { changeOwnPassword, createUser, newSetupToken, updateUser } from '@/lib/accounts';
 import { requireAdmin } from '@/lib/adminApi';
@@ -152,6 +153,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('me.password'), old: z.string().max(200), password: z.string().max(200) }),
   z.object({ action: z.literal('user.setupLink'), id }),
   z.object({ action: z.literal('finance.combos'), ids: z.array(id).max(200) }),
+  z.object({ action: z.literal('check.internalEmails'), text: z.string().max(3000) }),
   z.object({ action: z.literal('user.create'), username: z.string().max(30), displayName: z.string().max(40), password: z.string().max(100).optional(), role: z.enum(['admin', 'staff', 'finance']) }),
   z.object({ action: z.literal('user.update'), id, displayName: z.string().max(40).optional(), role: z.enum(['admin', 'staff', 'finance']).optional(), active: z.boolean().optional(), password: z.string().max(100).optional() }),
   z.object({ action: z.literal('invoice.lookup'), id }),
@@ -250,6 +252,7 @@ export async function POST(req: Request) {
     }
     switch (a.action) {
       case 'finance.combos': mustBeAdmin(); return setFinanceCombos(db, who, a.ids);
+      case 'check.internalEmails': mustBeAdmin(); return setInternalEmails(db, who, a.text);
       case 'user.create': mustBeAdmin(); return createUser(db, who, a);
       case 'user.setupLink': mustBeAdmin(); return newSetupToken(db, who, a.id);
       case 'user.update': mustBeAdmin(); return updateUser(db, { id: user.id, username: who }, a.id, a);

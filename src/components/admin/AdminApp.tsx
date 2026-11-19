@@ -4,6 +4,7 @@ import Floor3Tab from './Floor3Tab';
 import JoinTab from './JoinTab';
 import { SalesCard } from './SalesCard';
 import { createContext, Fragment, useCallback, useContext, useEffect, useState } from 'react';
+import BuyerCheck, { type BuyerCheckData } from './BuyerCheck';
 import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
 import { comboDesc, comboQty } from '@/lib/pricing';
@@ -31,7 +32,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -2513,12 +2514,12 @@ function InvoiceRow({ x, on, toggle }: { x: Inv; on: boolean; toggle: () => void
   );
 }
 
-type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; plans: import('@/lib/sales').SalesOverview['twoM']['plans']; at: string; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
+type FinState = { finance: true; user: { username: string; displayName: string; role: string }; event: { name: string; showAt: string }; einvoice: { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: string; taxType: string }; combos: string[]; invoices: Inv[]; plans: import('@/lib/sales').SalesOverview['twoM']['plans']; at: string; buyerCheck: BuyerCheckData; preorders: Pre[]; others: { id: number; no: string; amount: number; last5: string; paidAmount: number; paidOk: boolean; status: string; waitlist: boolean }[]; bank: Bank[] };
 
 /** 會計帳號登入後的畫面：只有可開方案的發票（開立、改買方、作廢、看發票） */
 function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | 'err' | 'warn'; text: string } | null; setMsg: (m: { kind: 'ok' | 'err' | 'warn'; text: string } | null) => void }) {
   const { act, busy, sure, confirm2 } = useAdmin();
-  const [view, setView] = useState<'inv' | 'rec'>('inv');
+  const [view, setView] = useState<'inv' | 'rec' | 'buy'>('inv');
   const unpaid = fin.preorders.filter((p) => p.status !== 'cancelled' && !p.paidOkAt).length;
   const [filter, setFilter] = useState<'todo' | 'issued' | 'void' | 'all'>('todo');
   const [sel, setSel] = useState<Set<number>>(new Set());
@@ -2548,10 +2549,12 @@ function FinanceApp({ fin, msg, setMsg }: { fin: FinState; msg: { kind: 'ok' | '
       <nav className="tabs">
         <button className={view === 'inv' ? 'on' : ''} onClick={() => setView('inv')}>電子發票{todo.length ? <span className="badge">{todo.length}</span> : null}</button>
         <button className={view === 'rec' ? 'on' : ''} onClick={() => setView('rec')}>對帳（已匯款）{unpaid ? <span className="badge">{unpaid}</span> : null}</button>
+        <button className={view === 'buy' ? 'on' : ''} onClick={() => setView('buy')}>買方核對（二聯／三聯）{fin.buyerCheck.rows.some((r) => r.flags.length) ? <span className="badge">{fin.buyerCheck.rows.filter((r) => r.flags.length).length}</span> : null}</button>
       </nav>
       {msg && <div className={`note ${msg.kind}`} role="status" onClick={() => setMsg(null)}
         style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', zIndex: 50, maxWidth: 'min(560px, calc(100vw - 32px))', boxShadow: '0 6px 24px rgba(0,0,0,.18)', cursor: 'pointer' }}>{msg.text}</div>}
       {view === 'rec' && <FinanceRecon fin={fin} />}
+      {view === 'buy' && <BuyerCheck data={fin.buyerCheck} taxType={fin.einvoice.taxType} isAdmin={false} act={act} busy={busy} />}
       {view === 'inv' && <div className="pstack">
         {!c.enabled ? <div className="note warn">電子發票<b>未啟用</b>，請聯絡系統管理員。</div>
           : c.mode !== 'prod' ? <div className="note warn">目前是<b>{MODE_LABEL[c.mode]}</b>，開出的<b>不是正式發票</b>。</div>
@@ -2836,6 +2839,7 @@ function Invoices() {
         </div>
         <div className="side"><EinvSettings />{st.user.role === 'admin' && <FinanceCombosCard />}</div>
       </div>
+      {st.buyerCheck && <BuyerCheck data={st.buyerCheck} taxType={c.taxType} isAdmin={st.user.role === 'admin'} act={act} busy={busy} />}
     </div>
   );
 }
