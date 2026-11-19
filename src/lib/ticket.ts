@@ -122,7 +122,7 @@ export async function scan(db: Db, token: string, input: { qr?: string; serial?:
       const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
       return done({ result: 'used', serial, label, holderName: gt.holderName, at: prev.at.toISOString(), gate: pg?.name ?? '後台' });
     }
-    return done({ result: 'ok', serial, label, code: gt.code, zoneName: gt.zoneName, side: '', holderName: gt.holderName, holderId4: '', orderNo: `${gt.group}・劃位序 ${gt.no}`, manual });
+    return done({ result: 'ok', serial, label, code: gt.code, zoneName: gt.zoneName, side: gt.side, holderName: gt.holderName, holderId4: '', orderNo: `${gt.group}・劃位序 ${gt.no}`, manual });
   }
   const { ticket, order } = await findTicket(db, serial);
   if (!ticket) {

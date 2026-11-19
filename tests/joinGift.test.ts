@@ -311,6 +311,7 @@ describe('驗票、入場名單、後台', () => {
     const q0 = await qrOf(s[0].slotId); const q1 = await qrOf(s[1].slotId);
     const r = await scan(db, token, { serial: q0.serial }, at(14));
     expect(r.result).toBe('ok');
+    expect(r.result === 'ok' && r.side).toMatch(/^(左|右)側門$/); // 贈席也顯示入口
     expect(r.total).toBe(2); // 只算選 QR 的 2 席（C 群還沒選、未截止）
     expect(r.entered).toBe(1);
     expect((await searchTickets(db, token, 'A場')).length).toBe(3);

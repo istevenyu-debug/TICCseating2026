@@ -353,10 +353,12 @@ export async function findGiftTicket(db: Db, eventId: number, serial: string, no
   const s = await getGiftSettings(db);
   const e = effectiveOf(r.gift, r.reg, s, now);
   if (e.opt?.kind !== 'qr') return { ticket: null, reason: e.opt ? `此席已選「${e.opt.name}」（紙本票），請出示紙本票` : '此席尚未選擇取票方式' };
-  const [v] = await db.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code }).from(t.venueSeat).where(eq(t.venueSeat.id, r.slot.seatId));
+  const [v] = await db.select({ rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, block: t.venueSeat.block }).from(t.venueSeat).where(eq(t.venueSeat.id, r.slot.seatId));
+  // 入口：三樓左側區塊走左側門、右側區塊走右側門（驗票人員直接指路）
+  const side = v?.block?.startsWith('L') ? '左側門' : v?.block?.startsWith('R') ? '右側門' : '';
   return {
     ticket: {
-      serial, seatId: r.slot.seatId, label: v ? seatLabel(v) : '', code: v?.code ?? '', zoneName: '揪團贈席', holderName: r.gift.name,
+      serial, seatId: r.slot.seatId, label: v ? seatLabel(v) : '', code: v?.code ?? '', zoneName: '揪團贈席', holderName: r.gift.name, side,
       group: await groupName(db, r.reg), no,
     }, reason: '',
   };
