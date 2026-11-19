@@ -16,7 +16,7 @@ beforeEach(async () => {
 });
 
 describe('驗票打勾圖', () => {
-  it('7 張（1–3 排、4–12 排五區、三樓極左右）；只有已付款訂單的座位有 ☐，已入場 ✓；同一買方相鄰座位同一組', async () => {
+  it('8 張（1–3 排、4–12 排五區、三樓極左、極右）；只有已付款訂單的座位有 ☐，已入場 ✓；同一買方相鄰座位同一組', async () => {
     const [ev] = await db.select().from(t.event);
     await createInviteLink(db, 't', { name: 'x', phone: '0912000000', quota: 9, expiresAt: new Date('2026-12-31') });
     const [link] = await db.select().from(t.inviteLink);
@@ -29,7 +29,7 @@ describe('驗票打勾圖', () => {
     await db.insert(t.orderSeat).values({ orderId: o2.id, seatId: other.id, unitPrice: 0 });
     await db.insert(t.checkin).values({ eventId: ev.id, serial: 'A0001-01', orderId: o.id, seatId: row[0].id });
     const { sheets } = await checkSheets(db);
-    expect(sheets.map((s) => s.key)).toEqual(['2m-1', '2m-L2', '2m-L1', '2m-C0', '2m-R1', '2m-R2', '3f']);
+    expect(sheets.map((s) => s.key)).toEqual(['2m-1', '2m-L2', '2m-L1', '2m-C0', '2m-R1', '2m-R2', '3f-L2', '3f-R2']);
     const l1 = sheets.find((s) => s.key === '2m-L1')!;
     expect(l1.qr).toBe(10);
     expect(l1.entered).toBe(1);
@@ -37,6 +37,11 @@ describe('驗票打勾圖', () => {
     expect(new Set(mine.map((s) => s.key)).size).toBe(1);
     expect(mine[0].name).toBe('王大明');
     expect(l1.seats.find((s) => s.id === other.id)!.kind).toBe('none'); // 未付款不算
-    expect(sheets.find((s) => s.key === '3f')!.seats.every((s) => s.kind === 'none')).toBe(true);
+    for (const k of ['3f-L2', '3f-R2']) expect(sheets.find((s) => s.key === k)!.seats.every((s) => s.kind === 'none')).toBe(true);
+    const f = sheets.find((s) => s.key === '2m-1')!;
+    expect(f.orient).toBe('port');
+    expect(new Set(f.seats.map((s) => s.block))).toEqual(new Set(['L1', 'C0', 'R1']));
+    expect(sheets.find((s) => s.key === '3f-L2')!.seats.every((s) => s.block === 'L2')).toBe(true);
+    expect(sheets.find((s) => s.key === '2m-L1')!.orient).toBe('land');
   });
 });
