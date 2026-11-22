@@ -13,6 +13,7 @@ import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { seatLabel } from './layout';
 import { linkUrl } from './admin';
+import { allVipRow, getVipCats } from './checkinBoard';
 
 export type VipMode = 'scheduled' | 'now' | 'none';
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -91,11 +92,13 @@ async function scheduleNotice(tx: Tx, ev: typeof t.event.$inferSelect, o: typeof
   return at;
 }
 
-export async function createVip(db: Db, actor: string, v: { name: string; phone: string; email: string; seatIds: string[]; mode: VipMode; note?: string; referrer?: string }, base?: string) {
+export async function createVip(db: Db, actor: string, v: { name: string; phone: string; email: string; seatIds: string[]; mode: VipMode; note?: string; referrer?: string; cat?: string }, base?: string) {
   const ev = await currentEvent(db);
   const name = v.name.trim();
   if (!name) throw new BookingError('INVALID', '請填寫招待對象姓名');
   const referrer = (v.referrer ?? '').trim();
+  // 類別：沒選時，座位全在 VIP 排＝VIP，其他＝招待（空白）
+  const cat = (v.cat ?? '').trim() || (await allVipRow(db, v.seatIds) ? 'VIP' : '');
   return db.transaction(async (tx) => {
     let code = '';
     for (let i = 0; i < 5 && !code; i++) {
@@ -106,7 +109,7 @@ export async function createVip(db: Db, actor: string, v: { name: string; phone:
     const expiresAt = new Date(`${ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' })}T23:59:59+08:00`);
     const [lk] = await tx.insert(t.inviteLink).values({ eventId: ev.id, code, kind: 'vip', name, phone: v.phone, quota: v.seatIds.length, expiresAt, note: v.note ?? '', referrer }).returning();
     const [o0] = await tx.insert(t.orders).values({
-      eventId: ev.id, linkId: lk.id, comboId: await vipCombo(tx, ev.id), sets: 1, status: 'paid', amount: 0, vip: true, notifyMode: v.mode,
+      eventId: ev.id, linkId: lk.id, comboId: await vipCombo(tx, ev.id), sets: 1, status: 'paid', amount: 0, vip: true, notifyMode: v.mode, vipCat: cat === '招待' ? '' : cat,
       buyerName: name, buyerPhone: v.phone || null, buyerEmail: v.email || null, submittedAt: new Date(), seenAt: new Date(),
     }).returning();
     const orderNo = `T${ev.id}-${String(o0.id).padStart(5, '0')}`;
@@ -114,7 +117,7 @@ export async function createVip(db: Db, actor: string, v: { name: string; phone:
     const { ids, brokeBundles } = await takeSeats(tx, ev.id, v.seatIds, o.id);
     await tx.insert(t.orderSeat).values(ids.map((seatId, i) => ({ orderId: o.id, seatId, unitPrice: 0, holderName: i === 0 ? name : `${name}${String(i + 1).padStart(2, '0')}`, holderId4: '' })));
     const at = await scheduleNotice(tx, ev, o, v.mode, base);
-    await tx.insert(t.auditLog).values({ actor, action: 'vip_create', target: `order:${o.id}`, detail: JSON.stringify({ name, seats: ids, mode: v.mode, referrer }) });
+    await tx.insert(t.auditLog).values({ actor, action: 'vip_create', target: `order:${o.id}`, detail: JSON.stringify({ name, seats: ids, mode: v.mode, referrer, cat }) });
     return { orderId: o.id, orderNo, sendAt: at?.toISOString() ?? null, brokeBundles };
   });
 }
@@ -185,6 +188,17 @@ export async function setVipMode(db: Db, actor: string, id: number, mode: VipMod
   });
 }
 
+/** 改招待類別（招待／公益／VIP…）：只影響看板分類與清單，不寄信 */
+export async function setVipCat(db: Db, actor: string, id: number, cat: string) {
+  return db.transaction(async (tx) => {
+    const o = await vipOrder(tx, id);
+    const c = cat.trim() === '招待' ? '' : cat.trim();
+    await tx.update(t.orders).set({ vipCat: c }).where(eq(t.orders.id, id));
+    await tx.insert(t.auditLog).values({ actor, action: 'vip_cat', target: `order:${id}`, detail: JSON.stringify({ from: o.vipCat || '招待', to: c || '招待' }) });
+    return { ok: true };
+  });
+}
+
 export async function cancelVip(db: Db, actor: string, id: number) {
   const ev = await currentEvent(db);
   await db.transaction(async (tx) => {
@@ -216,6 +230,7 @@ export async function listVips(db: Db) {
   const seats = ids.length ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code })
     .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId)).where(inArray(t.orderSeat.orderId, ids)) : [];
   const notes = ids.length ? await db.select().from(t.notification).where(inArray(t.notification.orderId, ids)) : [];
+  const ins = ids.length ? await db.select({ orderId: t.checkin.orderId, seatId: t.checkin.seatId }).from(t.checkin).where(and(eq(t.checkin.eventId, ev.id), inArray(t.checkin.orderId, ids))) : [];
   const links = ids.length ? await db.select({ id: t.inviteLink.id, code: t.inviteLink.code, referrer: t.inviteLink.referrer, note: t.inviteLink.note }).from(t.inviteLink).where(inArray(t.inviteLink.id, os.map((o) => o.linkId))) : [];
   // 用過的推薦人（最近用的在前），附上次用的 Email，新增時點一下帶入
   const referrers: { name: string; email: string }[] = [];
@@ -224,15 +239,16 @@ export async function listVips(db: Db) {
     if (r && r !== '無' && !referrers.some((x) => x.name === r)) referrers.push({ name: r, email: o.buyerEmail ?? '' });
   }
   return {
-    referrers,
+    referrers, cats: await getVipCats(db),
     days: ev.vipNotifyDays, defaultSendAt: vipSendAt(ev.showAt, ev.vipNotifyDays)?.toISOString() ?? null,
     list: os.map((o) => {
       const n = notes.filter((x) => x.orderId === o.id);
       const queued = n.find((x) => x.status === 'queued');
       const sent = n.filter((x) => x.status === 'sent').map((x) => x.sentAt!).sort((a, b) => +b - +a)[0];
       return {
-        id: o.id, orderNo: o.orderNo, status: o.status, name: o.buyerName ?? '', phone: o.buyerPhone ?? '', email: o.buyerEmail ?? '', mode: o.notifyMode,
-        seats: seats.filter((s) => s.orderId === o.id).map((s) => ({ id: s.seatId, label: seatLabel(s), code: s.code })),
+        id: o.id, orderNo: o.orderNo, status: o.status, cat: o.vipCat || '招待', name: o.buyerName ?? '', phone: o.buyerPhone ?? '', email: o.buyerEmail ?? '', mode: o.notifyMode,
+        seats: seats.filter((s) => s.orderId === o.id).map((s) => ({ id: s.seatId, label: seatLabel(s), code: s.code, vipRow: s.seatType === 'vip' })),
+        entered: ins.filter((x) => x.orderId === o.id).length,
         sendAt: queued ? (queued.sendAfter?.toISOString() ?? 'now') : null, sentAt: sent?.toISOString() ?? null,
         failed: n.some((x) => x.status === 'failed' || x.status === 'simulated'), code: links.find((l) => l.id === o.linkId)?.code ?? '',
         referrer: links.find((l) => l.id === o.linkId)?.referrer ?? '', note: links.find((l) => l.id === o.linkId)?.note ?? '',

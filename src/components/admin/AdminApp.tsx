@@ -5,6 +5,7 @@ import JoinTab from './JoinTab';
 import { SalesCard } from './SalesCard';
 import { createContext, Fragment, useCallback, useContext, useEffect, useState } from 'react';
 import BuyerCheck, { type BuyerCheckData } from './BuyerCheck';
+import BoardAdmin from './BoardAdmin';
 import type { AdminState } from '@/lib/admin';
 import { inkFor } from '@/lib/color';
 import { comboDesc, comboQty } from '@/lib/pricing';
@@ -27,12 +28,12 @@ type Notice = { id: number; orderId: number | null; channel: string; template: s
 type Pre = { id: number; no: string; items: { kind: string; id: number; name: string; price: number; qty: number }[]; amount: number; name: string; phone: string; email: string;
   paidAmount: number; last5: string; status: string; note: string; createdAt: string; confirmedAt: string | null; confirmedBy: string | null; isNew: boolean; linkCode: string | null; invoice: string; source: string; answers: { q: string; a: string }[]; invType: string; invTitle: string; invCode: string; seq: number | null; lineName: string; waitlist: boolean; paidOkAt: string | null; paidOkBy: string | null; lineOk: string[]; released: string[]; needGroups: Record<string, string[]>; progress: { left: number; held: number; pending: number; paid: number } | null; invoiceState: { status: string; invoiceNo: string; checks: number } | null };
 type Gate = { id: number; name: string; token: string; active: boolean; count: number };
-type Checkins = { total: number; entered: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
+type Checkins = { total: number; entered: number; era: number; recent: { id: number; serial: string; at: string; manual: boolean; gate: string; seatId: string; holder: string | null }[] };
 type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'auto' | 'review'; merchantId: string; keySet: boolean; ivSet: boolean; taxType: string; itemName: string; log: { at: string; actor: string; detail: string }[] };
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -2312,7 +2313,9 @@ function Gates() {
         <div className="stat"><b>{c.total}</b><span>已售票數</span></div>
         <div className="stat"><b>{c.total - c.entered}</b><span>未入場</span></div>
         <div className="stat"><b>{pct}%</b><span>入場率</span></div>
+        <div className="stat"><b>{c.era}</b><span>年代票已入場</span></div>
       </div>
+      {st.board && <BoardAdmin b={st.board} eventName={st.event.name} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
       <div className="grid2">
         <div className="card">
           <h2>驗票門口 <span className="small muted">每個門一條連結，傳給該門工作人員，用手機打開就能掃描</span></h2>
@@ -2884,32 +2887,64 @@ function RefPick({ v, set, refs }: { v: { referrer: string; email: string }; set
   );
 }
 
+const vipSendText = (x: VipRow) => (x.sentAt ? `已寄出 ${fmtDay(x.sentAt)}` : x.sendAt === 'now' ? '寄送中' : x.sendAt ? `排定 ${fmtDay(x.sendAt)}` : '不寄（紙本）');
+const vipSendShort = (x: VipRow) => (x.sentAt ? '已寄出' : x.sendAt === 'now' ? '寄送中' : x.sendAt ? `${new Date(x.sendAt).toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric' })} 寄` : '紙本');
+
+/** 各式招待座位清單 Excel：總表＋每個類別一頁 */
+async function downloadVips(list: VipRow[], cats: string[]) {
+  const X = await import('xlsx');
+  const wb = X.utils.book_new();
+  const head = ['類別', '姓名', '手機', 'Email', '座位', '席數', '推薦人', '備註', '寄送狀態', '入場', '編號'];
+  const row = (x: VipRow) => [x.cat, x.name, x.phone, x.email, x.seats.map((s) => s.label).join('、'), x.seats.length, x.referrer, x.note, vipSendText(x), x.entered ? `${x.entered}/${x.seats.length} 已入場` : '未入場', x.orderNo ?? ''];
+  const add = (name: string, rows: VipRow[]) => {
+    const ws = X.utils.aoa_to_sheet([head, ...rows.map(row)]);
+    ws['!cols'] = head.map((h) => ({ wch: h === '座位' ? 40 : /Email|備註|寄送/.test(h) ? 24 : 10 }));
+    X.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+  };
+  add('總表', list);
+  for (const c of [...new Set([...cats, ...list.map((x) => x.cat)])]) { const r = list.filter((x) => x.cat === c); if (r.length) add(c, r); }
+  const d = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
+  X.writeFile(wb, `招待座位清單-${d}.xlsx`);
+}
+
 function Vips() {
   const { st, act, busy, setMsg, sure, confirm2, zoneById } = useAdmin();
   const v = st.vips;
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<VipRow | null>(null);
-  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '' });
+  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '', cat: '' });
   const [info, setInfo] = useState<{ id: number; name: string; phone: string; email: string; referrer: string; note: string } | null>(null);
   const [days, setDays] = useState(String(v.days));
+  const [openId, setOpenId] = useState<number | null>(null);
+  const [cat, setCat] = useState('');
+  const [catText, setCatText] = useState(v.cats.join('、'));
   if (st.user.role !== 'admin') return <div className="note err">招待由系統管理員安排，這個帳號沒有權限。</div>;
 
+  const live = v.list.filter((x) => x.status === 'paid');
   const vipOf = new Map<string, VipRow>();
-  v.list.filter((x) => x.status === 'paid').forEach((x) => x.seats.forEach((s) => vipOf.set(s.id, x)));
+  live.forEach((x) => x.seats.forEach((s) => vipOf.set(s.id, x)));
   const mine = new Set(editing?.seats.map((s) => s.id) ?? []);
   const look = (s: Seat): SeatLook => {
     const vip = vipOf.get(s.id);
     const z = zoneById[s.zoneId];
-    if (vip && !mine.has(s.id)) return { kind: 'free', bg: '#5b2a86', ink: '#ffffff', sel: sel.has(s.id), title: `${s.label}・招待：${vip.name}` };
+    if (vip && !mine.has(s.id)) return { kind: 'free', bg: vip.id === openId ? '#f5b800' : '#5b2a86', ink: vip.id === openId ? '#18213a' : '#ffffff', sel: sel.has(s.id), title: `${s.label}・${vip.cat}：${vip.name}` };
     if (s.status !== 'free' && !mine.has(s.id)) return { kind: 'sold', dim: true, title: `${s.label}・已有訂單` };
     return { kind: 'free', bg: z?.color ?? '#fff', ink: z ? inkFor(z.color) : '#18213a', sel: sel.has(s.id), title: `${s.label}・${s.code}・${z?.name ?? ''}${usageNote(s)}${s.bundle ? '・連座（招待會拆成單人）' : ''}` };
   };
   function usageNote(s: Seat) { const u = st.usages.find((x) => x.id === s.usageId); return u && !u.sellable ? `・${u.name}` : ''; }
   const paint = (ids: string[]) => {
+    // 不在改座位時，點到已安排的招待座位＝打開清單裡那一位
+    const hit = !editing && ids.length ? vipOf.get(ids[0]) : undefined;
+    if (hit && ids.every((i) => vipOf.get(i)?.id === hit.id)) {
+      setOpenId(hit.id); setCat('');
+      setTimeout(() => document.getElementById(`vip-row-${hit.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+      return;
+    }
     const ok = ids.filter((id) => { const s = st.seats.find((x) => x.id === id); return s && (s.status === 'free' || mine.has(id)); });
     setSel((p) => { const n = new Set(p); const allOn = ok.every((i) => n.has(i)); ok.forEach((i) => (allOn ? n.delete(i) : n.add(i))); return n; });
   };
   const selLabels = st.seats.filter((s) => sel.has(s.id)).map((s) => s.label);
+  const selAllVipRow = sel.size > 0 && st.seats.filter((s) => sel.has(s.id)).every((s) => s.type === 'vip');
 
   async function create() {
     if (!f.name.trim()) { setMsg({ kind: 'err', text: '請填寫姓名' }); return; }
@@ -2919,13 +2954,92 @@ function Vips() {
     if (!r) return;
     const when = f.mode === 'none' ? '不寄出，請到「七、紙本入場券」列印' : f.mode === 'now' || !r.sendAt ? `已寄出。${deliveryText(r.delivery).text}` : `將於 ${fmtDay(r.sendAt)} 自動寄出`;
     setMsg({ kind: 'ok', text: `已保留 ${sel.size} 席給 ${f.name}（${r.orderNo}），${when}${r.brokeBundles ? `；有 ${r.brokeBundles} 組連座已改回單人` : ''}` });
-    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '', referrer: '' }); // 推薦人不自動沿用，避免順手按出
+    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '', referrer: '', cat: f.cat }); // 推薦人不自動沿用，避免順手按出
   }
+
+  const cats = [...new Set([...v.cats, ...live.map((x) => x.cat)])];
+  const shown = live.filter((x) => !cat || x.cat === cat);
+  const seatShort = (x: VipRow) => { const l = x.seats.map((s) => s.label); return l.length > 3 ? `${l.slice(0, 3).join('、')} 等 ${l.length} 席` : l.join('、'); };
 
   return (
     <div className="grid2">
-      <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
-        caption="深紫色＝已安排的招待。點按或拖曳選取座位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
+      <div className="pstack">
+        <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
+          caption="深紫色＝已安排的招待，金色＝清單裡展開的那一位（點紫色座位可直接打開）。點按或拖曳選取空位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+            <h2 style={{ margin: 0 }}>招待清單 <span className="small muted">{live.length} 位・{live.reduce((a, x) => a + x.seats.length, 0)} 席</span></h2>
+            <button className="btn small" disabled={!live.length} onClick={() => downloadVips(live, v.cats)}>下載 Excel</button>
+          </div>
+          <div className="row" style={{ flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
+            {['', ...cats].map((c) => {
+              const n = live.filter((x) => !c || x.cat === c);
+              return <button key={c || 'all'} className={`btn small${cat === c ? ' pri' : ''}`} onClick={() => setCat(c)}>{c || '全部'} {n.length}</button>;
+            })}
+          </div>
+          {shown.map((x) => {
+            const open = openId === x.id;
+            return (
+              <div key={x.id} id={`vip-row-${x.id}`} style={{ borderTop: '1px solid var(--line, #e3e7ef)', padding: '6px 0' }}>
+                <button type="button" onClick={() => { setOpenId(open ? null : x.id); setInfo(null); }}
+                  style={{ all: 'unset', cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
+                  <b style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '30%' }}>{x.name}</b>
+                  <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63' }}>{x.cat}</span>
+                  <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{seatShort(x)}</span>
+                  <span className={`small${x.failed && !x.sentAt ? ' err-text' : x.sentAt ? ' ok-text' : ' muted'}`} style={{ whiteSpace: 'nowrap' }}>{x.failed && !x.sentAt ? '寄送失敗' : vipSendShort(x)}</span>
+                  <span className="muted">{open ? '▾' : '›'}</span>
+                </button>
+                {open && (
+                  <div className="note" style={{ marginTop: 6 }}>
+                    <div className="row" style={{ justifyContent: 'space-between' }}><span className="small">{x.seats.map((s) => s.label).join('、')}</span><span className="mono small">{x.orderNo}</span></div>
+                    <div className="small muted">{x.phone}{x.phone && x.email ? '・' : ''}{x.email}</div>
+                    <div className="small">推薦人：{x.referrer || <span className="muted">（未填）</span>}{x.note ? <span className="muted">・{x.note}</span> : null}</div>
+                    <div className="small">{vipSendText(x)}{x.entered ? `・已入場 ${x.entered}/${x.seats.length}` : ''}</div>
+                    {x.failed && !x.sentAt && <div className="small err-text"><b>寄送失敗，請看「八、通知設定」通知紀錄</b></div>}
+                    {info?.id === x.id && (
+                      <div style={{ marginTop: 6 }}>
+                        <label className="f">姓名<input value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></label>
+                        <div className="fields" style={{ marginTop: 6 }}>
+                          <label className="f">手機<input value={info.phone} inputMode="tel" onChange={(e) => setInfo({ ...info, phone: e.target.value })} /></label>
+                          <label className="f">Email<input value={info.email} type="email" onChange={(e) => setInfo({ ...info, email: e.target.value })} /></label>
+                        </div>
+                        <RefPick v={info} set={(p) => setInfo({ ...info, ...p })} refs={v.referrers} />
+                        <label className="f" style={{ marginTop: 6 }}>備註<input value={info.note} onChange={(e) => setInfo({ ...info, note: e.target.value })} /></label>
+                        <div className="row" style={{ marginTop: 6 }}>
+                          <button className="btn pri small" disabled={busy} onClick={async () => {
+                            if (!info.referrer.trim()) { setMsg({ kind: 'err', text: '請選推薦人；沒有請點「無」' }); return; }
+                            const { id: vid, ...rest } = info;
+                            if (await act({ action: 'vip.update', id: vid, ...rest }, x.sentAt ? `已更新 ${info.name}。之前寄出的信不會改，要重寄請把寄送方式改成「立即寄」` : `已更新 ${info.name}`)) setInfo(null);
+                          }}>儲存</button>
+                          <button className="btn small" onClick={() => setInfo(null)}>取消</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 6 }}>
+                      <select value={x.cat} style={{ width: 'auto' }} disabled={busy} aria-label="類別"
+                        onChange={(e) => act({ action: 'vip.cat', id: x.id, cat: e.target.value }, `${x.name}：類別改成「${e.target.value}」`)}>
+                        {[...new Set([...v.cats, x.cat])].map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <select value={x.mode} style={{ width: 'auto' }} disabled={busy} aria-label="寄送方式" onChange={async (e) => {
+                        const m = e.target.value;
+                        const r = await act({ action: 'vip.mode', id: x.id, mode: m }) as { sendAt: string | null; delivery?: Delivery } | null;
+                        if (r) setMsg({ kind: 'ok', text: m === 'none' ? `${x.name}：不寄出` : m === 'now' || !r.sendAt ? `${x.name}：已寄出。${deliveryText(r.delivery).text}` : `${x.name}：將於 ${fmtDay(r.sendAt)} 自動寄出` });
+                      }}>
+                        {(['scheduled', 'now', 'none'] as const).map((m) => <option key={m} value={m}>{VIP_MODE[m]}</option>)}
+                      </select>
+                      <button className="btn small" onClick={() => setInfo({ id: x.id, name: x.name, phone: x.phone, email: x.email, referrer: x.referrer, note: x.note })}>改資料</button>
+                      <button className="btn small" onClick={() => { setEditing(x); setSel(new Set(x.seats.map((s) => s.id))); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>改座位</button>
+                      <button className="btn small danger" disabled={busy} onClick={() => confirm2(`vipc${x.id}`, async () => { if (await act({ action: 'vip.cancel', id: x.id }, `已取消 ${x.name} 的招待，座位已釋放`)) setOpenId(null); })}>
+                        {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消招待'}</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {!shown.length && <p className="muted small" style={{ margin: 0 }}>{live.length ? '這個類別沒有招待。' : '還沒有安排招待。'}</p>}
+        </div>
+      </div>
       <div className="side">
         {editing ? (
           <div className="card">
@@ -2945,6 +3059,10 @@ function Vips() {
               <label className="f">手機（選填）<input value={f.phone} inputMode="tel" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
               <label className="f">Email（選填）<input value={f.email} type="email" onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
             </div>
+            <label className="f" style={{ marginTop: 8 }}>類別<select value={f.cat} onChange={(e) => setF({ ...f, cat: e.target.value })}>
+              <option value="">自動（{selAllVipRow ? 'VIP 排→VIP' : '招待'}）</option>
+              {v.cats.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select></label>
             <h3>劃位資料什麼時候寄給對方</h3>
             {(['scheduled', 'now', 'none'] as const).map((m) => (
               <label key={m} className="check" style={{ marginBottom: 4 }}>
@@ -2958,64 +3076,18 @@ function Vips() {
             <p className="small muted" style={{ margin: '6px 0 0' }}>招待不收費、不開發票，不算進售票收入。寄出前都可以改座位、改寄送方式或取消。</p>
           </div>
         )}
-
         <div className="card">
-          <h2>招待名單 <span className="small muted">{v.list.filter((x) => x.status === 'paid').length} 位・{st.stats.vipSeats} 席</span></h2>
-          {v.list.filter((x) => x.status === 'paid').map((x) => (
-            <div key={x.id} className="note" style={{ marginBottom: 8 }}>
-              <div className="row" style={{ justifyContent: 'space-between' }}><b>{x.name}</b><span className="mono small">{x.orderNo}</span></div>
-              <div className="small">{x.seats.map((s) => s.label).join('、')}</div>
-              <div className="small muted">{x.phone}{x.phone && x.email ? '・' : ''}{x.email}</div>
-              <div className="small">推薦人：{x.referrer || <span className="muted">（未填）</span>}{x.note ? <span className="muted">・{x.note}</span> : null}</div>
-              {info?.id === x.id && (
-                <div style={{ marginTop: 6 }}>
-                  <label className="f">姓名<input value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></label>
-                  <div className="fields" style={{ marginTop: 6 }}>
-                    <label className="f">手機<input value={info.phone} inputMode="tel" onChange={(e) => setInfo({ ...info, phone: e.target.value })} /></label>
-                    <label className="f">Email<input value={info.email} type="email" onChange={(e) => setInfo({ ...info, email: e.target.value })} /></label>
-                  </div>
-                  <RefPick v={info} set={(p) => setInfo({ ...info, ...p })} refs={v.referrers} />
-                  <label className="f" style={{ marginTop: 6 }}>備註<input value={info.note} onChange={(e) => setInfo({ ...info, note: e.target.value })} /></label>
-                  <div className="row" style={{ marginTop: 6 }}>
-                    <button className="btn pri small" disabled={busy} onClick={async () => {
-                      if (!info.referrer.trim()) { setMsg({ kind: 'err', text: '請選推薦人；沒有請點「無」' }); return; }
-                      const { id: vid, ...rest } = info;
-                      if (await act({ action: 'vip.update', id: vid, ...rest }, x.sentAt ? `已更新 ${info.name}。之前寄出的信不會改，要重寄請把寄送方式改成「立即寄」` : `已更新 ${info.name}`)) setInfo(null);
-                    }}>儲存</button>
-                    <button className="btn small" onClick={() => setInfo(null)}>取消</button>
-                  </div>
-                </div>
-              )}
-              <div className="small" style={{ marginTop: 4 }}>
-                {x.sentAt ? <span className="ok-text">✓ 已寄出（{fmtDay(x.sentAt)}）</span>
-                  : x.sendAt === 'now' ? <span>寄送中</span>
-                  : x.sendAt ? <span>排定 <b>{fmtDay(x.sendAt)}</b> 自動寄出</span>
-                  : <span className="muted">不寄出（紙本親手交）</span>}
-                {x.failed && !x.sentAt && <b className="err-text">・寄送失敗，請看「八、通知設定」通知紀錄</b>}
-              </div>
-              <div className="row" style={{ marginTop: 6 }}>
-                <select value={x.mode} style={{ width: 'auto' }} disabled={busy} onChange={async (e) => {
-                  const m = e.target.value;
-                  const r = await act({ action: 'vip.mode', id: x.id, mode: m }) as { sendAt: string | null; delivery?: Delivery } | null;
-                  if (r) setMsg({ kind: 'ok', text: m === 'none' ? `${x.name}：不寄出` : m === 'now' || !r.sendAt ? `${x.name}：已寄出。${deliveryText(r.delivery).text}` : `${x.name}：將於 ${fmtDay(r.sendAt)} 自動寄出` });
-                }}>
-                  {(['scheduled', 'now', 'none'] as const).map((m) => <option key={m} value={m}>{VIP_MODE[m]}</option>)}
-                </select>
-                <button className="btn small" onClick={() => setInfo({ id: x.id, name: x.name, phone: x.phone, email: x.email, referrer: x.referrer, note: x.note })}>改資料</button>
-                <button className="btn small" onClick={() => { setEditing(x); setSel(new Set(x.seats.map((s) => s.id))); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>改座位</button>
-                <button className="btn small danger" disabled={busy} onClick={() => confirm2(`vipc${x.id}`, () => act({ action: 'vip.cancel', id: x.id }, `已取消 ${x.name} 的招待，座位已釋放`))}>
-                  {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消招待'}</button>
-              </div>
-            </div>
-          ))}
-          {!v.list.some((x) => x.status === 'paid') && <p className="muted small" style={{ margin: 0 }}>還沒有安排招待。</p>}
-          <div className="row" style={{ marginTop: 8 }}>
+          <h2>設定</h2>
+          <div className="row">
             <span className="small">演出前</span>
             <input value={days} inputMode="numeric" style={{ width: 60 }} onChange={(e) => setDays(e.target.value.replace(/\D/g, ''))} />
             <span className="small">天自動寄出</span>
             <button className="btn small" disabled={busy || String(v.days) === days} onClick={() => act({ action: 'vip.days', days: parseInt(days) || 0 }, '已更新，尚未寄出的排程一起改了')}>儲存</button>
           </div>
           <p className="small muted" style={{ margin: '6px 0 0' }}>自動寄出要系統當天開著；電腦關機的話，開機後會補寄。紙本入場券在「七、紙本入場券」列印。</p>
+          <label className="f" style={{ marginTop: 10 }}>招待類別（用「、」分開）<input value={catText} onChange={(e) => setCatText(e.target.value)} /></label>
+          <button className="btn small" style={{ marginTop: 6 }} disabled={busy || catText === v.cats.join('、')} onClick={() => act({ action: 'vip.cats', text: catText }, '已更新招待類別')}>儲存類別</button>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>類別用在招待清單、Excel 和驗票即時看板（招待框裡分開列）。VIP 排的座位在看板上一律算「VIP」框。</p>
         </div>
       </div>
     </div>

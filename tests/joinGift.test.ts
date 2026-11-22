@@ -315,8 +315,8 @@ describe('驗票、入場名單、後台', () => {
     expect(r.total).toBe(2); // 只算選 QR 的 2 席（C 群還沒選、未截止）
     expect(r.entered).toBe(1);
     expect((await searchTickets(db, token, 'A場')).length).toBe(3);
-    expect((await checkinSummary(db)).total).toBe(2);
-    const list = await checkinList(db, 'seat');
+    expect((await checkinSummary(db, at(14))).total).toBe(2);
+    const list = await checkinList(db, 'seat', at(14));
     const mine = list.rows.filter((x) => x.zoneName === '揪團贈席');
     expect(mine).toHaveLength(5);
     expect(mine.filter((x) => x.serial.startsWith('JG'))).toHaveLength(2);

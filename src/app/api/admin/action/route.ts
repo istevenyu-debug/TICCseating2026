@@ -25,7 +25,8 @@ import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
 import { clearAllCheckins, resendGiftQr, resetGiftGroup, saveGiftSeats, saveGiftSettings, sendGiftSurvey, setTestUntil } from '@/lib/joinGift';
 import { setCaps } from '@/lib/sales';
 import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
-import { cancelVip, createVip, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
+import { cancelVip, createVip, setVipCat, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
+import { saveBoxCfg, setVipCats, updateBoardLink } from '@/lib/checkinBoard';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 const joinBase = (req: Request) => (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '');
@@ -84,7 +85,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('notify.resend'), id }),
   z.object({ action: z.literal('preorder.confirm'), id, items: z.array(z.object({ kind: z.enum(['combo', 'zone']), id: z.number().int().positive(), qty: z.number().int().min(0).max(200) })).max(30).optional() }),
   z.object({ action: z.literal('vip.create'), name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
-    seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional(),
+    seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60), mode: z.enum(['scheduled', 'now', 'none']), note: z.string().max(200).optional(), cat: z.string().trim().max(10).optional(),
     referrer: z.string({ required_error: '請選推薦人；沒有請點「無」' }).trim().min(1, '請選推薦人；沒有請點「無」').max(40) }),
   z.object({ action: z.literal('vip.update'), id, name: z.string().trim().min(1, '請填寫姓名').max(40), phone: z.string().max(20), email: z.string().trim().max(120),
     referrer: z.string({ required_error: '請選推薦人；沒有請點「無」' }).trim().min(1, '請選推薦人；沒有請點「無」').max(40), note: z.string().max(200) }),
@@ -92,6 +93,10 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('vip.mode'), id, mode: z.enum(['scheduled', 'now', 'none']) }),
   z.object({ action: z.literal('vip.cancel'), id }),
   z.object({ action: z.literal('vip.days'), days: z.number().int().min(0).max(60) }),
+  z.object({ action: z.literal('vip.cat'), id, cat: z.string().trim().min(1).max(10) }),
+  z.object({ action: z.literal('vip.cats'), text: z.string().max(200) }),
+  z.object({ action: z.literal('board.link'), renew: z.boolean().optional(), active: z.boolean().optional() }),
+  z.object({ action: z.literal('board.boxes'), boxes: z.array(z.object({ name: z.string().max(20), hidden: z.boolean().optional() })).max(40), assign: z.record(z.string().max(20)) }),
   z.object({ action: z.literal('join.settings'), values: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.links.send'), ids: z.array(id).max(500).optional() }),
   z.object({ action: z.literal('join.reg.renew'), id }),
@@ -316,6 +321,10 @@ export async function POST(req: Request) {
       case 'vip.mode': { mustBeAdmin(); const r = await setVipMode(db, who, a.id, a.mode, originOf(req)); return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: a.id }) : undefined }; }
       case 'vip.cancel': mustBeAdmin(); return cancelVip(db, who, a.id);
       case 'vip.days': mustBeAdmin(); return setVipDays(db, who, a.days);
+      case 'vip.cat': mustBeAdmin(); return setVipCat(db, who, a.id, a.cat);
+      case 'vip.cats': mustBeAdmin(); return setVipCats(db, who, a.text);
+      case 'board.link': mustBeAdmin(); return updateBoardLink(db, who, a);
+      case 'board.boxes': mustBeAdmin(); return saveBoxCfg(db, who, { boxes: a.boxes, assign: a.assign });
       case 'join.settings': { mustBeAdmin(); const r = await setJoinSettings(db, who, a.values); if (await tickQueue(db, joinBase(req))) dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.links.send': { const r = await sendLinks(db, who, joinBase(req), a.ids); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.reg.renew': return renewPickCode(db, who, a.id);

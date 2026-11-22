@@ -12,6 +12,7 @@ import { ticketData } from './admin';
 
 import { qrSecret, readQr } from './qr';
 import { findGiftTicket, giftCheckRows, giftQrCount, isGiftSerial } from './joinGift';
+import { eraFloorOfSeat, eraSeat, eraSerial, isEraFloor, parseEraQr, type EraFloor } from './eraQr';
 export { qrSecret, qrValue, readQr } from './qr';
 
 /** 入口建議：單號在左、雙號在右 */
@@ -77,13 +78,17 @@ async function gateByToken(db: Db, token: string) {
   return g;
 }
 
-async function counts(db: Db, eventId: number, gateId: number) {
+async function counts(db: Db, eventId: number, gateId: number, now = new Date()) {
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
     .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).where(and(eq(t.orders.eventId, eventId), eq(t.orders.status, 'paid')));
-  const [{ entered }] = await db.select({ entered: sql<number>`count(*)::int` }).from(t.checkin).where(eq(t.checkin.eventId, eventId));
-  const gift = await giftQrCount(db, eventId); // 揪團贈席電子票（選 QR 的）
+  // 年代票（序號 ERA:…）另計：不在「應到」裡
+  const [{ entered, era }] = await db.select({
+    entered: sql<number>`(count(*) filter (where ${t.checkin.serial} not like 'ERA:%'))::int`,
+    era: sql<number>`(count(*) filter (where ${t.checkin.serial} like 'ERA:%'))::int`,
+  }).from(t.checkin).where(eq(t.checkin.eventId, eventId));
+  const gift = await giftQrCount(db, eventId, now); // 揪團贈席電子票（選 QR 的）
   const [{ here }] = await db.select({ here: sql<number>`count(*)::int` }).from(t.checkin).where(and(eq(t.checkin.eventId, eventId), eq(t.checkin.gateId, gateId)));
-  return { total: total + gift, entered, here };
+  return { total: total + gift, entered, here, era };
 }
 
 export async function gateInfo(db: Db, token: string) {
@@ -93,16 +98,31 @@ export async function gateInfo(db: Db, token: string) {
 }
 
 export type ScanResult =
-  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean }
-  | { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string }
+  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; eraFloor?: string }
+  | { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; eraFloor?: string }
   | { result: 'invalid'; reason: string };
 
 /** 掃描或手動輸入序號入場 */
-export async function scan(db: Db, token: string, input: { qr?: string; serial?: string }, now = new Date()): Promise<ScanResult & { total: number; entered: number; here: number }> {
+export async function scan(db: Db, token: string, input: { qr?: string; serial?: string; eraFloor?: string }, now = new Date()): Promise<ScanResult & { total: number; entered: number; here: number; era: number }> {
   const g = await gateByToken(db, token);
-  const done = async (r: ScanResult) => ({ ...r, ...(await counts(db, g.eventId, g.id)) });
+  const done = async (r: ScanResult) => ({ ...r, ...(await counts(db, g.eventId, g.id, now)) });
   let serial: string;
   const manual = !input.qr;
+  // 年代電子票：只計數（同一張只算一次），樓層由驗票手機上方的開關決定
+  const era = input.qr ? parseEraQr(input.qr) : null;
+  if (era?.kind === 'pending') return done({ result: 'invalid', reason: '年代票：轉贈尚未接收。請收票的人先在年代 App 按「接收票券」，再出示 QR。' });
+  if (era?.kind === 'era') {
+    if (!isEraFloor(input.eraFloor)) return done({ result: 'invalid', reason: '這是年代票。請先在畫面上方選「年代票樓層」（3F／4F／5F），再掃一次。' });
+    const floor: EraFloor = input.eraFloor;
+    serial = eraSerial(era.id);
+    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: eraSeat(floor), gateId: g.id, manual: false, at: now }).onConflictDoNothing().returning();
+    if (!ins.length) {
+      const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
+      const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
+      return done({ result: 'used', serial, label: '年代票', holderName: '', at: prev.at.toISOString(), gate: pg?.name ?? '後台', eraFloor: eraFloorOfSeat(prev.seatId) });
+    }
+    return done({ result: 'ok', serial, label: '年代票', code: '', zoneName: '', side: '', holderName: '', holderId4: '', orderNo: '', manual: false, eraFloor: floor });
+  }
   if (input.qr) {
     const q = readQr(await qrSecret(db), input.qr);
     if (!q) return done({ result: 'invalid', reason: /^TICC\|/.test(input.qr.trim()) ? '偽造或已失效的 QR code' : '不是本活動的入場 QR code' });
@@ -169,18 +189,21 @@ export async function searchTickets(db: Db, token: string, q: string) {
 
 /* ---------- 後台 ---------- */
 
-export async function checkinSummary(db: Db) {
+export async function checkinSummary(db: Db, now = new Date()) {
   const ev = await currentEvent(db);
   const [{ total: paidSeats }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
     .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
-  const giftRows = await giftCheckRows(db, ev.id);
+  const giftRows = await giftCheckRows(db, ev.id, now);
   const total = paidSeats + giftRows.filter((x) => x.serial).length;
   const recent = await db.select({ id: t.checkin.id, serial: t.checkin.serial, at: t.checkin.at, manual: t.checkin.manual, gate: t.gate.name, seatId: t.checkin.seatId, holder: t.orderSeat.holderName })
     .from(t.checkin).leftJoin(t.gate, eq(t.gate.id, t.checkin.gateId))
     .leftJoin(t.orderSeat, and(eq(t.orderSeat.orderId, t.checkin.orderId), eq(t.orderSeat.seatId, t.checkin.seatId)))
     .where(eq(t.checkin.eventId, ev.id)).orderBy(desc(t.checkin.id)).limit(50);
-  const [{ entered }] = await db.select({ entered: sql<number>`count(*)::int` }).from(t.checkin).where(eq(t.checkin.eventId, ev.id));
-  return { total, entered, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? null, at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
+  const [{ entered, era }] = await db.select({
+    entered: sql<number>`(count(*) filter (where ${t.checkin.serial} not like 'ERA:%'))::int`,
+    era: sql<number>`(count(*) filter (where ${t.checkin.serial} like 'ERA:%'))::int`,
+  }).from(t.checkin).where(eq(t.checkin.eventId, ev.id));
+  return { total, entered, era, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? (r.serial.startsWith('ERA:') ? `年代票（算 ${eraFloorOfSeat(r.seatId)}）` : null), at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
 }
 
 /** 撤銷入場（誤掃）：這張票可以再掃一次 */
@@ -199,7 +222,7 @@ const byStroke = new Intl.Collator('zh-Hant-TW-u-co-stroke');
  * 所有已確認（paid）訂單的每一張票，給斷線時人工核對用。
  * sort：name＝持票人姓名（筆畫）；seat＝座位。列印時已入場的票標出時間與門口。
  */
-export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name') {
+export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name', now = new Date()) {
   const ev = await currentEvent(db);
   const paid = await db.select({ id: t.orders.id, buyer: t.orders.buyerName }).from(t.orders)
     .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
@@ -215,7 +238,7 @@ export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name') {
     };
   });
   // 揪團贈席：電子票（QR）列序號；紙本的列「紙本：方式」，給門口核對
-  for (const x of await giftCheckRows(db, ev.id)) {
+  for (const x of await giftCheckRows(db, ev.id, now)) {
     const u = x.serial ? used.find((c) => c.serial === x.serial) : undefined;
     rows.push({
       serial: x.serial || `紙本：${x.paper}`, holderName: x.holderName || '（未填）', holderId4: '', label: `三樓 ${x.label}`, code: x.code, zoneName: '揪團贈席',

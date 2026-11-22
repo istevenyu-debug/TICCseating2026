@@ -253,6 +253,13 @@
       "when": 1795031832862,
       "tag": "0035_join_gift",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1795381118876,
+      "tag": "0036_vip_cat",
+      "breakpoints": true
     }
   ]
 }

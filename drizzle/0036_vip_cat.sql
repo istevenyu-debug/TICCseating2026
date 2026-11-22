@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "vip_cat" text DEFAULT '' NOT NULL;
