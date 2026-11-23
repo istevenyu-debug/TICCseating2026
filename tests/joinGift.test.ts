@@ -409,3 +409,25 @@ describe('測試用：重設一群、刪除全部入場紀錄（12/9 16:00 起�
     expect((await clearAllCheckins(db, '網管', day)).count).toBe(1);
   });
 });
+
+describe('各群座位 Excel（系統管理員）', () => {
+  it('群 → 已核對回報的年代座位＋贈席；沒回報也沒座位的群不列', async () => {
+    await setup();
+    const ev = (await db.select().from(t.event))[0];
+    await db.insert(t.joinEraTicket).values([
+      { eventId: ev.id, ticketNo: 'A1-2', orderNo: 'A1', floor: '3樓', rowNo: '23排', seatNo: '13號', price: 2550 },
+      { eventId: ev.id, ticketNo: 'A1-1', orderNo: 'A1', floor: '3樓', rowNo: '23排', seatNo: '11號', price: 2550 },
+      { eventId: ev.id, ticketNo: 'A1-3', orderNo: 'A1', floor: '3樓', rowNo: '24排', seatNo: '1號', price: 2550, status: 'refunded' },
+    ]);
+    const { groupSeatsExport } = await import('@/lib/joinSeats');
+    const r = await groupSeatsExport(db, at(10));
+    expect(r.groups.map((g) => g.group)).toEqual(['A場', 'C場']);
+    const a = r.groups[0];
+    expect(a).toMatchObject({ okQty: 30, eraQty: 2, slots: 3, bought: '3樓23排11號、3樓23排13號' });
+    expect(a.gift.split('、')).toHaveLength(3);
+    const mine = r.seats.filter((x) => x.group === 'A場');
+    expect(mine.map((x) => x.kind)).toEqual(['買的', '買的', '買的', '贈席', '贈席', '贈席']);
+    expect(mine.find((x) => x.seat === '1號' && x.kind === '買的')?.note).toBe('已退票');
+    expect(mine[0]).toMatchObject({ orderNo: 'A1', who: '甲' });
+  });
+});

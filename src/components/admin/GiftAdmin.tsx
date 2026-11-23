@@ -43,8 +43,33 @@ export default function GiftAdmin({ g, act, busy, sure, confirm2, setMsg }: Prop
     X.writeFile(wb, `贈票取票方式-${d}.xlsx`);
   }
 
+  /** 各群座位 Excel（只有系統管理員）：群 → 買的年代座位＋贈席 */
+  async function downloadGroups() {
+    const r = await act({ action: 'join.seats.export' }) as Awaited<ReturnType<typeof import('@/lib/joinSeats').groupSeatsExport>> | null;
+    if (!r) return;
+    const X = await import('xlsx');
+    const wb = X.utils.book_new();
+    const a = X.utils.aoa_to_sheet([['群', '負責人', '手機', 'Email', '已核對張數', '年代名單張數', '贈席數', '買的年代座位', '贈席座位', '取票方式'],
+      ...r.groups.map((g) => [g.group, g.headName, g.headPhone, g.email, g.okQty, g.eraQty, g.slots, g.bought, g.gift, g.giftHow])]);
+    a['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 24 }, { wch: 9 }, { wch: 9 }, { wch: 7 }, { wch: 60 }, { wch: 30 }, { wch: 16 }];
+    X.utils.book_append_sheet(wb, a, '各群');
+    const b = X.utils.aoa_to_sheet([['群', '買的／贈席', '樓層', '排', '號', '年代訂單／劃位序', '志工／入座者', '備註'],
+      ...r.seats.map((x) => [x.group, x.kind, x.floor, x.row, x.seat, x.orderNo, x.who, x.note])]);
+    b['!cols'] = [{ wch: 14 }, { wch: 8 }, { wch: 6 }, { wch: 6 }, { wch: 6 }, { wch: 20 }, { wch: 12 }, { wch: 22 }];
+    X.utils.book_append_sheet(wb, b, '每席');
+    const d = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
+    X.writeFile(wb, `各群座位-${d}.xlsx`);
+    setMsg({ kind: 'ok', text: `已下載：${r.groups.length} 群。只算已核對的回報；內有個資，請勿外傳。` });
+  }
+
   return (
     <>
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+          <span className="small muted">各群買的年代座位＋贈席（只有系統管理員能下載，含個資）</span>
+          <button className="btn small" disabled={busy} onClick={downloadGroups}>下載各群座位 Excel</button>
+        </div>
+      </div>
       <div className="card">
         <h3 style={{ marginTop: 0 }}>各取票方式統計</h3>
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>

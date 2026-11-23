@@ -27,6 +27,7 @@ import { setCaps } from '@/lib/sales';
 import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipCat, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { saveBoxCfg, setVipCats, updateBoardLink } from '@/lib/checkinBoard';
+import { groupSeatsExport } from '@/lib/joinSeats';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 const joinBase = (req: Request) => (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '');
@@ -129,6 +130,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.reg.edit'), id, values: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.reg.delete'), id }),
   z.object({ action: z.literal('join.gift.settings'), values: z.unknown() }),
+  z.object({ action: z.literal('join.seats.export') }),
   z.object({ action: z.literal('join.gift.send'), ids: z.array(id).max(500).optional(), resend: z.boolean().optional(), dry: z.boolean().optional() }),
   z.object({ action: z.literal('join.gift.seat'), seat: z.record(z.unknown()) }),
   z.object({ action: z.literal('join.gift.mail'), slotId: id }),
@@ -357,6 +359,7 @@ export async function POST(req: Request) {
       case 'join.reg.edit': return editReg(db, who, a.id, a.values);
       case 'join.reg.delete': return deleteReg(db, who, a.id);
       case 'join.gift.settings': mustBeAdmin(); return saveGiftSettings(db, who, a.values);
+      case 'join.seats.export': mustBeAdmin(); return groupSeatsExport(db);
       case 'join.gift.send': {
         // 寄全部只有系統管理員能按；試寄單一群、重寄單一群工作人員也可以
         if (!a.dry && (!a.ids || a.ids.length !== 1)) mustBeAdmin();
