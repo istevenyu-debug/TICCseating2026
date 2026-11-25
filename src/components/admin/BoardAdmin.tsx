@@ -91,12 +91,12 @@ export default function BoardAdmin({ b, eventName, act, busy, sure, confirm2, se
             <button className="btn pri small" disabled={busy} onClick={save}>儲存</button>
             <button className="btn small" onClick={() => setEdit(false)}>取消</button>
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>VIP 排的座位一律算「VIP 排」；招待依類別（招待／公益…）。沒有票的框，看板上不顯示（年代、3F 贈票除外）。</p>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>VIP 排的座位一律算「VIP 排」；招待依類別（招待／公益…）。沒有票的框，看板上不顯示（年代、3F 贈票除外）。之前的「年代 3F／4F／5F」框沒有票了，會自動不顯示，可在這裡刪掉名字或隱藏。</p>
         </div>
       )}
       <p className="small muted" style={{ margin: '8px 0 0' }}>
-        年代的應驗＝「十二」上傳的年代售出明細，依樓層算已售張數（要含全部樓層、全部票點，活動前請上傳最新的）。
-        年代票的樓層看驗票手機上方選的「年代票樓層」。只有系統管理員能看到這裡。
+        年代的應驗＝「十二」上傳的年代售出明細 3–5 樓已售張數（要含全部樓層、全部票點，活動前請上傳最新的）。
+        年代票不分樓層，掃到就算（同一張只算一次）。只有系統管理員能看到這裡。
       </p>
     </div>
   );

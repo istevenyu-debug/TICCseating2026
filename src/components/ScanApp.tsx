@@ -1,11 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ERA_FLOORS, parseEraQr } from '@/lib/eraQr';
 
 type Info = { gate: string; event: string; showAt: string; total: number; entered: number; here: number; era: number };
-type Ok = { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; eraFloor?: string };
-type Used = { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; eraFloor?: string };
+type Ok = { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true };
+type Used = { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; isEra?: true };
 type Bad = { result: 'invalid'; reason: string };
 type Res = (Ok | Used | Bad) & { total: number; entered: number; here: number; era: number };
 type Found = { serial: string; label: string; holderName: string; holderId4: string; entered: string | null };
@@ -52,12 +51,6 @@ export default function ScanApp({ token }: { token: string }) {
   const busy = useRef(false);
   const last = useRef({ text: '', at: 0 });
   const hold = useRef(0); // 顯示結果期間暫停掃描
-  // 年代票樓層：每支手機設定一次（記在這支手機）
-  const fkey = `eraFloor:${token}`;
-  const [floor, setFloorS] = useState('');
-  const floorRef = useRef('');
-  useEffect(() => { try { const f = localStorage.getItem(fkey) ?? ''; setFloorS(f); floorRef.current = f; } catch { /* 無法記住 */ } }, [fkey]);
-  const setFloor = (f: string) => { setFloorS(f); floorRef.current = f; try { localStorage.setItem(fkey, f); } catch { /* 無法記住 */ } };
 
   const load = useCallback(async () => {
     const r = await call<Info>(url);
@@ -68,9 +61,8 @@ export default function ScanApp({ token }: { token: string }) {
   const submit = useCallback(async (body: { qr?: string; serial?: string }) => {
     if (busy.current) return;
     const bad = (reason: string) => { setRes({ result: 'invalid', reason, total: info?.total ?? 0, entered: info?.entered ?? 0, here: info?.here ?? 0, era: info?.era ?? 0 }); beep(false); hold.current = Date.now() + 3500; };
-    if (body.qr && parseEraQr(body.qr)?.kind === 'era' && !floorRef.current) { bad('這是年代票。請先在上方選「年代票樓層」（3F／4F／5F），再掃一次。'); return; }
     busy.current = true;
-    const r = await call<Res>(url, body.qr ? { ...body, eraFloor: floorRef.current || undefined } : body);
+    const r = await call<Res>(url, body);
     busy.current = false;
     if (!r.ok) { bad(r.message); return; }
     setRes(r.data);
@@ -140,13 +132,6 @@ export default function ScanApp({ token }: { token: string }) {
         <div><b>驗票・{info.gate}</b><div className="scan-sub">{info.event}</div></div>
         <div className="scan-count"><b>{info.entered}</b> / {info.total}<div className="scan-sub">本門 {info.here}・年代 {info.era}</div></div>
       </header>
-      <div className="scan-row" style={{ padding: '0 16px 8px', alignItems: 'center', gap: 6 }}>
-        <span className="scan-sub" style={{ whiteSpace: 'nowrap' }}>年代票樓層</span>
-        {ERA_FLOORS.map((f) => (
-          <button key={f} type="button" className={`scan-btn small${floor === f ? '' : ' ghost'}`} style={{ flex: 1 }} onClick={() => setFloor(f)}>{f}</button>
-        ))}
-      </div>
-      {!floor && <div className="scan-sub" style={{ padding: '0 16px 8px', color: '#fbbf24' }}>請先選這個門的年代票樓層；選一次就會記住。</div>}
 
       <div className="scan-cam">
         <video ref={video} playsInline muted aria-label="相機畫面" style={{ display: cam === 'on' ? 'block' : 'none' }} />
@@ -159,25 +144,24 @@ export default function ScanApp({ token }: { token: string }) {
         )}
         {res && (
           <div className={`scan-result ${kind === 'ok' ? 'good' : 'bad'}`} role="status" onClick={() => { setRes(null); hold.current = 0; }}>
-            {res.result === 'ok' && res.eraFloor && <>
+            {res.result === 'ok' && res.isEra && <>
               <div className="scan-big">✓ 年代票</div>
-              <div className="scan-seat">算 {res.eraFloor}</div>
               <div className="scan-holder">請看對方手機上的座位</div>
             </>}
-            {res.result === 'used' && res.eraFloor !== undefined && <>
+            {res.result === 'used' && res.isEra && <>
               <div className="scan-big">✗ 已入場過</div>
-              <div className="scan-seat">年代票{res.eraFloor ? `（${res.eraFloor}）` : ''}</div>
+              <div className="scan-seat">年代票</div>
               <div className="scan-holder">已於 <b>{hhmm(res.at)}</b> 從 <b>{res.gate}</b> 入場</div>
               <div className="scan-sub">可能是截圖或同一張票。請看對方手機上的座位，需要時請工作人員協助。</div>
             </>}
-            {res.result === 'ok' && !res.eraFloor && <>
+            {res.result === 'ok' && !res.isEra && <>
               <div className="scan-big">✓ 可入場</div>
               <div className="scan-seat">{res.label}</div>
               <div>{res.zoneName}・{res.code}{res.side ? `・${res.side}` : ''}</div>
               <div className="scan-holder">持票人 <b>{res.holderName}</b>　證 <b>{res.holderId4}</b></div>
               <div className="scan-sub">請核對持票人姓名{res.manual ? '・手動入場' : ''}</div>
             </>}
-            {res.result === 'used' && res.eraFloor === undefined && <>
+            {res.result === 'used' && !res.isEra && <>
               <div className="scan-big">✗ 已入場過</div>
               <div className="scan-seat">{res.label}</div>
               <div>持票人 {res.holderName}</div>

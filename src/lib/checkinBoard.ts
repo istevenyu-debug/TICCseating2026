@@ -6,7 +6,7 @@
  *  - vip:<類別>        招待（類別：招待／公益／VIP…，空白＝招待）
  *  - viprow            VIP 排的座位（不論哪種訂單，優先）
  *  - gift3f            三樓揪團贈席選 QR 的（序號 JG…）
- *  - era:3F/4F/5F      年代票：應驗＝年代售出明細該樓層已售張數；已驗＝掃到的年代 QR（樓層看驗票手機的開關）
+ *  - era               年代票（3–5 樓不分樓層，11-25 使用者）：應驗＝年代售出明細已售張數；已驗＝掃到的年代 QR
  */
 import { randomBytes } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -14,7 +14,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { giftCheckRows } from './joinGift';
-import { ERA_FLOORS, eraFloorOf, eraFloorOfSeat } from './eraQr';
+import { eraFloorOf } from './eraQr';
 
 const LINK_KEY = 'checkin.board';
 const BOX_KEY = 'checkin.boxes';
@@ -54,7 +54,7 @@ export async function updateBoardLink(db: Db, actor: string, v: { renew?: boolea
 
 /** 預設歸屬：尊榮／感恩（買五送一併入感恩）＋「贈席」；招待；VIP 排；3F 贈票；年代各樓 */
 export function defaultBox(key: string, label: string): string {
-  if (key.startsWith('era:')) return `年代 ${key.slice(4)}`;
+  if (key === 'era') return '年代';
   if (key === 'gift3f') return '3F 贈票';
   if (key === 'viprow') return 'VIP';
   if (key.startsWith('vip:')) return '招待';
@@ -64,9 +64,9 @@ export function defaultBox(key: string, label: string): string {
   if (/感恩|買五送一/.test(plan)) return gift ? '感恩贈席' : '感恩';
   return '其他';
 }
-const ORDER = ['尊榮', '尊榮贈席', '感恩', '感恩贈席', '招待', 'VIP', '3F 贈票', '年代 3F', '年代 4F', '年代 5F'];
+const ORDER = ['尊榮', '尊榮贈席', '感恩', '感恩贈席', '招待', 'VIP', '3F 贈票', '年代'];
 /** 沒有票也一直顯示的框 */
-const ALWAYS = new Set(['3F 贈票', '年代 3F', '年代 4F', '年代 5F']);
+const ALWAYS = new Set(['3F 贈票', '年代']);
 
 async function sources(db: Db) {
   const ev = await ev0(db);
@@ -99,15 +99,16 @@ async function sources(db: Db) {
   // 年代：售出明細依樓層（已退不算）
   const era = await db.select({ floor: t.joinEraTicket.floor, at: t.joinEraTicket.updatedAt }).from(t.joinEraTicket)
     .where(and(eq(t.joinEraTicket.eventId, ev.id), eq(t.joinEraTicket.status, 'sold')));
-  for (const f of ERA_FLOORS) add(`era:${f}`, `年代 ${f}`, 0);
-  for (const x of era) { const f = eraFloorOf(x.floor); if (f) add(`era:${f}`, `年代 ${f}`, 1); }
+  // 只算 3–5 樓（年代賣的樓層）；名單裡若有別的樓層（例如 2M）不算
+  add('era', '年代', 0);
+  for (const x of era) { if (['3F', '4F', '5F'].includes(eraFloorOf(x.floor))) add('era', '年代', 1); }
   const eraAt = era.reduce<Date | null>((a, x) => (!a || x.at > a ? x.at : a), null);
   // 已驗
   const ck = await db.select({ serial: t.checkin.serial, orderId: t.checkin.orderId, seatId: t.checkin.seatId, gateId: t.checkin.gateId })
     .from(t.checkin).where(eq(t.checkin.eventId, ev.id));
   for (const c of ck) {
     let key: string | undefined;
-    if (c.serial.startsWith('ERA:')) { const f = eraFloorOfSeat(c.seatId); key = `era:${f}`; if (!src.has(key)) add(key, `年代 ${f || '未分樓層'}`, 0); }
+    if (c.serial.startsWith('ERA:')) key = 'era';
     else if (c.serial.startsWith('JG')) key = giftSerials.has(c.serial) ? 'gift3f' : undefined;
     else key = seatKey.get(`${c.orderId}|${c.seatId}`);
     if (!key) { key = 'other'; if (!src.has(key)) add(key, '其他（已取消或已改的票）', 0); }

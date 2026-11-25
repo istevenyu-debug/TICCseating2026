@@ -65,25 +65,26 @@ describe('年代 QR 解析', () => {
 });
 
 describe('驗票頁：年代票', () => {
-  it('沒選樓層不能入場；選了算該樓層；同一張換時間再掃＝已入場；轉贈待接收無效；不影響我們的應到人數', async () => {
+  it('掃到就算（不分樓層）；同一張換時間再掃＝已入場；轉贈待接收無效；不影響我們的應到人數', async () => {
     const oid = await paidOrder('AAA111', ['3-1']);
     expect(oid).toBeGreaterThan(0);
-    expect(await scan(db, tok['左1'], { qr: REAL.t2a })).toMatchObject({ result: 'invalid' });
-    const r1 = await scan(db, tok['左1'], { qr: REAL.t2a, eraFloor: '4F' });
-    expect(r1).toMatchObject({ result: 'ok', label: '年代票', eraFloor: '4F', entered: 0, total: 1, era: 1, here: 1 });
-    // 3:43 的動態 QR、別的門、別的樓層：還是同一張
-    expect(await scan(db, tok['右1'], { qr: REAL.t2b, eraFloor: '3F' })).toMatchObject({ result: 'used', gate: '左1', eraFloor: '4F', era: 1 });
-    expect(await scan(db, tok['右1'], { qr: '轉贈待接收', eraFloor: '3F' })).toMatchObject({ result: 'invalid' });
-    expect(await scan(db, tok['右1'], { qr: REAL.t1a, eraFloor: '5F' })).toMatchObject({ result: 'ok', era: 2 });
+    const r1 = await scan(db, tok['左1'], { qr: REAL.t2a });
+    expect(r1).toMatchObject({ result: 'ok', label: '年代票', isEra: true, entered: 0, total: 1, era: 1, here: 1 });
+    // 3:43 的動態 QR、別的門：還是同一張
+    expect(await scan(db, tok['右1'], { qr: REAL.t2b })).toMatchObject({ result: 'used', gate: '左1', isEra: true, era: 1 });
+    expect(await scan(db, tok['右1'], { qr: '轉贈待接收' })).toMatchObject({ result: 'invalid' });
+    expect(await scan(db, tok['右1'], { qr: REAL.t1a })).toMatchObject({ result: 'ok', era: 2 });
+    // 舊版手機還帶著樓層也照樣可以（多的欄位不理）
+    expect(await scan(db, tok['右1'], { qr: REAL.t4, eraFloor: '3F' } as { qr: string })).toMatchObject({ result: 'ok', era: 3 });
     // 我們的票照舊
     const qr = qrValue(await qrSecret(db), 'T1-00001-01');
-    expect(await scan(db, tok['右1'], { qr })).toMatchObject({ result: 'ok', entered: 1, total: 1, era: 2 });
+    expect(await scan(db, tok['右1'], { qr })).toMatchObject({ result: 'ok', entered: 1, total: 1, era: 3 });
     const sum = await checkinSummary(db);
-    expect(sum).toMatchObject({ entered: 1, era: 2, total: 1 });
-    expect(sum.recent.find((r) => r.serial === 'ERA:C136DSP1IGZL8F')?.holder).toBe('年代票（算 4F）');
+    expect(sum).toMatchObject({ entered: 1, era: 3, total: 1 });
+    expect(sum.recent.find((r) => r.serial === 'ERA:C136DSP1IGZL8F')?.holder).toBe('年代票');
     // 誤掃撤銷後可再掃
     await undoCheckin(db, 'admin', sum.recent.find((r) => r.serial === 'ERA:C136DSP1IGZL8F')!.id);
-    expect(await scan(db, tok['右1'], { qr: REAL.t2c, eraFloor: '3F' })).toMatchObject({ result: 'ok', eraFloor: '3F' });
+    expect(await scan(db, tok['右1'], { qr: REAL.t2c })).toMatchObject({ result: 'ok', isEra: true });
   });
 });
 
@@ -112,8 +113,10 @@ describe('驗票即時看板', () => {
       { eventId, ticketNo: 'ER2-1', orderNo: 'ER2', floor: '4樓', rowNo: '1排', seatNo: '1號', price: 1000 },
       { eventId, ticketNo: 'ER3-1', orderNo: 'ER3', floor: '5樓', rowNo: '1排', seatNo: '1號', price: 800, status: 'refunded' },
     ]);
-    await scan(db, tok['左1'], { qr: REAL.t1a, eraFloor: '3F' });
-    await scan(db, tok['左1'], { qr: REAL.t4, eraFloor: '4F' });
+    await scan(db, tok['左1'], { qr: REAL.t1a });
+    await scan(db, tok['左1'], { qr: REAL.t4 });
+    // 11-23 版留下的「分樓層」入場紀錄也算進年代
+    await db.insert(t.checkin).values({ eventId, serial: 'ERA:OLDFLOOR00001', orderId: 0, seatId: 'ERA-5F', at: T0 });
     const secret = await qrSecret(db);
     const vipNo = (await listVips(db)).list.find((x) => x.id === v1.orderId)!.orderNo!;
     await scan(db, tok['右1'], { qr: qrValue(secret, `${vipNo}-01`) });
@@ -122,26 +125,25 @@ describe('驗票即時看板', () => {
     const box = (n: string) => d.boxes.find((b) => b.name === n);
     expect(box('招待')).toMatchObject({ total: 3, done: 1 });
     expect(box('招待')!.lines).toEqual([{ label: '招待', total: 2, done: 1 }, { label: '公益', total: 1, done: 0 }]);
-    expect(box('年代 3F')).toMatchObject({ total: 2, done: 1 });
-    expect(box('年代 4F')).toMatchObject({ total: 1, done: 1 });
-    expect(box('年代 5F')).toMatchObject({ total: 0, done: 0 }); // 已退不算
+    expect(box('年代')).toMatchObject({ total: 3, done: 3, lines: [] }); // 3–5 樓合計；已退不算
+    expect(box('年代 3F')).toBeUndefined();
     expect(box('3F 贈票')).toMatchObject({ total: 0, done: 0 });
-    expect(d).toMatchObject({ total: 2 + 3 + 3, done: 3 });
-    expect(d.gates).toEqual([{ name: '左1', n: 2 }, { name: '右1', n: 1 }]);
+    expect(d).toMatchObject({ total: 2 + 3 + 3, done: 4 });
+    expect(d.gates).toEqual([{ name: '左1', n: 2 }, { name: '右1', n: 1 }, { name: '後台', n: 1 }]);
 
     // 類別改公益 → 招待框裡的分列跟著變
     await setVipCat(db, 'admin', v1.orderId, '公益');
     d = await boardData(db);
     expect(box('招待')).toMatchObject({ total: 3, done: 1, lines: [] }); // 只有一種就不分列
 
-    // 後台改設定：公益另開一框、年代 5F 隱藏
+    // 後台改設定：公益另開一框、年代隱藏
     const st = await boardAdminState(db);
     const assign = Object.fromEntries(st.sources.map((s) => [s.key, s.key === 'vip:公益' ? '公益' : s.box]));
-    await saveBoxCfg(db, 'admin', { boxes: [...st.boxes.map((b) => ({ name: b.name, hidden: b.name === '年代 5F' })), { name: '公益' }], assign });
+    await saveBoxCfg(db, 'admin', { boxes: [...st.boxes.map((b) => ({ name: b.name, hidden: b.name === '年代' })), { name: '公益' }], assign });
     d = await boardData(db);
     expect(box('公益')).toMatchObject({ total: 3, done: 1 });
     expect(box('招待')).toBeUndefined(); // 沒票的框不顯示
-    expect(box('年代 5F')).toBeUndefined();
+    expect(box('年代')).toBeUndefined();
   });
 
   it('新增招待：座位全在 VIP 排自動標 VIP，看板算 VIP 框；清單有類別與入場數', async () => {

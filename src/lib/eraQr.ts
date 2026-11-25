@@ -22,8 +22,9 @@ export const ERA_FLOORS = ['3F', '4F', '5F'] as const;
 export type EraFloor = (typeof ERA_FLOORS)[number];
 export const isEraFloor = (f: unknown): f is EraFloor => ERA_FLOORS.includes(f as EraFloor);
 
-/** 入場紀錄：序號 ERA:<ID>、座位欄 ERA-3F（不另開資料表） */
+/** 入場紀錄：序號 ERA:<ID>、座位欄 ERA（11-25 起不分樓層；11-23 版留下的 ERA-3F 仍看得懂） */
 export const eraSerial = (id: string) => `ERA:${id}`;
+export const ERA_SEAT = 'ERA';
 export const eraSeat = (f: EraFloor) => `ERA-${f}`;
 export const eraFloorOfSeat = (seatId: string) => (seatId.startsWith('ERA-') ? seatId.slice(4) : '');
 export const isEraSerial = (s: string) => s.startsWith('ERA:');

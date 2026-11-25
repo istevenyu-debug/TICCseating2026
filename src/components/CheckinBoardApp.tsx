@@ -58,7 +58,7 @@ export default function CheckinBoardApp({ token }: { token: string }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: '#98a2b3', marginTop: 8, lineHeight: 1.6 }}>
-        已驗／應驗。年代的應驗＝年代售出明細已售張數{d.eraAt ? `（名單更新 ${md(d.eraAt)}）` : '（尚未上傳名單）'}；年代票的樓層依驗票手機選的樓層計。每 5 秒自動更新。
+        已驗／應驗。年代的應驗＝年代售出明細 3–5 樓已售張數{d.eraAt ? `（名單更新 ${md(d.eraAt)}）` : '（尚未上傳名單）'}；年代票不分樓層，掃到就算。每 5 秒自動更新。
       </div>
     </main>
   );

@@ -12,7 +12,7 @@ import { ticketData } from './admin';
 
 import { qrSecret, readQr } from './qr';
 import { findGiftTicket, giftCheckRows, giftQrCount, isGiftSerial } from './joinGift';
-import { eraFloorOfSeat, eraSeat, eraSerial, isEraFloor, parseEraQr, type EraFloor } from './eraQr';
+import { ERA_SEAT, eraSerial, parseEraQr } from './eraQr';
 export { qrSecret, qrValue, readQr } from './qr';
 
 /** 入口建議：單號在左、雙號在右 */
@@ -98,30 +98,28 @@ export async function gateInfo(db: Db, token: string) {
 }
 
 export type ScanResult =
-  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; eraFloor?: string }
-  | { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; eraFloor?: string }
+  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true }
+  | { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; isEra?: true }
   | { result: 'invalid'; reason: string };
 
 /** 掃描或手動輸入序號入場 */
-export async function scan(db: Db, token: string, input: { qr?: string; serial?: string; eraFloor?: string }, now = new Date()): Promise<ScanResult & { total: number; entered: number; here: number; era: number }> {
+export async function scan(db: Db, token: string, input: { qr?: string; serial?: string }, now = new Date()): Promise<ScanResult & { total: number; entered: number; here: number; era: number }> {
   const g = await gateByToken(db, token);
   const done = async (r: ScanResult) => ({ ...r, ...(await counts(db, g.eventId, g.id, now)) });
   let serial: string;
   const manual = !input.qr;
-  // 年代電子票：只計數（同一張只算一次），樓層由驗票手機上方的開關決定
+  // 年代電子票：掃到就計數（同一張只算一次），不分樓層（11-25 使用者）
   const era = input.qr ? parseEraQr(input.qr) : null;
   if (era?.kind === 'pending') return done({ result: 'invalid', reason: '年代票：轉贈尚未接收。請收票的人先在年代 App 按「接收票券」，再出示 QR。' });
   if (era?.kind === 'era') {
-    if (!isEraFloor(input.eraFloor)) return done({ result: 'invalid', reason: '這是年代票。請先在畫面上方選「年代票樓層」（3F／4F／5F），再掃一次。' });
-    const floor: EraFloor = input.eraFloor;
     serial = eraSerial(era.id);
-    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: eraSeat(floor), gateId: g.id, manual: false, at: now }).onConflictDoNothing().returning();
+    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: ERA_SEAT, gateId: g.id, manual: false, at: now }).onConflictDoNothing().returning();
     if (!ins.length) {
       const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
       const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
-      return done({ result: 'used', serial, label: '年代票', holderName: '', at: prev.at.toISOString(), gate: pg?.name ?? '後台', eraFloor: eraFloorOfSeat(prev.seatId) });
+      return done({ result: 'used', serial, label: '年代票', holderName: '', at: prev.at.toISOString(), gate: pg?.name ?? '後台', isEra: true });
     }
-    return done({ result: 'ok', serial, label: '年代票', code: '', zoneName: '', side: '', holderName: '', holderId4: '', orderNo: '', manual: false, eraFloor: floor });
+    return done({ result: 'ok', serial, label: '年代票', code: '', zoneName: '', side: '', holderName: '', holderId4: '', orderNo: '', manual: false, isEra: true });
   }
   if (input.qr) {
     const q = readQr(await qrSecret(db), input.qr);
@@ -203,7 +201,7 @@ export async function checkinSummary(db: Db, now = new Date()) {
     entered: sql<number>`(count(*) filter (where ${t.checkin.serial} not like 'ERA:%'))::int`,
     era: sql<number>`(count(*) filter (where ${t.checkin.serial} like 'ERA:%'))::int`,
   }).from(t.checkin).where(eq(t.checkin.eventId, ev.id));
-  return { total, entered, era, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? (r.serial.startsWith('ERA:') ? `年代票（算 ${eraFloorOfSeat(r.seatId)}）` : null), at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
+  return { total, entered, era, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? (r.serial.startsWith('ERA:') ? '年代票' : null), at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
 }
 
 /** 撤銷入場（誤掃）：這張票可以再掃一次 */
