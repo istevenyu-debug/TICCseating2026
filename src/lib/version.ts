@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-11-25a 版（年代票不分樓層，掃到就算）';
+export const APP_VERSION = '2026-11-25b 版（測試機保護 SAFE_MODE）';

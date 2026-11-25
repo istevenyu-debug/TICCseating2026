@@ -12,6 +12,7 @@
  * 綠界規格見 developers.ecpay.com.tw：2864 產生訂單、2878 付款結果通知、2890 查詢訂單、2885 請退款、2894 信用卡明細、2902 檢查碼。
  * 綠界測試環境不提供請退款與信用卡明細查詢，所以測試模式的退票只模擬，正式刷退要用真卡驗證。
  */
+import { isSafeMode } from './safeMode';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -244,6 +245,7 @@ export async function createCardOrder(db: Db, raw: unknown, origin: string, now 
   const bad = invProblem(v.invType, v.invCode, v.invTitle);
   if (bad) throw new BookingError('INVALID', bad);
   const cfg = await getCardConfig(db);
+  if (cfg.mode === 'prod' && isSafeMode()) throw new BookingError('SAFE_MODE', '這是測試機，不接受正式刷卡。');
   const state = saleStateOf(cfg.settings, now);
   if (state !== 'open') throw new BookingError('SALE_CLOSED', state === 'not_started' ? '尚未開賣。' : state === 'ended' ? '已截止。' : '目前未開放購票。');
   if (!origin) throw new BookingError('SERVER', '系統網址未設定，請聯繫主辦單位。');

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-type Info = { gate: string; event: string; showAt: string; total: number; entered: number; here: number; era: number };
+type Info = { gate: string; event: string; showAt: string; total: number; entered: number; here: number; era: number; safeMode?: boolean };
 type Ok = { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true };
 type Used = { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; isEra?: true };
 type Bad = { result: 'invalid'; reason: string };
@@ -128,6 +128,7 @@ export default function ScanApp({ token }: { token: string }) {
   const kind = res ? res.result : null;
   return (
     <main className="scan">
+      {info.safeMode && <div style={{ background: '#b42318', color: '#fff', padding: '6px 16px', fontSize: 14 }}>⚠ 測試機：這裡的入場紀錄不算正式</div>}
       <header className="scan-head">
         <div><b>驗票・{info.gate}</b><div className="scan-sub">{info.event}</div></div>
         <div className="scan-count"><b>{info.entered}</b> / {info.total}<div className="scan-sub">本門 {info.here}・年代 {info.era}</div></div>

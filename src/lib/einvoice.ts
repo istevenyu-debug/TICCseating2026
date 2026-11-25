@@ -13,6 +13,7 @@
  * 規格：https://developers.ecpay.com.tw/7896/（開立）、/7906/（作廢）、/7958/（加密）、
  *       /32089/（統編）、/7886/（手機條碼）、/7891/（愛心碼）
  */
+import { safeBlock } from './safeMode';
 import { createCipheriv, createDecipheriv, randomInt } from 'node:crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
@@ -127,6 +128,7 @@ export async function saveEinvConfig(db: Db, actor: string, v: EinvInput, reason
 
 export type EinvPost = (url: string, body: unknown) => Promise<{ TransCode: number; TransMsg: string; Data: string }>;
 const realPost: EinvPost = async (url, body) => {
+  if (!url.startsWith(BASE.test)) safeBlock('einv'); // 測試機：只准綠界測試環境
   let r: Response;
   try {
     r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });

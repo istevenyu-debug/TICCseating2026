@@ -73,7 +73,10 @@ try {
 } catch { /* 沒有回應代表連接埠可用 */ }
 
 say(`啟動網站（本機 http://localhost:${PORT}）`);
-const fixedUrl = (env.SITE_URL ?? '').replace(/\/$/, '');
+// 測試機（SAFE_MODE=1）：絕不接正式通道、不用正式網址，避免和正式站搶同一條通道
+const safe = env.SAFE_MODE === '1';
+if (safe) console.log('  ⚠ 測試機模式（SAFE_MODE=1）：不寄信、不連正式綠界、不接正式通道（用臨時網址）。');
+const fixedUrl = safe ? '' : (env.SITE_URL ?? '').replace(/\/$/, '');
 let web = null;
 let updating = false;
 const waitUp = async (sec) => {

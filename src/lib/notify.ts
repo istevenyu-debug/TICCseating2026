@@ -14,6 +14,7 @@ import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
 import { getVapid, removeSubs, siteOrigin, targetsOf, webPushSend, type PushSender } from './push';
+import { safeBlock } from './safeMode';
 
 export interface EmailConfig { host: string; port: number; user: string; pass: string; fromName: string }
 export interface SmsConfig { url: string; user: string; pass: string }
@@ -149,7 +150,12 @@ export async function mitakeSend(cfg: SmsConfig, phone: string, text: string) {
   if (!['0', '1', '2', '3', '4'].includes(code)) throw new Error(`${MITAKE_ERR[code] ?? '簡訊發送失敗'}（代碼 ${code}）`);
 }
 
-const realSenders: Senders = { email: smtpSend, sms: mitakeSend, push: webPushSend };
+// 測試機（SAFE_MODE）在最底層擋下：不管哪條路寄出都經過這裡
+const realSenders: Senders = {
+  email: async (cfg, to, subject, text, extra) => { safeBlock('email', to); return smtpSend(cfg, to, subject, text, extra); },
+  sms: async (cfg, phone, text) => { safeBlock('sms'); return mitakeSend(cfg, phone, text); },
+  push: ((...a: Parameters<PushSender>) => { safeBlock('push'); return webPushSend(...a); }) as PushSender,
+};
 
 let running: Promise<void> | null = null;
 

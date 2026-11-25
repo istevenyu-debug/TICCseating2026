@@ -13,6 +13,7 @@ import { ticketData } from './admin';
 import { qrSecret, readQr } from './qr';
 import { findGiftTicket, giftCheckRows, giftQrCount, isGiftSerial } from './joinGift';
 import { ERA_SEAT, eraSerial, parseEraQr } from './eraQr';
+import { isSafeMode } from './safeMode';
 export { qrSecret, qrValue, readQr } from './qr';
 
 /** 入口建議：單號在左、雙號在右 */
@@ -94,7 +95,7 @@ async function counts(db: Db, eventId: number, gateId: number, now = new Date())
 export async function gateInfo(db: Db, token: string) {
   const g = await gateByToken(db, token);
   const [ev] = await db.select().from(t.event).where(eq(t.event.id, g.eventId));
-  return { gate: g.name, event: ev.name, showAt: ev.showAt.toISOString(), ...(await counts(db, ev.id, g.id)) };
+  return { gate: g.name, event: ev.name, showAt: ev.showAt.toISOString(), safeMode: isSafeMode(), ...(await counts(db, ev.id, g.id)) };
 }
 
 export type ScanResult =
