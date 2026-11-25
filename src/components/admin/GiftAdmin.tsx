@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { giftAdminState, GiftOption } from '@/lib/joinGift';
 
 export type GiftState = Awaited<ReturnType<typeof giftAdminState>>;
@@ -136,7 +136,7 @@ export default function GiftAdmin({ g, act, busy, sure, confirm2, setMsg }: Prop
             </td>
           </tr>)}</tbody>
         </table></div>
-        {edit && <EditSeat s={edit} options={g.settings.options} act={act} busy={busy} close={() => setEdit(null)} />}
+        {edit && <EditSeat key={edit.slotId} s={edit} options={g.settings.options} act={act} busy={busy} close={() => setEdit(null)} />}
       </div>
 
       <Options g={g} act={act} busy={busy} />
@@ -148,12 +148,15 @@ export default function GiftAdmin({ g, act, busy, sure, confirm2, setMsg }: Prop
 function EditSeat({ s, options, act, busy, close }: { s: Seat; options: GiftOption[]; act: Act; busy: boolean; close: () => void }) {
   const [f, setF] = useState({ optionKey: s.optionKey || s.effectiveKey, name: s.name, email: s.email, phone: s.phone, address: s.address });
   const o = options.find((x) => x.key === f.optionKey);
+  // 修改框在整張表的下方：打開時自動捲過來（手機上原本看起來像「按了沒反應」）
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, [s.slotId]);
   async function save() {
     const r = await act({ action: 'join.gift.seat', seat: { slotId: s.slotId, ...f } }) as { mailed: number } | null;
     if (r) close();
   }
   return (
-    <div className="card" style={{ border: '2px solid var(--brand, #8a6a2a)', marginTop: 10 }}>
+    <div ref={box} className="card" style={{ border: '2px solid var(--brand, #8a6a2a)', marginTop: 10, scrollMarginTop: 12 }}>
       <h3 style={{ marginTop: 0 }}>修改：{s.label}（{s.group}・第 {s.no} 號）</h3>
       <div className="fields">
         <label className="f">取票方式<select value={f.optionKey} onChange={(e) => setF({ ...f, optionKey: e.target.value })}>
