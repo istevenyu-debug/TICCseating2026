@@ -13,6 +13,7 @@ import {
   ACTIVE_ORDER, BookingError, freeSeatsOf, loadCombos, sweepExpired, usedComboSets,
 } from './booking';
 import { BLOCKS, rowKey, seatLabel, type Block, type Floor } from './layout';
+import { sortByTicketNo, ticketNumbers } from './ticketNo';
 import { entText, entitle } from './entitle';
 
 export const COLOR_PRESETS = [
@@ -782,7 +783,7 @@ export async function ticketData(db: Db, orderIds: number[]) {
   if (!orderIds.length) return { event: ev, tickets: [] };
   const rows = await db.select({
     orderId: t.orders.id, orderNo: t.orders.orderNo, status: t.orders.status, comboId: t.orders.comboId,
-    seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName, holderId4: t.orderSeat.holderId4,
+    seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName, holderId4: t.orderSeat.holderId4, ticketNo: t.orderSeat.ticketNo,
     rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, code: t.venueSeat.code, entrance: t.venueSeat.entrance,
     zoneName: t.priceZone.name,
   }).from(t.orders)
@@ -793,12 +794,11 @@ export async function ticketData(db: Db, orderIds: number[]) {
     .where(and(eq(t.orders.eventId, ev.id), inArray(t.orders.id, orderIds), eq(t.orders.status, 'paid')))
     .orderBy(asc(t.orders.id), asc(t.venueSeat.y), asc(t.venueSeat.x));
   const combos = await loadCombos(db, ev.id);
-  const n = new Map<number, number>();
+  const nos = ticketNumbers(rows);
   return {
     event: ev,
-    tickets: rows.map((r) => {
-      const k = (n.get(r.orderId) ?? 0) + 1;
-      n.set(r.orderId, k);
+    tickets: sortByTicketNo(rows, nos).map((r) => {
+      const k = nos.get(`${r.orderId}|${r.seatId}`)!;
       return {
         serial: `${r.orderNo}-${String(k).padStart(2, '0')}`, orderNo: r.orderNo, orderId: r.orderId, seatId: r.seatId, label: seatLabel(r), code: r.code,
         zoneName: r.zoneName, comboName: combos.find((c) => c.id === r.comboId)?.name ?? '',

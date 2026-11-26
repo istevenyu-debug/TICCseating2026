@@ -178,6 +178,7 @@ export const orderSeat = pgTable('order_seat', {
   unitPrice: integer('unit_price').notNull(),
   holderName: text('holder_name'),
   holderId4: text('holder_id4'),
+  ticketNo: integer('ticket_no'), // 固定的票號（序號末兩碼）：換座位（升等）前才寫入；空白＝依座位位置排（舊行為）
 }, (t) => ({ pk: primaryKey({ columns: [t.orderId, t.seatId] }) }));
 
 /** 匯款回報與到帳確認 */

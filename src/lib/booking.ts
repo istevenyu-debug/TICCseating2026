@@ -8,6 +8,7 @@
  * 購票端只看「已發布」的開放設定（event.published）：未發布的票種座位顯示為不可選，
  * 未發布的購票方式不顯示。
  */
+import { sortByTicketNo, ticketNumbers } from './ticketNo';
 import { and, asc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
@@ -233,12 +234,13 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
     });
 
   const orderSeats = myOrders.length
-    ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName, holderId4: t.orderSeat.holderId4 })
+    ? await db.select({ orderId: t.orderSeat.orderId, seatId: t.orderSeat.seatId, holderName: t.orderSeat.holderName, holderId4: t.orderSeat.holderId4, ticketNo: t.orderSeat.ticketNo })
       .from(t.orderSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId))
       .where(inArray(t.orderSeat.orderId, myOrders.map((o) => o.id)))
       .orderBy(asc(t.venueSeat.y), asc(t.venueSeat.x))
     : [];
   const seatById = Object.fromEntries(seatRows.map((s) => [s.id, s]));
+  const nos = ticketNumbers(orderSeats);
   const used = await usedQuota(db, link.id);
 
   const myIds = myOrders.map((o) => o.id);
@@ -294,8 +296,9 @@ export async function getBookingState(db: Db, code: string, now = new Date(), _v
       comboName: combosAll.find((c) => c.id === o.comboId)?.name ?? '', sets: o.sets,
       buyerName: o.buyerName, buyerPhone: o.buyerPhone, buyerEmail: o.buyerEmail,
       // 劃位成功後才提供入場憑證（序號與入場券列印頁一致）
-      seats: orderSeats.filter((s) => s.orderId === o.id).map((s, i) => {
+      seats: sortByTicketNo(orderSeats.filter((s) => s.orderId === o.id), nos).map((s) => {
         const v = seatById[s.seatId];
+        const i = nos.get(`${s.orderId}|${s.seatId}`)! - 1;
         return {
           label: v ? seatLabel(v) : s.seatId, code: v?.code ?? '', holder: s.holderName, holderId4: s.holderId4,
           zoneName: zones.find((z) => z.id === v?.zoneId)?.name ?? '',

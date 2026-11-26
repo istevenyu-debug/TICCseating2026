@@ -1,0 +1,1 @@
+ALTER TABLE "order_seat" ADD COLUMN "ticket_no" integer;

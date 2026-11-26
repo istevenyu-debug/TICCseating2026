@@ -33,7 +33,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[] };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -1007,6 +1007,66 @@ function ResendQr({ o }: { o: Order }) {
   );
 }
 
+/** 免費升等：勾要換的座位＋可以換到的票種與區 → 產生連結給買方自己選新座位 */
+function Upgrade({ o }: { o: Order }) {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const base = typeof window !== 'undefined' ? location.origin : '';
+  const ups = (st.upgrades ?? []).filter((u) => u.orderId === o.id);
+  const seatZone = (id: string) => st.seats.find((x) => x.id === id)?.zoneId;
+  const mainZones = [...new Set(o.seats.map((x) => seatZone(x.seatId)).filter((z): z is number => z != null && (st.zones.find((q) => q.id === z)?.price ?? 0) > 0))];
+  const [open, setOpen] = useState(false);
+  const [pick, setPick] = useState<Set<string>>(new Set());
+  const [zs, setZs] = useState<Set<number>>(new Set(mainZones));
+  const [bs, setBs] = useState<Set<string>>(new Set(['L1', 'C0', 'R1']));
+  const BL: Record<string, string> = { L2: '左二', L1: '左一', C0: '中', R1: '右一', R2: '右二' };
+  const busySeats = new Set(ups.filter((u) => u.status === 'open').flatMap((u) => u.seatIds));
+  const url = (tk: string) => `${base}/up/${tk}`;
+  const copy = (tk: string) => {
+    const text = `${o.buyerName} 您好：因現場攝影需要，您的座位可免費升等。請在這個連結選新座位（選好立即生效，持票人與 QR code 不變）：${url(tk)}`;
+    navigator.clipboard?.writeText(text).then(() => setMsg({ kind: 'ok', text: '已複製說明＋連結，貼給買方' }), () => setMsg({ kind: 'ok', text }));
+  };
+  const toggle = <T,>(set: Set<T>, v: T, on: boolean) => { const n = new Set(set); if (on) n.add(v); else n.delete(v); return n; };
+  return (
+    <>
+      <h3>免費升等（讓買方換座位）</h3>
+      {ups.map((u) => (
+        <div key={u.token} className="note" style={{ margin: '4px 0' }}>
+          <div className="small">{tw(u.createdAt)}・{u.seatIds.length} 席・{u.status === 'open' ? <b>等買方選</b> : u.status === 'done' ? <b className="ok-text">已換好 {u.doneAt ? tw(u.doneAt) : ''}</b> : <span className="muted">已取消</span>}</div>
+          {u.status === 'done' && u.moves && <div className="small">{u.moves.map((m) => `${m.fromLabel} → ${m.toLabel}`).join('、')}</div>}
+          {u.status === 'open' && <div className="row" style={{ marginTop: 4 }}>
+            <span className="mono small" style={{ wordBreak: 'break-all', flex: '1 1 100%' }}>{url(u.token)}</span>
+            <button className="btn small pri" onClick={() => copy(u.token)}>複製說明＋連結</button>
+            <button className="btn small danger" disabled={busy} onClick={() => confirm2(`upc${u.token}`, () => act({ action: 'upgrade.cancel', token: u.token }, '已取消升等連結'))}>{sure === `upc${u.token}` ? '再按一次取消' : '取消連結'}</button>
+          </div>}
+        </div>
+      ))}
+      {!open ? <button className="btn" onClick={() => setOpen(true)}>產生升等連結…</button> : <form onSubmit={async (e) => {
+        e.preventDefault();
+        const r = await act({ action: 'upgrade.create', id: o.id, seatIds: [...pick], zoneIds: [...zs], blocks: [...bs] }) as { token: string } | null;
+        if (r) { setMsg({ kind: 'ok', text: '已產生升等連結，按「複製說明＋連結」貼給買方' }); setOpen(false); setPick(new Set()); }
+      }}>
+        <div className="small muted">1. 要換的座位</div>
+        <div className="row">{o.seats.map((x) => (
+          <label key={x.seatId} className="switch small"><input type="checkbox" disabled={busySeats.has(x.seatId)} checked={pick.has(x.seatId)} onChange={(e) => setPick(toggle(pick, x.seatId, e.target.checked))} />{x.label}</label>
+        ))}</div>
+        <div className="small muted" style={{ marginTop: 6 }}>2. 可以換到的票種（2 樓）</div>
+        <div className="row">{st.zones.filter((z) => z.price > 0).map((z) => (
+          <label key={z.id} className="switch small"><input type="checkbox" checked={zs.has(z.id)} onChange={(e) => setZs(toggle(zs, z.id, e.target.checked))} />{z.name}</label>
+        ))}</div>
+        <div className="small muted" style={{ marginTop: 6 }}>3. 可以換到的區</div>
+        <div className="row">{Object.keys(BL).map((b) => (
+          <label key={b} className="switch small"><input type="checkbox" checked={bs.has(b)} onChange={(e) => setBs(toggle(bs, b, e.target.checked))} />{BL[b]}</label>
+        ))}</div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn pri" disabled={busy || !pick.size || !zs.size || !bs.size}>產生連結（{pick.size} 席）</button>
+          <button type="button" className="btn" onClick={() => setOpen(false)}>收起</button>
+        </div>
+        <p className="small muted" style={{ margin: '4px 0 0' }}>不收錢、不動發票、不寄信。買方選好立即生效：持票人與序號不變，原本的 QR 照樣能用；舊座位改「保留：攝影」（不能賣）。</p>
+      </form>}
+    </>
+  );
+}
+
 function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
   const { st, act, busy, sure, confirm2, go, setMsg, zoneById, usageById, now, filter, setFilter, openId, setOpenId, openOrder } = useAdmin();
   return (
@@ -1051,6 +1111,7 @@ function OrderDetail({ o, onOpen }: { o: Order; onOpen?: () => void }) {
       </>}
 
       {o.status === 'paid' && <ResendQr key={o.id} o={o} />}
+      {o.status === 'paid' && st.user.role === 'admin' && <Upgrade key={`up${o.id}`} o={o} />}
 
       {o.status === 'paid' && o.payment && <>
         <h3>到帳紀錄</h3>
