@@ -103,10 +103,10 @@ describe('驗票即時看板', () => {
     await expect(boardByToken(db, l2.token)).resolves.toBeTruthy();
   });
 
-  it('框：招待依類別分列、VIP 排另一框、年代依名單樓層算應驗、掃到的算已驗；框可改名與改歸屬', async () => {
+  it('框：VIP／公益依類別分列、VIP 排另一框、年代依名單樓層算應驗、掃到的算已驗；框可改名與改歸屬', async () => {
     await paidOrder('AAA111', ['3-1', '3-2'], '陳小美');
     const v1 = await createVip(db, 'admin', { name: '王董', phone: '', email: '', seatIds: ['1-1', '1-2'], mode: 'none' });
-    await createVip(db, 'admin', { name: '公益甲', phone: '', email: '', seatIds: ['1-5'], mode: 'none', cat: '公益' });
+    await createVip(db, 'admin', { name: '偏鄉甲', phone: '', email: '', seatIds: ['1-5'], mode: 'none', cat: '偏鄉' });
     await db.insert(t.joinEraTicket).values([
       { eventId, ticketNo: 'ER1-1', orderNo: 'ER1', floor: '3樓', rowNo: '13排', seatNo: '1號', price: 3000 },
       { eventId, ticketNo: 'ER1-2', orderNo: 'ER1', floor: '3樓', rowNo: '13排', seatNo: '3號', price: 3000 },
@@ -123,26 +123,26 @@ describe('驗票即時看板', () => {
 
     let d = await boardData(db);
     const box = (n: string) => d.boxes.find((b) => b.name === n);
-    expect(box('招待')).toMatchObject({ total: 3, done: 1 });
-    expect(box('招待')!.lines).toEqual([{ label: '招待', total: 2, done: 1 }, { label: '公益', total: 1, done: 0 }]);
+    expect(box('公益')).toMatchObject({ total: 3, done: 1 }); // 沒選類別＝公益（不再用「招待」）
+    expect(box('公益')!.lines).toEqual([{ label: '公益', total: 2, done: 1 }, { label: '偏鄉', total: 1, done: 0 }]);
     expect(box('年代')).toMatchObject({ total: 3, done: 3, lines: [] }); // 3–5 樓合計；已退不算
     expect(box('年代 3F')).toBeUndefined();
     expect(box('3F 贈票')).toMatchObject({ total: 0, done: 0 });
     expect(d).toMatchObject({ total: 2 + 3 + 3, done: 4 });
     expect(d.gates).toEqual([{ name: '左1', n: 2 }, { name: '右1', n: 1 }, { name: '後台', n: 1 }]);
 
-    // 類別改公益 → 招待框裡的分列跟著變
-    await setVipCat(db, 'admin', v1.orderId, '公益');
+    // 類別改偏鄉 → 公益框裡的分列跟著變
+    await setVipCat(db, 'admin', v1.orderId, '偏鄉');
     d = await boardData(db);
-    expect(box('招待')).toMatchObject({ total: 3, done: 1, lines: [] }); // 只有一種就不分列
+    expect(box('公益')).toMatchObject({ total: 3, done: 1, lines: [] }); // 只有一種就不分列
 
-    // 後台改設定：公益另開一框、年代隱藏
+    // 後台改設定：偏鄉另開一框、年代隱藏
     const st = await boardAdminState(db);
-    const assign = Object.fromEntries(st.sources.map((s) => [s.key, s.key === 'vip:公益' ? '公益' : s.box]));
-    await saveBoxCfg(db, 'admin', { boxes: [...st.boxes.map((b) => ({ name: b.name, hidden: b.name === '年代' })), { name: '公益' }], assign });
+    const assign = Object.fromEntries(st.sources.map((s) => [s.key, s.key === 'vip:偏鄉' ? '偏鄉' : s.box]));
+    await saveBoxCfg(db, 'admin', { boxes: [...st.boxes.map((b) => ({ name: b.name, hidden: b.name === '年代' })), { name: '偏鄉' }], assign });
     d = await boardData(db);
-    expect(box('公益')).toMatchObject({ total: 3, done: 1 });
-    expect(box('招待')).toBeUndefined(); // 沒票的框不顯示
+    expect(box('偏鄉')).toMatchObject({ total: 3, done: 1 });
+    expect(box('公益')).toBeUndefined(); // 沒票的框不顯示
     expect(box('年代')).toBeUndefined();
   });
 
@@ -155,6 +155,6 @@ describe('驗票即時看板', () => {
     expect(row.seats.every((s) => s.vipRow)).toBe(true);
     const d = await boardData(db);
     expect(d.boxes.find((b) => b.name === 'VIP')).toMatchObject({ total: 2, done: 0 });
-    expect(d.boxes.find((b) => b.name === '招待')).toBeUndefined();
+    expect(d.boxes.find((b) => b.name === '公益')).toBeUndefined();
   });
 });

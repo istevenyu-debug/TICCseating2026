@@ -165,7 +165,8 @@ export const orders = pgTable('orders', {
   visitorId: text('visitor_id'), // 公開連結：區分同一連結的不同訪客（瀏覽器）
   vip: boolean('vip').notNull().default(false), // 招待（未付費，由主管安排）
   notifyMode: text('notify_mode').notNull().default(''), // 招待寄送方式：scheduled 演出前自動寄／now 已立即寄／none 不寄（紙本）
-  vipCat: text('vip_cat').notNull().default(''), // 招待類別（招待／公益／VIP…）；空白＝招待
+  vipCat: text('vip_cat').notNull().default(''), // 類別（VIP／公益…）；空白＝舊資料的「招待」
+  vipOrg: text('vip_org').notNull().default(''), // 單位（VIP／公益 Excel 匯入、座位貼名單用）
 }, (t) => ({
   orderNo: uniqueIndex('orders_order_no_idx').on(t.orderNo),
   byLink: index('orders_link_idx').on(t.linkId),

@@ -1,2 +1,2 @@
 /** 版本：每次更新功能時修改，後台標題與啟動畫面會顯示，方便確認是否已更新 */
-export const APP_VERSION = '2026-11-26f 版（六：免費升等，買方自己換座位）';
+export const APP_VERSION = '2026-11-27a 版（十一：VIP／公益 Excel 匯入、座位貼名單）';

@@ -51,7 +51,8 @@ export async function importAll(db: Db, b: BackupFile) {
         .map((r) => (tb === 'combo' && r.gifts == null ? { ...r, gifts: [] } : r)) // 舊備份沒有贈品：空的
         .map((r) => (tb === 'event' && r.gift_show == null ? { ...r, gift_show: {} } : r))
         .map((r) => (tb === 'invite_link' && r.referrer == null ? { ...r, referrer: '' } : r)) // 舊備份沒有推薦人
-        .map((r) => (tb === 'orders' && r.vip_cat == null ? { ...r, vip_cat: '' } : r)); // 舊備份沒有招待類別
+        .map((r) => (tb === 'orders' && r.vip_cat == null ? { ...r, vip_cat: '' } : r)) // 舊備份沒有招待類別
+        .map((r) => (tb === 'orders' && r.vip_org == null ? { ...r, vip_org: '' } : r)); // 舊備份沒有單位
       for (let i = 0; i < rows.length; i += 500) {
         const chunk = JSON.stringify(rows.slice(i, i + 500));
         await tx.execute(sql`insert into ${sql.raw(`"${tb}"`)} select * from jsonb_populate_recordset(null::${sql.raw(`"${tb}"`)}, ${chunk}::jsonb)`);

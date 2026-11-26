@@ -3,7 +3,7 @@
 import Floor3Tab from './Floor3Tab';
 import JoinTab from './JoinTab';
 import { SalesCard } from './SalesCard';
-import { createContext, Fragment, useCallback, useContext, useEffect, useState } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import BuyerCheck, { type BuyerCheckData } from './BuyerCheck';
 import BoardAdmin from './BoardAdmin';
 import type { AdminState } from '@/lib/admin';
@@ -33,7 +33,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[] };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>> };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -61,7 +61,7 @@ type Tab = 'home' | 'usage' | 'price' | 'groups' | 'pre' | 'links' | 'orders' | 
 const TABS: [Tab, string][] = [
   ['home', '首頁'], ['usage', '一、席位用途'], ['price', '二、價格設定'], ['groups', '三、連座分組'], ['pre', '四、訂單核帳'],
   ['links', '五、劃位專屬連結'], ['orders', '六、劃位確認'], ['tickets', '七、紙本入場券'], ['notify', '八、通知設定'], ['gates', '九、驗票'],
-  ['einv', '十、電子發票'], ['vip', '十一、招待'], ['join', '十二、揪團贈票'], ['floor3', '刷卡售票'],
+  ['einv', '十、電子發票'], ['vip', '十一、VIP／公益'], ['join', '十二、揪團贈票'], ['floor3', '刷卡售票'],
 ];
 const COLOR_PRESETS = [
   '#b8ccf3', '#c4e5cf', '#f0dbb1', '#e6c3e5', '#bde2ea', '#f5c4c4', '#d9e7a8', '#c9c2f0', '#ffd29d',
@@ -2959,8 +2959,8 @@ const vipSendShort = (x: VipRow) => (x.sentAt ? '已寄出' : x.sendAt === 'now'
 async function downloadVips(list: VipRow[], cats: string[]) {
   const X = await import('xlsx');
   const wb = X.utils.book_new();
-  const head = ['類別', '姓名', '手機', 'Email', '座位', '席數', '推薦人', '備註', '寄送狀態', '入場', '編號'];
-  const row = (x: VipRow) => [x.cat, x.name, x.phone, x.email, x.seats.map((s) => s.label).join('、'), x.seats.length, x.referrer, x.note, vipSendText(x), x.entered ? `${x.entered}/${x.seats.length} 已入場` : '未入場', x.orderNo ?? ''];
+  const head = ['類別', '姓名', '單位', '手機', 'Email', '座位', '席數', '推薦人', '備註', '寄送狀態', '入場', '編號'];
+  const row = (x: VipRow) => [x.cat, x.name, x.org, x.phone, x.email, x.seats.map((s) => s.label).join('、'), x.seats.length, x.referrer, x.note, vipSendText(x), x.entered ? `${x.entered}/${x.seats.length} 已入場` : '未入場', x.orderNo ?? ''];
   const add = (name: string, rows: VipRow[]) => {
     const ws = X.utils.aoa_to_sheet([head, ...rows.map(row)]);
     ws['!cols'] = head.map((h) => ({ wch: h === '座位' ? 40 : /Email|備註|寄送/.test(h) ? 24 : 10 }));
@@ -2969,7 +2969,126 @@ async function downloadVips(list: VipRow[], cats: string[]) {
   add('總表', list);
   for (const c of [...new Set([...cats, ...list.map((x) => x.cat)])]) { const r = list.filter((x) => x.cat === c); if (r.length) add(c, r); }
   const d = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
-  X.writeFile(wb, `招待座位清單-${d}.xlsx`);
+  X.writeFile(wb, `VIP公益座位清單-${d}.xlsx`);
+}
+
+const stamp = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(/[-: ]/g, '');
+
+/** VIP／公益匯入範本（給公益票負責人填） */
+async function downloadVipTemplate() {
+  const X = await import('xlsx');
+  const wb = X.utils.book_new();
+  const ws = X.utils.aoa_to_sheet([['席號', '姓名職稱', '單位', '類別', 'email', '推薦人']]);
+  ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 20 }, { wch: 8 }, { wch: 26 }, { wch: 10 }];
+  X.utils.book_append_sheet(wb, ws, '名單');
+  const help = X.utils.aoa_to_sheet([
+    ['填寫說明'], [''],
+    ['1. 一列一位。第一列的欄位名稱請不要改。'],
+    ['2. 席號寫法：VIP 排寫 VIP-1；一般座位寫 1排34號（同一人多席可用「、」分開）。'],
+    ['3. 姓名職稱：例「王大明 董事長」，會印在入場 QR 與座位貼上。空白的列不會匯入。'],
+    ['4. 單位：同一個單位的票會合寄一封信，寄給這個單位第一個有填 email 的人。'],
+    ['5. 類別：VIP 或 公益（可空白：VIP 排算 VIP，其他算公益）。VIP 不寄 QR。'],
+    ['6. email、推薦人：沒有就空白。'],
+    [''], ['範例（請填在「名單」工作表，不要填在這裡）'],
+    ['VIP-1｜王大明 董事長｜甲公司｜VIP｜（空白）｜'],
+    ['1排34號｜林小華 執行長｜乙基金會｜公益｜lin@example.org｜陳老師'],
+  ]);
+  help['!cols'] = [{ wch: 80 }];
+  X.utils.book_append_sheet(wb, help, '說明');
+  X.writeFile(wb, 'VIP公益名單範本.xlsx');
+}
+
+/** 座位貼名單（VIP 排、VIP 類別、尊榮席）送印用 */
+function StickerButton() {
+  const { act, busy, setMsg } = useAdmin();
+  return <button className="btn small" disabled={busy} onClick={async () => {
+    const r = await act({ action: 'vip.stickers' }) as { rows: { seat: string; name: string; org: string; kind: string; buyer: string; orderNo: string }[] } | null;
+    if (!r) return;
+    if (!r.rows.length) { setMsg({ kind: 'err', text: '目前沒有 VIP 或尊榮席的座位' }); return; }
+    const X = await import('xlsx');
+    const wb = X.utils.book_new();
+    const head = ['席號', '姓名職稱', '單位', '類別', '訂購人', '訂單編號'];
+    const add = (name: string, rows: typeof r.rows) => {
+      const ws = X.utils.aoa_to_sheet([head, ...rows.map((x) => [x.seat, x.name, x.org, x.kind, x.buyer, x.orderNo])]);
+      ws['!cols'] = [{ wch: 10 }, { wch: 24 }, { wch: 20 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
+      X.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+    };
+    add('全部', r.rows);
+    for (const k of [...new Set(r.rows.map((x) => x.kind))]) add(k.replace(/[\\/?*[\]:]/g, ''), r.rows.filter((x) => x.kind === k));
+    X.writeFile(wb, `座位貼名單-VIP尊榮-${stamp()}.xlsx`);
+    setMsg({ kind: 'ok', text: `已下載座位貼名單 ${r.rows.length} 席` });
+  }}>下載座位貼名單（VIP＋尊榮席）</button>;
+}
+
+type ImpPreview = Awaited<ReturnType<typeof import('@/lib/vipImport').previewImport>>;
+/** Excel 批次匯入：選檔 → 預覽 → 匯入（不寄）→ 核對收件人 → 寄出公益 QR */
+function VipImport() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const [file, setFile] = useState<{ name: string; b64: string } | null>(null);
+  const [pv, setPv] = useState<ImpPreview | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const mails = st.vipMails ?? [];
+  const pick = async (f: File | undefined) => {
+    setPv(null); setFile(null);
+    if (!f) return;
+    if (f.size > 5_000_000) { setMsg({ kind: 'err', text: '檔案太大（上限 5MB）' }); return; }
+    const b64 = await new Promise<string>((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] ?? ''); r.onerror = () => no(r.error); r.readAsDataURL(f); });
+    setFile({ name: f.name, b64 });
+    const p = await act({ action: 'vip.importPreview', file: b64 }) as ImpPreview | null;
+    if (p) setPv(p);
+  };
+  const rowsShown = pv ? pv.rows.filter((r) => showAll || r.status === 'err') : [];
+  return (
+    <div className="card">
+      <h2>Excel 批次匯入</h2>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <button className="btn small" onClick={downloadVipTemplate}>下載填寫範本</button>
+        <button className="btn small pri" disabled={busy} onClick={() => fileRef.current?.click()}>選擇 Excel 檔…</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ''; }} />
+      </div>
+      <p className="small muted" style={{ margin: '6px 0 0' }}>欄位：席號｜姓名職稱｜單位｜類別｜email｜推薦人。先預覽，按「匯入」才會存；匯入時一封信都不寄。</p>
+      {pv && file && (
+        <div style={{ marginTop: 8 }}>
+          <div className="small"><b>{file.name}</b>：可匯入 <b className="ok-text">{pv.count.ok}</b> 列（{pv.count.groups} 筆、{pv.count.seats} 席）・略過 {pv.count.skip}・<b className={pv.count.err ? 'err-text' : ''}>有問題 {pv.count.err}</b></div>
+          {pv.groups.length > 0 && <div className="note" style={{ marginTop: 6, maxHeight: 260, overflow: 'auto' }}>
+            {pv.groups.map((g) => (
+              <div key={g.key} className="small" style={{ padding: '3px 0', borderBottom: '1px solid var(--line, #e3e7ef)' }}>
+                <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63' }}>{g.cat}</span> <b>{g.org || g.holders[0].name}</b>（{g.holders.length} 席：{g.holders.map((h) => h.label).join('、')}）
+                <div className={!g.send ? 'muted' : g.to ? '' : 'err-text'}>{!g.send ? '不寄 QR（人工給）' : g.to ? `QR 寄給：${g.to.name}・${g.to.email}` : '沒有 Email，不會寄'}</div>
+              </div>
+            ))}
+          </div>}
+          {(pv.count.err > 0 || showAll) && <div className="note err" style={{ marginTop: 6, maxHeight: 220, overflow: 'auto' }}>
+            {rowsShown.map((r) => <div key={r.line} className="small">第 {r.line} 列 {r.seat} {r.name}：{r.status === 'ok' ? '✅' : r.reason}</div>)}
+          </div>}
+          <div className="row" style={{ marginTop: 6, gap: 6 }}>
+            <button className="btn small" onClick={() => setShowAll(!showAll)}>{showAll ? '只看有問題的' : '看全部列'}</button>
+            <button className="btn pri small" disabled={busy || !pv.groups.length} onClick={() => confirm2('vipimp', async () => {
+              const r = await act({ action: 'vip.import', file: file.b64 }) as { done: unknown[]; failed: { label: string; reason: string }[]; newCats: string[] } | null;
+              if (!r) return;
+              setMsg({ kind: r.failed.length ? 'err' : 'ok', text: `已匯入 ${r.done.length} 筆（都還沒寄）${r.newCats.length ? `；新增類別：${r.newCats.join('、')}` : ''}${r.failed.length ? `；${r.failed.length} 筆沒匯入：${r.failed.map((f) => `${f.label} ${f.reason}`).join('；')}` : ''}` });
+              setPv(null); setFile(null);
+            })}>{sure === 'vipimp' ? `再按一次確認匯入 ${pv.count.groups} 筆` : `匯入 ${pv.count.groups} 筆`}</button>
+            <button className="btn small" onClick={() => { setPv(null); setFile(null); }}>取消</button>
+          </div>
+        </div>
+      )}
+      {mails.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <h3 style={{ margin: '0 0 4px' }}>匯入後待寄 QR（{mails.length} 封）</h3>
+          <div className="note" style={{ maxHeight: 200, overflow: 'auto' }}>
+            {mails.map((m) => <div key={m.id} className="small">{m.cat}・{m.org || m.name}（{m.seats} 席）→ {m.name}・{m.email}</div>)}
+          </div>
+          <button className="btn pri small" style={{ marginTop: 6 }} disabled={busy} onClick={() => confirm2('vipsend', async () => {
+            const r = await act({ action: 'vip.importSend', ids: mails.map((m) => m.id) }) as { sent: number } | null;
+            if (r) setMsg({ kind: 'ok', text: `已寄出 ${r.sent} 封。寄送結果看「八、通知設定」通知紀錄；清單上也會顯示已寄／寄送失敗。` });
+          })}>{sure === 'vipsend' ? `再按一次，寄出 ${mails.length} 封` : `核對無誤，寄出 ${mails.length} 封`}</button>
+          <p className="small muted" style={{ margin: '4px 0 0' }}>VIP 不在這裡（不寄）。要個別寄，也可以在清單裡把那一位的寄送方式改成「立即寄出」。</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Vips() {
@@ -2977,13 +3096,13 @@ function Vips() {
   const v = st.vips;
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<VipRow | null>(null);
-  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '', cat: '' });
-  const [info, setInfo] = useState<{ id: number; name: string; phone: string; email: string; referrer: string; note: string } | null>(null);
+  const [f, setF] = useState({ name: '', phone: '', email: '', mode: 'scheduled' as 'scheduled' | 'now' | 'none', note: '', referrer: '', cat: '', org: '' });
+  const [info, setInfo] = useState<{ id: number; name: string; phone: string; email: string; referrer: string; note: string; org: string } | null>(null);
   const [days, setDays] = useState(String(v.days));
   const [openId, setOpenId] = useState<number | null>(null);
   const [cat, setCat] = useState('');
   const [catText, setCatText] = useState(v.cats.join('、'));
-  if (st.user.role !== 'admin') return <div className="note err">招待由系統管理員安排，這個帳號沒有權限。</div>;
+  if (st.user.role !== 'admin') return <div className="note err">VIP／公益由系統管理員安排，這個帳號沒有權限。</div>;
 
   const live = v.list.filter((x) => x.status === 'paid');
   const vipOf = new Map<string, VipRow>();
@@ -3019,7 +3138,7 @@ function Vips() {
     if (!r) return;
     const when = f.mode === 'none' ? '不寄出，請到「七、紙本入場券」列印' : f.mode === 'now' || !r.sendAt ? `已寄出。${deliveryText(r.delivery).text}` : `將於 ${fmtDay(r.sendAt)} 自動寄出`;
     setMsg({ kind: 'ok', text: `已保留 ${sel.size} 席給 ${f.name}（${r.orderNo}），${when}${r.brokeBundles ? `；有 ${r.brokeBundles} 組連座已改回單人` : ''}` });
-    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '', referrer: '', cat: f.cat }); // 推薦人不自動沿用，避免順手按出
+    setSel(new Set()); setF({ name: '', phone: '', email: '', mode: f.mode, note: '', referrer: '', cat: f.cat, org: '' }); // 推薦人不自動沿用，避免順手按出
   }
 
   const cats = [...new Set([...v.cats, ...live.map((x) => x.cat)])];
@@ -3030,11 +3149,14 @@ function Vips() {
     <div className="grid2">
       <div className="pstack">
         <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
-          caption="深紫色＝已安排的招待，金色＝清單裡展開的那一位（點紫色座位可直接打開）。點按或拖曳選取空位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
+          caption="深紫色＝已安排的 VIP／公益，金色＝清單裡展開的那一位（點紫色座位可直接打開）。點按或拖曳選取空位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
-            <h2 style={{ margin: 0 }}>招待清單 <span className="small muted">{live.length} 位・{live.reduce((a, x) => a + x.seats.length, 0)} 席</span></h2>
-            <button className="btn small" disabled={!live.length} onClick={() => downloadVips(live, v.cats)}>下載 Excel</button>
+            <h2 style={{ margin: 0 }}>VIP／公益清單 <span className="small muted">{live.length} 位・{live.reduce((a, x) => a + x.seats.length, 0)} 席</span></h2>
+            <div className="row" style={{ gap: 6 }}>
+              <button className="btn small" disabled={!live.length} onClick={() => downloadVips(live, v.cats)}>下載 Excel</button>
+              <StickerButton />
+            </div>
           </div>
           <div className="row" style={{ flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
             {['', ...cats].map((c) => {
@@ -3048,7 +3170,7 @@ function Vips() {
               <div key={x.id} id={`vip-row-${x.id}`} style={{ borderTop: '1px solid var(--line, #e3e7ef)', padding: '6px 0' }}>
                 <button type="button" onClick={() => { setOpenId(open ? null : x.id); setInfo(null); }}
                   style={{ all: 'unset', cursor: 'pointer', display: 'flex', gap: 8, alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
-                  <b style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '30%' }}>{x.name}</b>
+                  <b style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '30%' }}>{x.org ? `${x.org}・` : ''}{x.name}</b>
                   <span className="pill" style={{ background: '#ecdffb', color: '#3b1d63' }}>{x.cat}</span>
                   <span className="small" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{seatShort(x)}</span>
                   <span className={`small${x.failed && !x.sentAt ? ' err-text' : x.sentAt ? ' ok-text' : ' muted'}`} style={{ whiteSpace: 'nowrap' }}>{x.failed && !x.sentAt ? '寄送失敗' : vipSendShort(x)}</span>
@@ -3058,12 +3180,14 @@ function Vips() {
                   <div className="note" style={{ marginTop: 6 }}>
                     <div className="row" style={{ justifyContent: 'space-between' }}><span className="small">{x.seats.map((s) => s.label).join('、')}</span><span className="mono small">{x.orderNo}</span></div>
                     <div className="small muted">{x.phone}{x.phone && x.email ? '・' : ''}{x.email}</div>
+                    {x.org && <div className="small">單位：{x.org}</div>}
                     <div className="small">推薦人：{x.referrer || <span className="muted">（未填）</span>}{x.note ? <span className="muted">・{x.note}</span> : null}</div>
                     <div className="small">{vipSendText(x)}{x.entered ? `・已入場 ${x.entered}/${x.seats.length}` : ''}</div>
                     {x.failed && !x.sentAt && <div className="small err-text"><b>寄送失敗，請看「八、通知設定」通知紀錄</b></div>}
                     {info?.id === x.id && (
                       <div style={{ marginTop: 6 }}>
-                        <label className="f">姓名<input value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></label>
+                        <label className="f">姓名職稱（收件人）<input value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></label>
+                        <label className="f" style={{ marginTop: 6 }}>單位<input value={info.org} onChange={(e) => setInfo({ ...info, org: e.target.value })} /></label>
                         <div className="fields" style={{ marginTop: 6 }}>
                           <label className="f">手機<input value={info.phone} inputMode="tel" onChange={(e) => setInfo({ ...info, phone: e.target.value })} /></label>
                           <label className="f">Email<input value={info.email} type="email" onChange={(e) => setInfo({ ...info, email: e.target.value })} /></label>
@@ -3092,20 +3216,21 @@ function Vips() {
                       }}>
                         {(['scheduled', 'now', 'none'] as const).map((m) => <option key={m} value={m}>{VIP_MODE[m]}</option>)}
                       </select>
-                      <button className="btn small" onClick={() => setInfo({ id: x.id, name: x.name, phone: x.phone, email: x.email, referrer: x.referrer, note: x.note })}>改資料</button>
+                      <button className="btn small" onClick={() => setInfo({ id: x.id, name: x.name, phone: x.phone, email: x.email, referrer: x.referrer, note: x.note, org: x.org })}>改資料</button>
                       <button className="btn small" onClick={() => { setEditing(x); setSel(new Set(x.seats.map((s) => s.id))); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>改座位</button>
                       <button className="btn small danger" disabled={busy} onClick={() => confirm2(`vipc${x.id}`, async () => { if (await act({ action: 'vip.cancel', id: x.id }, `已取消 ${x.name} 的招待，座位已釋放`)) setOpenId(null); })}>
-                        {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消招待'}</button>
+                        {sure === `vipc${x.id}` ? '再按一次確認取消' : '取消（釋出座位）'}</button>
                     </div>
                   </div>
                 )}
               </div>
             );
           })}
-          {!shown.length && <p className="muted small" style={{ margin: 0 }}>{live.length ? '這個類別沒有招待。' : '還沒有安排招待。'}</p>}
+          {!shown.length && <p className="muted small" style={{ margin: 0 }}>{live.length ? '這個類別沒有人。' : '還沒有安排 VIP／公益。'}</p>}
         </div>
       </div>
       <div className="side">
+        <VipImport />
         {editing ? (
           <div className="card">
             <h2>改座位：{editing.name}</h2>
@@ -3117,15 +3242,16 @@ function Vips() {
           </div>
         ) : (
           <div className="card">
-            <h2>新增招待 <span className="small muted">已選 {sel.size} 席</span></h2>
+            <h2>新增 VIP／公益 <span className="small muted">已選 {sel.size} 席</span></h2>
             {selLabels.length > 0 && <p className="small" style={{ margin: '0 0 6px' }}>{selLabels.slice(0, 12).join('、')}{selLabels.length > 12 ? '…' : ''}</p>}
-            <label className="f">姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <label className="f">姓名職稱<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <label className="f" style={{ marginTop: 8 }}>單位（選填）<input value={f.org} onChange={(e) => setF({ ...f, org: e.target.value })} /></label>
             <div className="fields" style={{ marginTop: 8 }}>
               <label className="f">手機（選填）<input value={f.phone} inputMode="tel" onChange={(e) => setF({ ...f, phone: e.target.value })} /></label>
               <label className="f">Email（選填）<input value={f.email} type="email" onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
             </div>
             <label className="f" style={{ marginTop: 8 }}>類別<select value={f.cat} onChange={(e) => setF({ ...f, cat: e.target.value })}>
-              <option value="">自動（{selAllVipRow ? 'VIP 排→VIP' : '招待'}）</option>
+              <option value="">自動（{selAllVipRow ? 'VIP 排→VIP' : '公益'}）</option>
               {v.cats.map((c) => <option key={c} value={c}>{c}</option>)}
             </select></label>
             <h3>劃位資料什麼時候寄給對方</h3>
@@ -3138,7 +3264,7 @@ function Vips() {
             <RefPick v={f} set={(p) => setF({ ...f, ...p })} refs={v.referrers} />
             <label className="f" style={{ marginTop: 6 }}>備註（選填，只有後台看得到）<input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} /></label>
             <button className="btn pri" style={{ width: '100%', marginTop: 10 }} disabled={busy || !sel.size} onClick={create}>保留 {sel.size} 席給這位貴賓</button>
-            <p className="small muted" style={{ margin: '6px 0 0' }}>招待不收費、不開發票，不算進售票收入。寄出前都可以改座位、改寄送方式或取消。</p>
+            <p className="small muted" style={{ margin: '6px 0 0' }}>VIP／公益不收費、不開發票，不算進售票收入。寄出前都可以改座位、改寄送方式或取消。</p>
           </div>
         )}
         <div className="card">
@@ -3150,9 +3276,9 @@ function Vips() {
             <button className="btn small" disabled={busy || String(v.days) === days} onClick={() => act({ action: 'vip.days', days: parseInt(days) || 0 }, '已更新，尚未寄出的排程一起改了')}>儲存</button>
           </div>
           <p className="small muted" style={{ margin: '6px 0 0' }}>自動寄出要系統當天開著；電腦關機的話，開機後會補寄。紙本入場券在「七、紙本入場券」列印。</p>
-          <label className="f" style={{ marginTop: 10 }}>招待類別（用「、」分開）<input value={catText} onChange={(e) => setCatText(e.target.value)} /></label>
-          <button className="btn small" style={{ marginTop: 6 }} disabled={busy || catText === v.cats.join('、')} onClick={() => act({ action: 'vip.cats', text: catText }, '已更新招待類別')}>儲存類別</button>
-          <p className="small muted" style={{ margin: '6px 0 0' }}>類別用在招待清單、Excel 和驗票即時看板（招待框裡分開列）。VIP 排的座位在看板上一律算「VIP」框。</p>
+          <label className="f" style={{ marginTop: 10 }}>類別（用「、」分開）<input value={catText} onChange={(e) => setCatText(e.target.value)} /></label>
+          <button className="btn small" style={{ marginTop: 6 }} disabled={busy || catText === v.cats.join('、')} onClick={() => act({ action: 'vip.cats', text: catText }, '已更新類別')}>儲存類別</button>
+          <p className="small muted" style={{ margin: '6px 0 0' }}>類別用在清單、Excel 和驗票即時看板（公益框裡分開列）。只有 VIP 不寄 QR（人工給）；Excel 匯入的其他類別都可以寄。VIP 排的座位在看板上一律算「VIP」框。</p>
         </div>
       </div>
     </div>

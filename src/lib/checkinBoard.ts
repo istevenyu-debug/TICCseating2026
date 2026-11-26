@@ -57,14 +57,15 @@ export function defaultBox(key: string, label: string): string {
   if (key === 'era') return '年代';
   if (key === 'gift3f') return '3F 贈票';
   if (key === 'viprow') return 'VIP';
-  if (key.startsWith('vip:')) return '招待';
+  if (key === 'vip:VIP') return 'VIP';
+  if (key.startsWith('vip:')) return '公益'; // 公益與其他類別（含舊資料的「招待」）
   const [plan, zone] = label.split('・');
   const gift = /贈/.test(zone ?? '');
   if (/尊榮/.test(plan)) return gift ? '尊榮贈席' : '尊榮';
   if (/感恩|買五送一/.test(plan)) return gift ? '感恩贈席' : '感恩';
   return '其他';
 }
-const ORDER = ['尊榮', '尊榮贈席', '感恩', '感恩贈席', '招待', 'VIP', '3F 贈票', '年代'];
+const ORDER = ['尊榮', '尊榮贈席', '感恩', '感恩贈席', '公益', 'VIP', '3F 贈票', '年代'];
 /** 沒有票也一直顯示的框 */
 const ALWAYS = new Set(['3F 贈票', '年代']);
 
@@ -181,7 +182,7 @@ export async function saveBoxCfg(db: Db, actor: string, v: BoxCfg) {
 
 /** 招待類別清單（新增招待時可選；之後可再加） */
 const CAT_KEY = 'vip.cats';
-export const DEFAULT_CATS = ['招待', '公益', 'VIP'];
+export const DEFAULT_CATS = ['VIP', '公益'];
 export async function getVipCats(db: Db) {
   const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, CAT_KEY));
   const list = (r?.value ?? '').split(/[、,，\n]/).map((x) => x.trim()).filter(Boolean);
