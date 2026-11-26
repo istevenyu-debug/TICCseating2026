@@ -1,7 +1,8 @@
 'use client';
 /** 後台首頁：全場銷售總覽（2M 本系統即時＋年代 2–5 樓依最後上傳的名單） */
-import { Fragment, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import type { SalesOverview } from '@/lib/sales';
+import { countSeatmap } from '@/lib/seatmapCount';
 
 type Act = (body: Record<string, unknown>, ok?: string) => Promise<unknown>;
 const tw = (iso: string | null) => (iso ? new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
@@ -22,7 +23,7 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
   return (
     <div className="card sales" style={{ gridColumn: '1 / -1', justifySelf: 'start', maxWidth: '100%', width: 'fit-content' }}>
       <h3 style={{ marginTop: 0 }}>全場銷售總覽</h3>
-      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖。2M、3F 兩側：本系統即時；年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b>。</p>
+      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖。2M、3F 兩側：本系統即時；年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b>；4F／5F 有上傳年代座位圖時，改用最近一次座位圖（全部票點）。</p>
       <div className="tbl" style={{ overflowX: 'auto' }}><table style={{ width: 'auto' }}>
         <thead><tr><th style={{ textAlign: 'left' }}>區域</th><th style={r}>總席數</th><th style={r}>已售</th><th style={r}>尚可售</th></tr></thead>
         <tbody>
@@ -52,6 +53,8 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
         </tbody>
       </table></div>
 
+      {admin && <SeatmapUpload s={s} act={act} busy={busy} />}
+
       {admin && (edit
         ? <div className="row" style={{ gap: 8, marginTop: 8 }}><button className="btn pri small" disabled={busy} onClick={save}>儲存總席數</button><button className="btn small" onClick={() => setEdit(false)}>取消</button></div>
         : <button className="btn small" style={{ marginTop: 8 }} onClick={startEdit}>改年代各區總席數</button>)}
@@ -64,6 +67,78 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
             <thead><tr><th style={{ textAlign: 'left' }}>日期</th><th style={r}>2M</th><th style={r}>年代</th><th style={r}>合計</th></tr></thead>
             <tbody>{s.daily.map((d) => <tr key={d.day}><td>{d.day}</td><td style={r}>{n(d.twoM)}</td><td style={r}>{n(d.era)}</td><td style={{ ...r, fontWeight: 700 }}>{n(d.twoM + d.era)}</td></tr>)}</tbody>
           </table></div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** 上傳年代座位圖截圖 → 手機上算 4F／5F 已售 → 確認後存（總席數對得上才收） */
+function SeatmapUpload({ s, act, busy }: { s: SalesOverview; act: Act; busy: boolean }) {
+  const file = useRef<HTMLInputElement>(null);
+  const [res, setRes] = useState<{ floors: { key: string; total: number; sold: number }[]; thumb: string; statAt: string } | null>(null);
+  const [err, setErr] = useState('');
+  const [working, setWorking] = useState(false);
+  const [sureUndo, setSureUndo] = useState(false);
+  const caps = [{ key: '4F', total: s.caps['4F'] ?? 748 }, { key: '5F', total: s.caps['5F'] ?? 686 }];
+  const local = (d: Date) => new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 16); // 台北時間給 datetime-local
+  async function pick(f: File | undefined) {
+    if (!f) return;
+    setErr(''); setRes(null); setWorking(true);
+    try {
+      const bmp = await createImageBitmap(f);
+      const k = Math.min(1, 2400 / bmp.width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+      const g = c.getContext('2d', { willReadFrequently: true })!;
+      g.drawImage(bmp, 0, 0, c.width, c.height);
+      const r = countSeatmap(g.getImageData(0, 0, c.width, c.height).data, c.width, c.height, caps);
+      if (!r.ok) { setErr(r.message); return; }
+      const t = document.createElement('canvas');
+      const tk = Math.min(1, 480 / c.width);
+      t.width = Math.round(c.width * tk); t.height = Math.round(c.height * tk);
+      t.getContext('2d')!.drawImage(c, 0, 0, t.width, t.height);
+      // 統計時間預設＝截圖檔案的時間（3 天內），不然用現在
+      const when = Date.now() - f.lastModified < 3 * 86400_000 && f.lastModified <= Date.now() ? new Date(f.lastModified) : new Date();
+      setRes({ floors: r.floors, thumb: t.toDataURL('image/jpeg', 0.6), statAt: local(when) });
+    } catch { setErr('讀不到這張圖，請換一張截圖（PNG 或 JPG）。'); } finally { setWorking(false); if (file.current) file.current.value = ''; }
+  }
+  async function save() {
+    if (!res) return;
+    const statAt = new Date(`${res.statAt}:00+08:00`).toISOString();
+    if (await act({ action: 'sales.seatmap', statAt, floors: res.floors, thumb: res.thumb }, '已更新 4F／5F 銷售數字')) setRes(null);
+  }
+  const last = s.seatmaps[0];
+  const tw2 = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  return (
+    <div style={{ marginTop: 10, maxWidth: 520 }}>
+      <input ref={file} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => pick(e.target.files?.[0])} />
+      <button className="btn small pri" disabled={busy || working} onClick={() => file.current?.click()}>{working ? '計算中…' : '上傳年代座位圖（4F／5F）'}</button>
+      <span className="small muted" style={{ marginLeft: 6 }}>綠色＝已售；要含 4F、5F 每一排</span>
+      {err && <div className="note err" style={{ marginTop: 6 }}>{err}</div>}
+      {res && (
+        <div className="note" style={{ marginTop: 6 }}>
+          <img src={res.thumb} alt="座位圖縮圖" style={{ maxWidth: '100%', display: 'block', marginBottom: 6 }} />
+          {res.floors.map((f) => <div key={f.key}><b>{f.key}</b> 已售 <b>{f.sold.toLocaleString()}</b>／{f.total.toLocaleString()}（尚可售 {(f.total - f.sold).toLocaleString()}）</div>)}
+          <label className="f" style={{ marginTop: 6 }}>統計時間<input type="datetime-local" value={res.statAt} onChange={(e) => setRes({ ...res, statAt: e.target.value })} /></label>
+          <div className="row" style={{ gap: 6, marginTop: 6 }}>
+            <button className="btn pri small" disabled={busy || !res.statAt} onClick={save}>確認，更新銷售數字</button>
+            <button className="btn small" onClick={() => setRes(null)}>取消</button>
+          </div>
+        </div>
+      )}
+      {last && (
+        <details style={{ marginTop: 6 }}>
+          <summary className="small" style={{ cursor: 'pointer' }}>座位圖紀錄：最近 {tw2(last.statAt)}（{last.floors.map((f) => `${f.key} ${f.sold}`).join('、')}）</summary>
+          {last.thumb && <img src={last.thumb} alt="最近一次座位圖" style={{ maxWidth: '100%', display: 'block', margin: '6px 0' }} />}
+          <div className="tbl"><table style={{ width: 'auto' }}>
+            <thead><tr><th style={{ textAlign: 'left' }}>統計時間</th>{last.floors.map((f) => <th key={f.key} style={{ textAlign: 'right', paddingLeft: 10 }}>{f.key} 已售</th>)}<th style={{ textAlign: 'left', paddingLeft: 10 }}>上傳</th></tr></thead>
+            <tbody>{s.seatmaps.map((m) => <tr key={m.at}><td>{tw2(m.statAt)}</td>{m.floors.map((f) => <td key={f.key} style={{ textAlign: 'right', paddingLeft: 10 }}>{f.sold.toLocaleString()}</td>)}<td className="small muted" style={{ paddingLeft: 10 }}>{m.by}・{tw2(m.at)}</td></tr>)}</tbody>
+          </table></div>
+          <button className="btn small" style={{ marginTop: 6 }} disabled={busy} onClick={async () => {
+            if (!sureUndo) { setSureUndo(true); setTimeout(() => setSureUndo(false), 4000); return; }
+            setSureUndo(false); await act({ action: 'sales.seatmapUndo' }, '已刪掉最近一次座位圖');
+          }}>{sureUndo ? '再按一次確認刪除' : '刪掉最近一次（上傳錯圖時）'}</button>
         </details>
       )}
     </div>

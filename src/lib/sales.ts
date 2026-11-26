@@ -47,6 +47,53 @@ export async function setCaps(db: Db, actor: string, raw: unknown) {
   return caps;
 }
 
+/* ---------- 年代座位圖（4F／5F 截圖計數） ---------- */
+const MAP_KEY = 'sales.seatmap';
+const MAP_FLOORS = ['4F', '5F'] as const;
+export type SeatmapEntry = { at: string; statAt: string; by: string; floors: { key: string; total: number; sold: number }[]; thumb?: string };
+
+export async function getSeatmaps(db: Db): Promise<SeatmapEntry[]> {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, MAP_KEY));
+  try { const v = JSON.parse(r?.value ?? '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+async function putSeatmaps(db: Db, list: SeatmapEntry[]) {
+  const value = JSON.stringify(list);
+  await db.insert(t.appSetting).values({ key: MAP_KEY, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+}
+
+/** 存一次座位圖計數（瀏覽器算好送來）。總席數要等於目前的 4F／5F 總席數才收；留最近 30 筆，縮圖只留最近 5 筆 */
+export async function addSeatmap(db: Db, actor: string, raw: unknown, now = new Date()) {
+  const p = z.object({
+    statAt: z.string().max(40),
+    floors: z.array(z.object({ key: z.enum(MAP_FLOORS), total: z.number().int().min(1).max(5000), sold: z.number().int().min(0).max(5000) })).length(2),
+    thumb: z.string().max(200_000).regex(/^data:image\/(jpeg|png|webp);base64,/).optional(),
+  }).safeParse(raw);
+  if (!p.success) throw new BookingError('INVALID', '座位圖資料不正確，請重新上傳');
+  const statAt = new Date(p.data.statAt);
+  if (Number.isNaN(statAt.getTime())) throw new BookingError('INVALID', '統計時間不正確');
+  if (statAt.getTime() > now.getTime() + 10 * 60_000) throw new BookingError('INVALID', '統計時間不能在未來');
+  const caps = await getCaps(db);
+  for (const f of p.data.floors) {
+    const cap = caps[f.key] ?? HALL_CAPS[f.key];
+    if (f.total !== cap) throw new BookingError('INVALID', `${f.key} 座位數 ${f.total} 跟總席數 ${cap} 對不上，沒有存。`);
+    if (f.sold > f.total) throw new BookingError('INVALID', `${f.key} 已售大於總席數，沒有存。`);
+  }
+  const entry: SeatmapEntry = { at: now.toISOString(), statAt: statAt.toISOString(), by: actor, floors: p.data.floors, thumb: p.data.thumb };
+  const list = [entry, ...(await getSeatmaps(db))].slice(0, 30).map((x, i) => (i < 5 ? x : { ...x, thumb: undefined }));
+  await putSeatmaps(db, list);
+  await db.insert(t.auditLog).values({ actor, action: 'sales_seatmap', target: MAP_KEY, detail: JSON.stringify({ statAt: entry.statAt, floors: entry.floors }) });
+  return { ok: true };
+}
+
+/** 刪掉最近一次（上傳錯圖時） */
+export async function undoSeatmap(db: Db, actor: string) {
+  const [first, ...rest] = await getSeatmaps(db);
+  if (!first) throw new BookingError('INVALID', '還沒有上傳過座位圖');
+  await putSeatmaps(db, rest);
+  await db.insert(t.auditLog).values({ actor, action: 'sales_seatmap_undo', target: MAP_KEY, detail: JSON.stringify({ statAt: first.statAt, floors: first.floors }) });
+  return { ok: true };
+}
+
 export async function salesOverview(db: Db, now = new Date()) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
   if (!ev) return null;
@@ -156,19 +203,28 @@ export async function salesOverview(db: Db, now = new Date()) {
   };
   const mid = { key: '3F', label: '3F 中間（13–27 排）', by: '年代', total: silver.cap || HALL_CAPS['3F'], sold: silver.sold, left: Math.max(0, (silver.cap || HALL_CAPS['3F']) - silver.sold), refunded: byKey.get('3F')?.refunded ?? 0,
     prices: [...(byKey.get('3F')?.prices ?? new Map()).entries()].sort((a, b) => b[0] - a[0]).map(([price, n]) => ({ price, n })) };
+  // 4F／5F：有上傳年代座位圖就用最近一次（全部票點），沒有才用年代名單（只有上傳的票點）
+  const maps = await getSeatmaps(db);
+  const mapRow = <T extends { key: string; total: number | null; sold: number; left: number | null }>(row: T) => {
+    const f = maps[0]?.floors.find((x) => x.key === row.key);
+    if (!f) return { ...row, note: '' };
+    const when = new Date(maps[0].statAt).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    return { ...row, by: '年代座位圖', total: f.total, sold: f.sold, left: Math.max(0, f.total - f.sold), note: `${when} 統計${row.sold ? `；名單（本票點）${row.sold}` : ''}` };
+  };
   const hall = [
     { key: '2M', label: '2M（1–12 排）', by: '本系統', total: twoM.total, sold: twoM.sold, left: twoM.free, refunded: 0, prices: [] as { price: number; n: number }[], note: [twoM.pending ? `待確認 ${twoM.pending}` : '', vipSeats ? `其中招待 ${vipSeats}` : '', twoM.reserved ? `保留 ${twoM.reserved}` : ''].filter(Boolean).join('・') },
     { ...mid, note: '' },
     { key: '3F側', label: '3F 兩側（左2／右2）', by: '我們', total: sideSeats.length, sold: sideSeats.length - giftFree, left: giftFree, refunded: 0, prices: [] as { price: number; n: number }[],
       note: `贈席已劃 ${giftPicked}・志工 ${vol}${other ? `・招待／保留 ${other}` : ''}` },
-    { ...eraRow('4F', '4F（28–41 排）'), note: '' },
-    { ...eraRow('5F', '5F（42–55 排）'), note: '' },
+    mapRow(eraRow('4F', '4F（28–41 排）')),
+    mapRow(eraRow('5F', '5F（42–55 排）')),
     ...(byKey.has('包廂') ? [{ ...eraRow('包廂', '包廂（B1–B35）'), note: '' }] : []), // 包廂不賣：名單裡有包廂票才顯示
     ...[...byKey.keys()].filter((k) => !['3F', '4F', '5F', '包廂'].includes(k)).map((k) => ({ ...eraRow(k, `${k}（年代）`), note: '樓層看不出來' })),
   ];
   const known = hall.filter((h) => h.total !== null);
   const hallSum = { total: known.reduce((a, h) => a + (h.total ?? 0), 0), sold: hall.reduce((a, h) => a + h.sold, 0), left: known.reduce((a, h) => a + (h.left ?? 0), 0) };
 
-  return { now: now.toISOString(), twoM: { ...twoM, plans, vipSeats }, era, silver, daily, caps, hall, hallSum };
+  return { now: now.toISOString(), twoM: { ...twoM, plans, vipSeats }, era, silver, daily, caps, hall, hallSum,
+    seatmaps: maps.slice(0, 10).map((m, i) => ({ ...m, thumb: i === 0 ? m.thumb : undefined })) };
 }
 export type SalesOverview = NonNullable<Awaited<ReturnType<typeof salesOverview>>>;
