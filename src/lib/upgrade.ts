@@ -2,7 +2,8 @@
  * 免費升等（換座位）：後台選一筆劃位成功的訂單、要換的座位、可以換到的票種與區塊 → 產生升等連結 →
  * 買方自己在座位圖選新座位 → 立即換好。
  * - 持票人、票號（序號）不變：換之前先把這筆訂單每張票的票號固定下來（order_seat.ticket_no），原本的 QR 照樣能用。
- * - 舊座位改成「保留：攝影」（不能賣）；新座位若在連座組裡，整組拆成單人。
+ * - 舊座位：建立連結時選「釋出（空位，預設）」或「保留：攝影」（不能賣）。2026-11-27 前建立的連結沒有這個欄位＝保留：攝影。
+ * - 新座位若在連座組裡，整組拆成單人。
  * - 不收錢、不動發票、不寄信（後台可按「重寄 QR code」）。
  * 2026-11-26：感恩席贈席 11 排 35、36、38、40 因攝影器材要用，升等到感恩席中三區（買方自己選，分三筆）。
  */
@@ -20,6 +21,8 @@ export const UPGRADE_BLOCKS = ['L2', 'L1', 'C0', 'R1', 'R2'] as const;
 export type Upgrade = {
   token: string; orderId: number; orderNo: string; buyerName: string;
   seatIds: string[]; zoneIds: number[]; blocks: string[];
+  /** 換好後舊座位：free＝釋出成空位（照原本用途）；photo＝保留：攝影。沒有這欄（舊連結）＝photo */
+  oldTo?: 'free' | 'photo';
   status: 'open' | 'done' | 'cancelled'; createdAt: string; by: string;
   doneAt?: string; moves?: { from: string; to: string; fromLabel: string; toLabel: string }[];
 };
@@ -61,7 +64,7 @@ async function enteredSeats(db: Db, eventId: number, orderId: number, seatIds: s
 }
 
 /** 後台：建立升等連結 */
-export async function createUpgrade(db: Db, actor: string, v: { orderId: number; seatIds: string[]; zoneIds: number[]; blocks: string[] }, now = new Date()) {
+export async function createUpgrade(db: Db, actor: string, v: { orderId: number; seatIds: string[]; zoneIds: number[]; blocks: string[]; oldTo?: 'free' | 'photo' }, now = new Date()) {
   const ev = await ev0(db);
   const [o] = await db.select().from(t.orders).where(and(eq(t.orders.id, v.orderId), eq(t.orders.eventId, ev.id)));
   if (!o || o.status !== 'paid') throw new BookingError('INVALID', '只有劃位成功的訂單可以升等');
@@ -79,10 +82,10 @@ export async function createUpgrade(db: Db, actor: string, v: { orderId: number;
   if (open.length) throw new BookingError('INVALID', '這幾席已經有升等連結了（還沒選）。要重做請先取消那條。');
   const u: Upgrade = {
     token: randomBytes(12).toString('base64url'), orderId: o.id, orderNo: o.orderNo ?? "", buyerName: o.buyerName ?? '',
-    seatIds, zoneIds: [...new Set(v.zoneIds)], blocks, status: 'open', createdAt: now.toISOString(), by: actor,
+    seatIds, zoneIds: [...new Set(v.zoneIds)], blocks, oldTo: v.oldTo === 'photo' ? 'photo' : 'free', status: 'open', createdAt: now.toISOString(), by: actor,
   };
   await save(db, u);
-  await db.insert(t.auditLog).values({ actor, action: 'upgrade_create', target: `order:${o.id}`, detail: JSON.stringify({ token: u.token, seatIds, zoneIds: u.zoneIds, blocks }) });
+  await db.insert(t.auditLog).values({ actor, action: 'upgrade_create', target: `order:${o.id}`, detail: JSON.stringify({ token: u.token, seatIds, zoneIds: u.zoneIds, blocks, oldTo: u.oldTo }) });
   return u;
 }
 
@@ -130,7 +133,8 @@ export async function applyUpgrade(db: Db, token: string, newSeatIds: string[], 
   if (ids.length !== u.seatIds.length) throw new BookingError('INVALID', `請選 ${u.seatIds.length} 席`);
   const ev = await ev0(db);
   if ((await enteredSeats(db, ev.id, u.orderId, u.seatIds)).length) throw new BookingError('INVALID', '有座位已經入場，不能換');
-  const photo = await usageId(db, ev.id);
+  const keepPhoto = (u.oldTo ?? 'photo') === 'photo';
+  const photo = keepPhoto ? await usageId(db, ev.id) : null;
   const moves = await db.transaction(async (tx) => {
     const [o] = await tx.select().from(t.orders).where(eq(t.orders.id, u.orderId)).for('update');
     if (!o || o.status !== 'paid') throw new BookingError('INVALID', '這筆訂單已不是劃位成功，不能換，請向主辦方確認。');
@@ -173,10 +177,10 @@ export async function applyUpgrade(db: Db, token: string, newSeatIds: string[], 
       const fi = oldInfo.find((x) => x.id === from)!;
       out.push({ from, to, fromLabel: seatLabel(fi), toLabel: seatLabel({ rowNo: news[i].rowNo, seatNo: news[i].seatNo, seatType: news[i].type }) });
     }
-    // 舊座位：空出來、改成「保留：攝影」（不能賣）
-    await tx.update(t.eventSeat).set({ status: 'free', orderId: null, holdUntil: null, bundle: null, usageId: photo, version: sql`${t.eventSeat.version} + 1` })
+    // 舊座位：空出來；保留：攝影（不能賣）或釋出（照原本用途）
+    await tx.update(t.eventSeat).set({ status: 'free', orderId: null, holdUntil: null, bundle: null, ...(photo != null ? { usageId: photo } : {}), version: sql`${t.eventSeat.version} + 1` })
       .where(and(eq(t.eventSeat.eventId, ev.id), inArray(t.eventSeat.seatId, olds.map((r) => r.seatId))));
-    await tx.insert(t.auditLog).values({ actor: `buyer:${o.orderNo}`, action: 'upgrade_done', target: `order:${o.id}`, detail: JSON.stringify({ token, moves: out.map((m) => `${m.fromLabel}→${m.toLabel}`), brokeBundles: bundles.length }) });
+    await tx.insert(t.auditLog).values({ actor: `buyer:${o.orderNo}`, action: 'upgrade_done', target: `order:${o.id}`, detail: JSON.stringify({ token, moves: out.map((m) => `${m.fromLabel}→${m.toLabel}`), oldTo: keepPhoto ? 'photo' : 'free', brokeBundles: bundles.length }) });
     return out;
   });
   await save(db, { ...u, status: 'done', doneAt: now.toISOString(), moves });

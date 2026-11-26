@@ -1018,6 +1018,7 @@ function Upgrade({ o }: { o: Order }) {
   const [pick, setPick] = useState<Set<string>>(new Set());
   const [zs, setZs] = useState<Set<number>>(new Set(mainZones));
   const [bs, setBs] = useState<Set<string>>(new Set(['L1', 'C0', 'R1']));
+  const [keep, setKeep] = useState(false);
   const BL: Record<string, string> = { L2: '左二', L1: '左一', C0: '中', R1: '右一', R2: '右二' };
   const busySeats = new Set(ups.filter((u) => u.status === 'open').flatMap((u) => u.seatIds));
   const url = (tk: string) => `${base}/up/${tk}`;
@@ -1033,6 +1034,7 @@ function Upgrade({ o }: { o: Order }) {
         <div key={u.token} className="note" style={{ margin: '4px 0' }}>
           <div className="small">{tw(u.createdAt)}・{u.seatIds.length} 席・{u.status === 'open' ? <b>等買方選</b> : u.status === 'done' ? <b className="ok-text">已換好 {u.doneAt ? tw(u.doneAt) : ''}</b> : <span className="muted">已取消</span>}</div>
           {u.status === 'done' && u.moves && <div className="small">{u.moves.map((m) => `${m.fromLabel} → ${m.toLabel}`).join('、')}</div>}
+          <div className="small muted">舊座位：{(u.oldTo ?? 'photo') === 'photo' ? '保留：攝影（不能賣）' : '釋出（空位）'}</div>
           {u.status === 'open' && <div className="row" style={{ marginTop: 4 }}>
             <span className="mono small" style={{ wordBreak: 'break-all', flex: '1 1 100%' }}>{url(u.token)}</span>
             <button className="btn small pri" onClick={() => copy(u.token)}>複製說明＋連結</button>
@@ -1042,8 +1044,8 @@ function Upgrade({ o }: { o: Order }) {
       ))}
       {!open ? <button className="btn" onClick={() => setOpen(true)}>產生升等連結…</button> : <form onSubmit={async (e) => {
         e.preventDefault();
-        const r = await act({ action: 'upgrade.create', id: o.id, seatIds: [...pick], zoneIds: [...zs], blocks: [...bs] }) as { token: string } | null;
-        if (r) { setMsg({ kind: 'ok', text: '已產生升等連結，按「複製說明＋連結」貼給買方' }); setOpen(false); setPick(new Set()); }
+        const r = await act({ action: 'upgrade.create', id: o.id, seatIds: [...pick], zoneIds: [...zs], blocks: [...bs], oldTo: keep ? 'photo' : 'free' }) as { token: string } | null;
+        if (r) { setMsg({ kind: 'ok', text: '已產生升等連結，按「複製說明＋連結」貼給買方' }); setOpen(false); setPick(new Set()); setKeep(false); }
       }}>
         <div className="small muted">1. 要換的座位</div>
         <div className="row">{o.seats.map((x) => (
@@ -1057,11 +1059,16 @@ function Upgrade({ o }: { o: Order }) {
         <div className="row">{Object.keys(BL).map((b) => (
           <label key={b} className="switch small"><input type="checkbox" checked={bs.has(b)} onChange={(e) => setBs(toggle(bs, b, e.target.checked))} />{BL[b]}</label>
         ))}</div>
+        <div className="small muted" style={{ marginTop: 6 }}>4. 換好後，舊座位</div>
+        <div className="row">
+          <label className="switch small"><input type="radio" name={`upk${o.id}`} checked={!keep} onChange={() => setKeep(false)} />釋出（變回空位，可再賣或再排）</label>
+          <label className="switch small"><input type="radio" name={`upk${o.id}`} checked={keep} onChange={() => setKeep(true)} />保留：攝影（要放器材，不能賣）</label>
+        </div>
         <div className="row" style={{ marginTop: 8 }}>
           <button className="btn pri" disabled={busy || !pick.size || !zs.size || !bs.size}>產生連結（{pick.size} 席）</button>
           <button type="button" className="btn" onClick={() => setOpen(false)}>收起</button>
         </div>
-        <p className="small muted" style={{ margin: '4px 0 0' }}>不收錢、不動發票、不寄信。買方選好立即生效：持票人與序號不變，原本的 QR 照樣能用；舊座位改「保留：攝影」（不能賣）。</p>
+        <p className="small muted" style={{ margin: '4px 0 0' }}>不收錢、不動發票、不寄信。買方選好立即生效：持票人與序號不變，原本的 QR 照樣能用；舊座位照第 4 項釋出或保留。</p>
       </form>}
     </>
   );

@@ -53,7 +53,7 @@ describe('免費升等（換座位）', () => {
     // 換到第 1 排（位置在原本座位前面，舊的排法序號會整個重排）
     const target = await freeLike('1-1', 1);
     expect((await seatInfo(target[0])).zoneId).toBe(zone);
-    const u = await createUpgrade(db, 'admin', { orderId: oid, seatIds: ['5-4'], zoneIds: [zone], blocks: [block] });
+    const u = await createUpgrade(db, 'admin', { orderId: oid, seatIds: ['5-4'], zoneIds: [zone], blocks: [block], oldTo: 'photo' });
     const v = await upgradeView(db, u.token);
     expect(v).toMatchObject({ status: 'open', n: 1, old: ['第5排 4號'] });
     expect(v.seats.find((s) => s.id === target[0])!.status).toBe('free');
@@ -80,6 +80,24 @@ describe('免費升等（換座位）', () => {
     expect((await listUpgrades(db))[0]).toMatchObject({ status: 'done' });
     await expect(applyUpgrade(db, u.token, target)).rejects.toThrow('已經換好');
     await expect(cancelUpgrade(db, 'admin', u.token)).rejects.toThrow('已經換好');
+  });
+
+  it('預設：舊座位釋出成空位（照原本用途、可再賣）；舊連結沒有 oldTo 欄位＝保留：攝影', async () => {
+    const oid = await paidOrder(['7-3', '7-4']);
+    const usage0 = (await seatInfo('7-3')).usage;
+    const zone = (await seatInfo('7-3')).zoneId, block = (await seatInfo('1-1')).block;
+    const u = await createUpgrade(db, 'admin', { orderId: oid, seatIds: ['7-3'], zoneIds: [zone], blocks: [block] });
+    expect(u.oldTo).toBe('free');
+    const target = await freeLike('1-1', 1);
+    await applyUpgrade(db, u.token, target);
+    expect(await seatInfo('7-3')).toMatchObject({ status: 'free', usage: usage0, orderId: null });
+    expect(usage0).not.toBe('hold-photo');
+    // 11/27 之前建立的連結（存的資料沒有 oldTo）→ 照舊保留：攝影
+    const u2 = await createUpgrade(db, 'admin', { orderId: oid, seatIds: ['7-4'], zoneIds: [zone], blocks: [block] });
+    const { oldTo: _drop, ...legacy } = u2;
+    await db.update(t.appSetting).set({ value: JSON.stringify(legacy) }).where(eq(t.appSetting.key, `upgrade.${u2.token}`));
+    await applyUpgrade(db, u2.token, await freeLike('1-1', 1));
+    expect(await seatInfo('7-4')).toMatchObject({ status: 'free', usage: 'hold-photo', orderId: null });
   });
 
   it('擋下：範圍外、已被訂走、取消的連結、已入場、重複建立', async () => {

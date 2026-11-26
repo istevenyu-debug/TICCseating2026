@@ -121,7 +121,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000), tickets: z.array(z.unknown()).max(50000).optional() }),
   z.object({ action: z.literal('sales.seatmap'), statAt: z.string().max(40), floors: z.array(z.unknown()).max(4), thumb: z.string().max(200_000).optional() }),
   z.object({ action: z.literal('sales.seatmapUndo') }),
-  z.object({ action: z.literal('upgrade.create'), id, seatIds: z.array(z.string().max(40)).min(1).max(40), zoneIds: z.array(z.number().int()).min(1).max(20), blocks: z.array(z.string().max(4)).min(1).max(5) }),
+  z.object({ action: z.literal('upgrade.create'), id, seatIds: z.array(z.string().max(40)).min(1).max(40), zoneIds: z.array(z.number().int()).min(1).max(20), blocks: z.array(z.string().max(4)).min(1).max(5), oldTo: z.enum(['free', 'photo']).optional() }),
   z.object({ action: z.literal('upgrade.cancel'), token: z.string().max(40) }),
   z.object({ action: z.literal('sales.hidePlan'), id, hidden: z.boolean() }),
   z.object({ action: z.literal('sales.caps'), caps: z.record(z.string().max(40), z.number().int().min(0).max(10000)) }),
@@ -368,7 +368,7 @@ export async function POST(req: Request) {
       case 'sales.caps': mustBeAdmin(); return setCaps(db, who, a.caps);
       case 'sales.seatmap': mustBeAdmin(); return addSeatmap(db, who, { statAt: a.statAt, floors: a.floors, thumb: a.thumb });
       case 'sales.seatmapUndo': mustBeAdmin(); return undoSeatmap(db, who);
-      case 'upgrade.create': mustBeAdmin(); return createUpgrade(db, who, { orderId: a.id, seatIds: a.seatIds, zoneIds: a.zoneIds, blocks: a.blocks });
+      case 'upgrade.create': mustBeAdmin(); return createUpgrade(db, who, { orderId: a.id, seatIds: a.seatIds, zoneIds: a.zoneIds, blocks: a.blocks, oldTo: a.oldTo });
       case 'upgrade.cancel': mustBeAdmin(); return cancelUpgrade(db, who, a.token);
       case 'sales.hidePlan': mustBeAdmin(); return setPlanHidden(db, who, a.id, a.hidden);
       case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req), a.tickets); await tickQueue(db, joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
