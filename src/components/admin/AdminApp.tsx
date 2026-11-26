@@ -2244,6 +2244,9 @@ function Preorders() {
                         <button className="btn" disabled={busy} onClick={() => confirm2(`rn${p.id}`, async () => { const r = await act({ action: 'preorder.restore', id: p.id, notify: false }) as { warn: string } | null; if (r) setMsg({ kind: r.warn ? 'warn' : 'ok', text: `已恢復 ${p.no}（沒寄信）${r.warn ? `。注意：${r.warn}` : ''}` }); })}>
                           {sure === `rn${p.id}` ? '再按一次：恢復，不寄信' : '恢復登記（不寄信）'}</button>
                       </>}
+                      {p.status === 'confirmed' && st.user.role === 'admin' && <ReasonCancel label="取消已確認訂單（不寄信）" go="確定取消，不寄信"
+                        hint="例如測試單。只有還沒劃位成功的能取消：會關閉劃位連結、釋放暫存座位、刪掉還沒寄出的通知、從銷售總表移除，不寄任何信。已開發票要先作廢。"
+                        onGo={async (reason) => { const r = await act({ action: 'preorder.cancelConfirmed', id: p.id, reason }) as { freed: number } | null; if (r) { setMsg({ kind: 'ok', text: `已取消 ${p.no}（不寄信）${r.freed ? `，釋放 ${r.freed} 席` : ''}` }); setOpenId(null); } }} />}
                       {p.status === 'submitted' && <ReasonCancel label="取消" go={p.source === 'form' ? '確定取消' : '確定取消並寄信'} hint={p.source === 'form' ? '原因記在備註。' : '會立刻寄「認購取消」信給買方，原因寫在信裡，寄出無法收回。'}
                         onGo={async (reason) => { if (await act({ action: 'preorder.cancel', id: p.id, reason }, `已取消 ${p.no}${p.source === 'form' ? '' : '，並寄信通知'}`)) setOpenId(null); }} />}
                     </div>

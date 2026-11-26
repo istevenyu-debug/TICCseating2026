@@ -8,7 +8,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
-import { BookingError, loadCombos, linkEntitle } from './booking';
+import { BookingError, freeSeatsOf, loadCombos, linkEntitle } from './booking';
 import { comboDesc } from './pricing';
 import { giftLine } from './gift';
 import { createInviteLink, linkUrl } from './admin';
@@ -588,6 +588,49 @@ export async function cancelPreorder(db: Db, actor: string, id: number, reason =
     content: `【${ev.name}】${po.name} 您好，您的認購登記 ${po.no} 已取消${reason ? `（${reason}）` : ''}。如有疑問或已匯款，請聯繫主辦方。`,
   });
   await db.insert(t.auditLog).values({ actor, action: 'preorder_cancel', target: `preorder:${id}`, detail: JSON.stringify({ reason }) });
+}
+
+/**
+ * 取消「已確認」的訂單（不寄信）：例如測試單。只有還沒劃位成功的才能取消：
+ * 關閉劃位連結、釋放暫存／待確認的座位、刪掉還沒寄出的通知、訂單改成已取消（不再算進銷售總表與名額）。
+ * 已開立（未作廢）的發票、或同一條劃位連結還有別的訂單在用，都會擋下。
+ */
+export async function cancelConfirmedPreorder(db: Db, actor: string, id: number, reason = '') {
+  reason = reason.trim();
+  if (reason.length < 2) throw new BookingError('INVALID', '請填寫取消原因');
+  const ev = await currentEvent(db);
+  return db.transaction(async (tx) => {
+    const [po] = await tx.select().from(t.preorder).where(and(eq(t.preorder.id, id), eq(t.preorder.eventId, ev.id))).for('update');
+    if (!po) throw new BookingError('NOT_FOUND', '找不到這張訂單');
+    if (po.status !== 'confirmed') throw new BookingError('INVALID', '只有「已確認」的訂單用這個取消；待確認的請用原本的「取消」。');
+    const inv = await tx.select({ no: t.invoice.invoiceNo }).from(t.invoice).where(and(eq(t.invoice.preorderId, id), eq(t.invoice.status, 'issued')));
+    if (inv.length) throw new BookingError('INVALID', `這張訂單已開立發票（${inv.map((x) => x.no).join('、')}），請先到「十、電子發票」作廢，再取消。`);
+    let freed = 0;
+    if (po.linkId) {
+      const others = await tx.select({ no: t.preorder.no }).from(t.preorder)
+        .where(and(eq(t.preorder.linkId, po.linkId), sql`${t.preorder.id} <> ${id}`, sql`${t.preorder.status} <> 'cancelled'`));
+      if (others.length) throw new BookingError('INVALID', `這條劃位連結還有別的訂單在用（${others.map((x) => x.no).join('、')}），不能用這個取消。`);
+      const os = await tx.select().from(t.orders).where(and(eq(t.orders.linkId, po.linkId), inArray(t.orders.status, ['held', 'pending', 'paid']))).for('update');
+      const paid = os.filter((o) => o.status === 'paid');
+      if (paid.length) throw new BookingError('INVALID', `已有劃位成功的座位（${paid.map((o) => o.orderNo).join('、')}），請先到「六、劃位確認」處理，再取消。`);
+      const ids = os.map((o) => o.id);
+      if (ids.length) {
+        await tx.update(t.orders).set({ status: 'cancelled', closedReason: 'admin_cancel', holdUntil: null }).where(inArray(t.orders.id, ids));
+        freed = (await tx.select({ n: sql<number>`count(*)::int` }).from(t.orderSeat).where(inArray(t.orderSeat.orderId, ids)))[0].n;
+        await freeSeatsOf(tx, ids);
+      }
+      // 還沒寄出的通知（劃位連結、提醒…）一律不寄
+      await tx.delete(t.notification).where(and(eq(t.notification.status, 'queued'), ids.length
+        ? sql`(${t.notification.linkId} = ${po.linkId} or ${inArray(t.notification.orderId, ids)})`
+        : eq(t.notification.linkId, po.linkId)));
+      await tx.update(t.inviteLink).set({ status: 'disabled' }).where(eq(t.inviteLink.id, po.linkId));
+    }
+    const stamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const note = `${po.note ? `${po.note}\n` : ''}${stamp} ${actor} 取消（已確認、不寄信）：${reason}`.slice(-1000);
+    await tx.update(t.preorder).set({ status: 'cancelled', note, seenAt: po.seenAt ?? new Date() }).where(eq(t.preorder.id, id));
+    await tx.insert(t.auditLog).values({ actor, action: 'preorder_cancel_confirmed', target: `preorder:${id}`, detail: JSON.stringify({ reason, linkId: po.linkId, freed }) });
+    return { freed };
+  });
 }
 
 /** 恢復誤按取消的登記（回到待核帳，順位不變）；可選擇寄「登記已恢復」信 */

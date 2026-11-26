@@ -17,7 +17,7 @@ import { dispatchQueued, resendNotification, saveNotifyConfig, sendTest } from '
 import { rememberOrigin } from '@/lib/push';
 import { requestUpdate } from '@/lib/updater';
 import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
-import { restorePreorder, setPreorderRemits, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
+import { restorePreorder, setPreorderRemits, cancelConfirmedPreorder, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
@@ -168,6 +168,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('user.update'), id, displayName: z.string().max(40).optional(), role: z.enum(['admin', 'staff', 'finance']).optional(), active: z.boolean().optional(), password: z.string().max(100).optional() }),
   z.object({ action: z.literal('invoice.lookup'), id }),
   z.object({ action: z.literal('preorder.restore'), id, notify: z.boolean() }),
+  z.object({ action: z.literal('preorder.cancelConfirmed'), id, reason: z.string({ required_error: '請填寫取消原因' }).trim().min(2, '請填寫取消原因').max(100) }),
   z.object({ action: z.literal('preorder.remits'), id, remits: z.array(z.unknown()).max(5) }),
   z.object({ action: z.literal('preorder.checkMany'), ids: z.array(z.number().int().positive()).max(2000), paid: z.boolean() }),
   z.object({ action: z.literal('bank.import'), grid: z.array(z.array(z.union([z.string().max(200), z.number(), z.null()])).max(40)).max(5000) }),
@@ -417,6 +418,7 @@ export async function POST(req: Request) {
       case 'preorder.check': return checkPreorder(db, who, a.id, { paid: a.paid, line: a.line });
       case 'invoice.print': return invoicePrintUrl(db, a.id);
       case 'invoice.lookup': return invoiceLookup(db, a.id);
+      case 'preorder.cancelConfirmed': mustBeAdmin(); return cancelConfirmedPreorder(db, who, a.id, a.reason);
       case 'preorder.restore': { const r = await restorePreorder(db, who, a.id, a.notify); if (a.notify) dispatchQueued(db).catch(() => undefined); return r; }
       case 'preorder.remits': return setPreorderRemits(db, who, a.id, a.remits);
       case 'preorder.checkMany': return checkPaidMany(db, who, a.ids, a.paid);

@@ -323,3 +323,50 @@ describe('買方誤填份數：後台修改', () => {
     expect(p.released).toEqual([`combo:${combo2}`]);
   });
 });
+
+describe('取消已確認訂單（不寄信）', () => {
+  async function confirmed() {
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await submitPreorder(db, body());
+    const [p] = await listPreorders(db);
+    const r = await confirmPreorder(db, 'admin', p.id, 'https://abc.trycloudflare.com');
+    const single = (await db.select().from(t.combo)).find((c) => c.isSingle)!.id;
+    const ev = (await db.select().from(t.event))[0];
+    const seat = (await db.select().from(t.eventSeat).where(eq(t.eventSeat.zoneId, zoneA))).filter((s) => s.eventId === ev.id)[0].seatId;
+    return { p, code: r.code, single, seat };
+  }
+  it('暫存中的座位釋放、連結關閉、還沒寄的通知刪掉、不寄信；訂單變已取消', async () => {
+    const { p, code, single, seat } = await confirmed();
+    const h = await holdSeats(db, code, [seat], single);
+    const before = (await db.select().from(t.notification)).length;
+    await db.update(t.notification).set({ status: 'queued' }); // 假裝連結信還沒寄出
+    const { cancelConfirmedPreorder } = await import('@/lib/preorder');
+    await expect(cancelConfirmedPreorder(db, 'admin', p.id, '')).rejects.toThrow('原因');
+    const r = await cancelConfirmedPreorder(db, 'admin', p.id, '測試單');
+    expect(r.freed).toBe(1);
+    const [po] = await db.select().from(t.preorder).where(eq(t.preorder.id, p.id));
+    expect(po.status).toBe('cancelled');
+    expect(po.note).toContain('取消（已確認、不寄信）：測試單');
+    const [lk] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, code));
+    expect(lk.status).toBe('disabled');
+    const [o] = await db.select().from(t.orders).where(eq(t.orders.id, h.orderId));
+    expect(o.status).toBe('cancelled');
+    const ns = await db.select().from(t.notification);
+    expect(ns.filter((n) => n.status === 'queued' && (n.linkId === lk.id || n.orderId === h.orderId))).toHaveLength(0);
+    expect(ns.some((n) => n.template === 'preorder_link')).toBe(false); // 劃位連結信（還沒寄的）刪掉了
+    expect(ns.length).toBeLessThan(before + 1); // 沒有新增任何通知
+    // 座位可以再被別人選
+    await A.updateEventSettings(db, 'admin', { preorderOpen: true });
+    await expect(cancelConfirmedPreorder(db, 'admin', p.id, '再一次')).rejects.toThrow('已確認');
+  });
+  it('已有劃位成功的座位就擋下', async () => {
+    const { p, code, single, seat } = await confirmed();
+    const h = await holdSeats(db, code, [seat], single);
+    await submitOrder(db, code, { orderId: h.orderId, buyer: { name: '林大同', phone: '0912345678', email: 'lin@example.com' }, holders: [{ seatId: seat, name: '林大同', id4: 'A123' }], agree: true });
+    const [o] = await db.select().from(t.orders).where(eq(t.orders.id, h.orderId));
+    if (o.status !== 'paid') await A.confirmPayment(db, 'admin', h.orderId, { date: '2026-11-26', amount: 0 });
+    const { cancelConfirmedPreorder } = await import('@/lib/preorder');
+    await expect(cancelConfirmedPreorder(db, 'admin', p.id, '測試單')).rejects.toThrow('劃位成功');
+    expect((await db.select().from(t.preorder).where(eq(t.preorder.id, p.id)))[0].status).toBe('confirmed');
+  });
+});
