@@ -56,3 +56,27 @@ describe('存座位圖計數（後台）', () => {
     expect(s2.hall.find((h) => h.key === '4F')).toMatchObject({ by: '年代', sold: 0 });
   });
 });
+
+describe('銷售總覽：不列入的方案', () => {
+  it('按「不列入」後方案列不顯示、可恢復', async () => {
+    const { createPgliteDb } = await import('@/db/client');
+    const { createEvent, seedVenue, createLink } = await import('@/db/seed');
+    const A = await import('@/lib/admin');
+    const { salesOverview, setPlanHidden } = await import('@/lib/sales');
+    const db = await createPgliteDb();
+    await seedVenue(db);
+    const ev = await createEvent(db, { name: '測試', showAt: new Date('2026-12-09T19:30:00+08:00') });
+    await createLink(db, { eventId: ev.id, code: 'AAA111', name: '甲', phone: '0911111111', quota: 0, expiresAt: new Date('2026-12-09T23:59:59+08:00') });
+    await A.publish(db, 'admin');
+    const s1 = (await salesOverview(db))!;
+    expect(s1.twoM.plans.length).toBeGreaterThan(0);
+    const p = s1.twoM.plans[0];
+    await setPlanHidden(db, 'admin', p.id, true);
+    const s2 = (await salesOverview(db))!;
+    expect(s2.twoM.plans.find((x) => x.id === p.id)).toBeUndefined();
+    expect(s2.hiddenPlans).toEqual([{ id: p.id, name: p.name }]);
+    expect(s2.hall.find((h) => h.key === '2M')).toEqual(s1.hall.find((h) => h.key === '2M'));
+    await setPlanHidden(db, 'admin', p.id, false);
+    expect((await salesOverview(db))!.twoM.plans.find((x) => x.id === p.id)).toBeTruthy();
+  });
+});

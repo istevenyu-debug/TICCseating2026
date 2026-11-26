@@ -44,6 +44,7 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
             {h.key === '2M' && s.twoM.plans.map((p) => (
               <tr key={`p${p.id}`} className="small">
                 <td style={{ paddingLeft: 14 }}>{p.name}<span className="muted">（{p.size} 席一組）</span>
+                  {admin && edit && <button className="btn small" style={{ marginLeft: 6, padding: '0 6px' }} disabled={busy} onClick={() => act({ action: 'sales.hidePlan', id: p.id, hidden: true }, `「${p.name}」不列入銷售總覽`)}>不列入</button>}
                   <div className="muted" style={{ whiteSpace: 'normal', maxWidth: 230 }}>{[p.pending ? `待確認 ${p.pending}` : '', p.owed ? `已付未劃 ${p.owed}` : '', p.vip ? `招待佔 ${p.vip}` : ''].filter(Boolean).join('・') || '　'}</div></td>
                 <td style={r}>{n(p.sold + p.pending + p.owed + p.vip + p.left)} 組</td>
                 <td style={r}>{n(p.sold)} 組</td>
@@ -59,7 +60,9 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
 
       {admin && (edit
         ? <div className="row" style={{ gap: 8, marginTop: 8 }}><button className="btn pri small" disabled={busy} onClick={save}>儲存總席數</button><button className="btn small" onClick={() => setEdit(false)}>取消</button></div>
-        : <button className="btn small" style={{ marginTop: 8 }} onClick={startEdit}>改年代各區總席數</button>)}
+        : <button className="btn small" style={{ marginTop: 8 }} onClick={startEdit}>改總席數／不列入的方案</button>)}
+      {edit && s.hiddenPlans.length > 0 && <p className="small">不列入的方案：{s.hiddenPlans.map((p) => <button key={p.id} className="btn small" style={{ marginLeft: 6 }} disabled={busy} onClick={() => act({ action: 'sales.hidePlan', id: p.id, hidden: false }, `「${p.name}」恢復列入`)}>{p.name} ↺ 恢復</button>)}</p>}
+      {edit && <p className="small muted">方案列旁的「不列入」只是不顯示在這張表，不影響訂單、座位、發票。</p>}
       {edit && <p className="small muted">預設依 TICC 座位圖（4F 748、5F 686）。年代實際開賣的席數不同時再改；清空＝用預設。</p>}
 
       {s.daily.length > 0 && (

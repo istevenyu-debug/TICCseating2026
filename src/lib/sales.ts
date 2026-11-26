@@ -47,6 +47,22 @@ export async function setCaps(db: Db, actor: string, raw: unknown) {
   return caps;
 }
 
+/* ---------- 銷售總覽不列入的方案 ---------- */
+const HIDE_KEY = 'sales.hidePlans';
+export async function getHiddenPlans(db: Db): Promise<number[]> {
+  const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, HIDE_KEY));
+  try { const v = JSON.parse(r?.value ?? '[]'); return Array.isArray(v) ? v.filter((x) => Number.isInteger(x)) : []; } catch { return []; }
+}
+/** 方案列不列入銷售總覽（只影響這張表的方案列，不影響訂單、座位、發票） */
+export async function setPlanHidden(db: Db, actor: string, comboId: number, hidden: boolean) {
+  const cur = await getHiddenPlans(db);
+  const next = hidden ? [...new Set([...cur, comboId])] : cur.filter((x) => x !== comboId);
+  const value = JSON.stringify(next);
+  await db.insert(t.appSetting).values({ key: HIDE_KEY, value }).onConflictDoUpdate({ target: t.appSetting.key, set: { value } });
+  await db.insert(t.auditLog).values({ actor, action: 'sales_hide_plan', target: `combo:${comboId}`, detail: JSON.stringify({ hidden }) });
+  return { hidden: next };
+}
+
 /* ---------- 年代座位圖（4F／5F 截圖計數） ---------- */
 const MAP_KEY = 'sales.seatmap';
 const MAP_FLOORS = ['4F', '5F'] as const;
@@ -171,7 +187,8 @@ export async function salesOverview(db: Db, now = new Date()) {
   const stV = await stock2MDetail(db, ev.id, now, new Map(vipRows.map((r) => [r.zoneId, Number(r.n)])));
   const ordRows = await db.select({ comboId: t.orders.comboId, status: t.orders.status, n: sql<number>`coalesce(sum(${t.orders.sets}), 0)::int` }).from(t.orders)
     .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.vip, false), inArray(t.orders.status, ['held', 'pending', 'paid']))).groupBy(t.orders.comboId, t.orders.status);
-  const plans = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M' && !c.isSingle && c.price > 0).map((c) => {
+  const hidePlans = await getHiddenPlans(db); // 後台按「不列入」的方案（例如買五送一）
+  const plans = (await loadCombos(db, ev.id)).filter((c) => c.floor === '2M' && !c.isSingle && c.price > 0 && !hidePlans.includes(c.id)).map((c) => {
     const of = (ss: string[]) => ordRows.filter((r) => r.comboId === c.id && ss.includes(r.status)).reduce((a, r) => a + Number(r.n), 0);
     const left = st.left[c.id] ?? 0;
     return { id: c.id, name: c.name, size: c.items.reduce((a, i) => a + i.qty, 0), sold: of(['paid']), pending: of(['held', 'pending']), owed: st.owed[c.id] ?? 0,
@@ -225,6 +242,7 @@ export async function salesOverview(db: Db, now = new Date()) {
   const hallSum = { total: known.reduce((a, h) => a + (h.total ?? 0), 0), sold: hall.reduce((a, h) => a + h.sold, 0), left: known.reduce((a, h) => a + (h.left ?? 0), 0) };
 
   return { now: now.toISOString(), twoM: { ...twoM, plans, vipSeats }, era, silver, daily, caps, hall, hallSum,
-    seatmaps: maps.slice(0, 10).map((m, i) => ({ ...m, thumb: i === 0 ? m.thumb : undefined })) };
+    seatmaps: maps.slice(0, 10).map((m, i) => ({ ...m, thumb: i === 0 ? m.thumb : undefined })),
+    hiddenPlans: (await loadCombos(db, ev.id)).filter((c) => hidePlans.includes(c.id)).map((c) => ({ id: c.id, name: c.name })) };
 }
 export type SalesOverview = NonNullable<Awaited<ReturnType<typeof salesOverview>>>;

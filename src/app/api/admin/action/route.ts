@@ -23,7 +23,7 @@ import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
 import { clearAllCheckins, resendGiftQr, resetGiftGroup, saveGiftSeats, saveGiftSettings, sendGiftSurvey, setTestUntil } from '@/lib/joinGift';
-import { addSeatmap, setCaps, undoSeatmap } from '@/lib/sales';
+import { addSeatmap, setCaps, setPlanHidden, undoSeatmap } from '@/lib/sales';
 import { changeSlotSeat, clearJoinTest, deleteReport, extendTurn, lockSlots, markSent, nextRound, unlockSlots, restoreSlot, setSlotRep, skipTurn, tickQueue, uploadEra, voidSlot } from '@/lib/joinQueue';
 import { cancelVip, createVip, setVipCat, setVipDays, setVipMode, updateVipSeats, updateVip } from '@/lib/vip';
 import { saveBoxCfg, setVipCats, updateBoardLink } from '@/lib/checkinBoard';
@@ -112,6 +112,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('join.era.upload'), rows: z.array(z.unknown()).min(1).max(50000), tickets: z.array(z.unknown()).max(50000).optional() }),
   z.object({ action: z.literal('sales.seatmap'), statAt: z.string().max(40), floors: z.array(z.unknown()).max(4), thumb: z.string().max(200_000).optional() }),
   z.object({ action: z.literal('sales.seatmapUndo') }),
+  z.object({ action: z.literal('sales.hidePlan'), id, hidden: z.boolean() }),
   z.object({ action: z.literal('sales.caps'), caps: z.record(z.string().max(40), z.number().int().min(0).max(10000)) }),
   z.object({ action: z.literal('join.report.delete'), id }),
   z.object({ action: z.literal('join.group.rename'), id, name: z.string().max(60) }),
@@ -343,6 +344,7 @@ export async function POST(req: Request) {
       case 'sales.caps': mustBeAdmin(); return setCaps(db, who, a.caps);
       case 'sales.seatmap': mustBeAdmin(); return addSeatmap(db, who, { statAt: a.statAt, floors: a.floors, thumb: a.thumb });
       case 'sales.seatmapUndo': mustBeAdmin(); return undoSeatmap(db, who);
+      case 'sales.hidePlan': mustBeAdmin(); return setPlanHidden(db, who, a.id, a.hidden);
       case 'join.era.upload': { const r = await uploadEra(db, who, a.rows, new Date(), joinBase(req), a.tickets); await tickQueue(db, joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'join.report.delete': mustBeAdmin(); return deleteReport(db, who, a.id);
       case 'join.group.rename': return renameGroup(db, who, a.id, a.name);
