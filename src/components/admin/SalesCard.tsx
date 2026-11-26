@@ -31,13 +31,15 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
             <tr>
               <td style={{ whiteSpace: 'nowrap' }}>{h.label}
                 <div className="small muted" style={{ whiteSpace: 'normal', maxWidth: 230 }}>
-                  {[h.by, h.note, h.prices.map((p) => `${n(p.price)}×${n(p.n)}`).join('・'), h.refunded ? `退 ${n(h.refunded)}` : ''].filter(Boolean).join('｜')}</div>
+                  {(h.note.startsWith('座位圖') // 座位圖的統計時間放最後，其餘照原本順序
+                    ? [h.by, h.prices.map((p) => `${n(p.price)}×${n(p.n)}`).join('・'), h.refunded ? `退 ${n(h.refunded)}` : '', h.note]
+                    : [h.by, h.note, h.prices.map((p) => `${n(p.price)}×${n(p.n)}`).join('・'), h.refunded ? `退 ${n(h.refunded)}` : '']).filter(Boolean).join('｜')}</div>
               </td>
               <td style={r}>{edit && caps[h.key] !== undefined
                 ? <input inputMode="numeric" value={caps[h.key]} style={{ width: 70, textAlign: 'right' }} onChange={(e) => setCaps({ ...caps, [h.key]: e.target.value })} />
                 : n(h.total)}</td>
               <td style={r}>{n(h.sold)}</td>
-              <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: h.left === 0 ? 'var(--red)' : undefined }}>{h.left === 0 ? '售完' : n(h.left)}</td>
+              <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: h.left === 0 ? 'var(--red)' : undefined }}>{h.left === 0 ? '售完' : <>{n(h.left)}{pct(h.left, h.total)}</>}</td>
             </tr>
             {h.key === '2M' && s.twoM.plans.map((p) => (
               <tr key={`p${p.id}`} className="small">
@@ -45,11 +47,11 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
                   <div className="muted" style={{ whiteSpace: 'normal', maxWidth: 230 }}>{[p.pending ? `待確認 ${p.pending}` : '', p.owed ? `已付未劃 ${p.owed}` : '', p.vip ? `招待佔 ${p.vip}` : ''].filter(Boolean).join('・') || '　'}</div></td>
                 <td style={r}>{n(p.sold + p.pending + p.owed + p.vip + p.left)} 組</td>
                 <td style={r}>{n(p.sold)} 組</td>
-                <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: p.left === 0 ? 'var(--red)' : undefined }}>{p.left === 0 ? '售完' : `${n(p.left)} 組`}</td>
+                <td style={{ ...r, fontWeight: 700, whiteSpace: 'nowrap', color: p.left === 0 ? 'var(--red)' : undefined }}>{p.left === 0 ? '售完' : <>{n(p.left)} 組{pct(p.left, p.sold + p.pending + p.owed + p.vip + p.left)}</>}</td>
               </tr>
             ))}
           </Fragment>))}
-          <tr style={{ fontWeight: 800, borderTop: '2px solid var(--line)' }}><td>全場</td><td style={r}>{n(s.hallSum.total)}</td><td style={r}>{n(s.hallSum.sold)}</td><td style={r}>{n(s.hallSum.left)}</td></tr>
+          <tr style={{ fontWeight: 800, borderTop: '2px solid var(--line)' }}><td>全場</td><td style={r}>{n(s.hallSum.total)}</td><td style={r}>{n(s.hallSum.sold)}</td><td style={{ ...r, whiteSpace: 'nowrap' }}>{n(s.hallSum.left)}{pct(s.hallSum.left, s.hallSum.total)}</td></tr>
         </tbody>
       </table></div>
 
@@ -71,6 +73,13 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
       )}
     </div>
   );
+}
+
+/** 尚可售佔總數的百分比（小字） */
+function pct(left: number | null, total: number | null) {
+  if (left == null || !total) return null;
+  // 放在數字下面一行，表格才不會變寬（手機放得下）
+  return <div className="muted" style={{ fontWeight: 400, fontSize: '0.8em', lineHeight: 1.2 }}>{Math.round((left / total) * 100)}%</div>;
 }
 
 /** 上傳年代座位圖截圖 → 手機上算 4F／5F 已售 → 確認後存（總席數對得上才收） */

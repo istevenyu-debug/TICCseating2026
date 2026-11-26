@@ -47,9 +47,9 @@ describe('存座位圖計數（後台）', () => {
     await expect(addSeatmap(db, 'admin', { statAt: '2026-11-27T01:33:00.000Z', floors }, now)).rejects.toThrow(/未來/);
     await addSeatmap(db, 'admin', { statAt: '2026-11-26T01:33:00.000Z', floors, thumb: 'data:image/jpeg;base64,AAAA' }, now);
     const s = (await salesOverview(db, now))!;
-    expect(s.hall.find((h) => h.key === '4F')).toMatchObject({ by: '年代座位圖', total: 748, sold: 602, left: 146 });
+    expect(s.hall.find((h) => h.key === '4F')).toMatchObject({ by: '年代', total: 748, sold: 602, left: 146 });
     expect(s.hall.find((h) => h.key === '5F')).toMatchObject({ sold: 239, left: 447 });
-    expect(s.hall.find((h) => h.key === '4F')!.note).toMatch(/11\/26.*09:33.*統計/);
+    expect(s.hall.find((h) => h.key === '4F')!.note).toMatch(/座位圖 11\/26.*09:33/);
     expect(s.seatmaps[0].thumb).toBeTruthy();
     await undoSeatmap(db, 'admin');
     const s2 = (await salesOverview(db, now))!;

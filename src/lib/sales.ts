@@ -209,7 +209,7 @@ export async function salesOverview(db: Db, now = new Date()) {
     const f = maps[0]?.floors.find((x) => x.key === row.key);
     if (!f) return { ...row, note: '' };
     const when = new Date(maps[0].statAt).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-    return { ...row, by: '年代座位圖', total: f.total, sold: f.sold, left: Math.max(0, f.total - f.sold), note: `${when} 統計${row.sold ? `；名單（本票點）${row.sold}` : ''}` };
+    return { ...row, total: f.total, sold: f.sold, left: Math.max(0, f.total - f.sold), note: `座位圖 ${when}` };
   };
   const hall = [
     { key: '2M', label: '2M（1–12 排）', by: '本系統', total: twoM.total, sold: twoM.sold, left: twoM.free, refunded: 0, prices: [] as { price: number; n: number }[], note: [twoM.pending ? `待確認 ${twoM.pending}` : '', vipSeats ? `其中招待 ${vipSeats}` : '', twoM.reserved ? `保留 ${twoM.reserved}` : ''].filter(Boolean).join('・') },
