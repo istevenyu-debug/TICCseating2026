@@ -33,7 +33,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>> };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>>; charity?: Awaited<ReturnType<typeof import('@/lib/charity').listCharity>> | null };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -3091,6 +3091,62 @@ function VipImport() {
   );
 }
 
+/** 公益劃位專屬連結：一個單位一條，負責人從「保留：公益」座位池選 N 席並填姓名職稱 */
+function CharityLinks() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const c = st.charity;
+  const base = typeof window !== 'undefined' ? location.origin : '';
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ org: '', name: '', email: '', n: '2', cat: '公益', deadline: '2026-12-06' });
+  if (!c) return null;
+  const url = (code: string) => `${base}/g/${code}`;
+  const day = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const copy = (l: (typeof c.links)[number]) => {
+    const text = `${l.name} 您好：這是${l.org}的公益席劃位連結（共 ${l.n} 席），請在 ${day(l.deadline)} 前打開，選座位並填每一席的姓名職稱後送出。送出後入場 QR code 會寄到 ${l.email}。連結：${url(l.code)}`;
+    navigator.clipboard?.writeText(text).then(() => setMsg({ kind: 'ok', text: '已複製說明＋連結，請私訊給負責人' }), () => setMsg({ kind: 'ok', text }));
+  };
+  const cats = st.vips.cats.filter((x) => x !== 'VIP');
+  const short = c.pool < c.owed;
+  return (
+    <div className="card">
+      <h2>公益劃位連結</h2>
+      <p className={`small${short ? ' err-text' : ''}`} style={{ marginTop: 0 }}>可選座位（「保留：公益」空位）<b>{c.pool}</b> 席・未選的連結共要 <b>{c.owed}</b> 席{short ? '：座位不夠，請到「一、席位用途」多塗一些「保留：公益」' : ''}</p>
+      {c.links.map((l) => (
+        <div key={l.code} className="note" style={{ margin: '4px 0' }}>
+          <div className="small"><b>{l.org}</b>・{l.name}・{l.n} 席・{l.cat}・截止 {day(l.deadline)}</div>
+          <div className="small">{l.status === 'open' ? <b>等負責人選位</b> : l.status === 'done' ? <b className="ok-text">已選好（{l.orderNo}），QR 已寄 {l.email}</b> : <span className="muted">已取消</span>}</div>
+          {l.status !== 'cancelled' && <div className="row" style={{ marginTop: 4, gap: 6, flexWrap: 'wrap' }}>
+            <span className="mono small" style={{ wordBreak: 'break-all', flex: '1 1 100%' }}>{url(l.code)}</span>
+            <button className="btn small pri" onClick={() => copy(l)}>複製說明＋連結</button>
+            {l.status === 'open' && <button className="btn small danger" disabled={busy} onClick={() => confirm2(`chc${l.code}`, () => act({ action: 'charity.cancel', code: l.code }, '已停用這條連結'))}>{sure === `chc${l.code}` ? '再按一次停用' : '停用連結'}</button>}
+          </div>}
+        </div>
+      ))}
+      {!open ? <button className="btn" onClick={() => setOpen(true)}>新增公益劃位連結…</button> : <form onSubmit={async (e) => {
+        e.preventDefault();
+        const r = await act({ action: 'charity.create', ...f, n: parseInt(f.n) || 0 });
+        if (r) { setMsg({ kind: 'ok', text: `已建立 ${f.org} 的連結，按「複製說明＋連結」私訊給負責人` }); setOpen(false); setF({ ...f, org: '', name: '', email: '' }); }
+      }}>
+        <label className="f">單位<input value={f.org} onChange={(e) => setF({ ...f, org: e.target.value })} /></label>
+        <div className="fields" style={{ marginTop: 6 }}>
+          <label className="f">負責人姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+          <label className="f">Email（QR 寄這裡）<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+        </div>
+        <div className="fields" style={{ marginTop: 6 }}>
+          <label className="f">席數<input inputMode="numeric" value={f.n} onChange={(e) => setF({ ...f, n: e.target.value.replace(/\D/g, '') })} /></label>
+          <label className="f">類別<select value={f.cat} onChange={(e) => setF({ ...f, cat: e.target.value })}>{(cats.length ? cats : ['公益']).map((x) => <option key={x} value={x}>{x}</option>)}</select></label>
+          <label className="f">截止日<input type="date" value={f.deadline} onChange={(e) => setF({ ...f, deadline: e.target.value })} /></label>
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn pri" disabled={busy || !f.org.trim() || !f.name.trim() || !f.email.trim()}>建立連結</button>
+          <button type="button" className="btn" onClick={() => setOpen(false)}>收起</button>
+        </div>
+      </form>}
+      <p className="small muted" style={{ margin: '6px 0 0' }}>先到「一、席位用途」用「保留：公益」塗出可選的座位。負責人選 N 席、填每席姓名職稱後送出，QR 立即寄到上面的 Email；截止前可再進來改姓名。選好的會出現在左邊清單（單位、類別），換座位用「改座位」。</p>
+    </div>
+  );
+}
+
 function Vips() {
   const { st, act, busy, setMsg, sure, confirm2, zoneById } = useAdmin();
   const v = st.vips;
@@ -3231,6 +3287,7 @@ function Vips() {
       </div>
       <div className="side">
         <VipImport />
+        <CharityLinks />
         {editing ? (
           <div className="card">
             <h2>改座位：{editing.name}</h2>
