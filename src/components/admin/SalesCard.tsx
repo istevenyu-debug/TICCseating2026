@@ -23,7 +23,9 @@ export function SalesCard({ s, act, admin, busy }: { s: SalesOverview | null; ac
   return (
     <div className="card sales" style={{ gridColumn: '1 / -1', justifySelf: 'start', maxWidth: '100%', width: 'fit-content' }}>
       <h3 style={{ marginTop: 0 }}>全場銷售總覽</h3>
-      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖。2M、3F 兩側：本系統即時；年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b>；4F／5F 有上傳年代座位圖時，改用最近一次座位圖（全部票點）。</p>
+      <p className="small muted" style={{ marginTop: 0, maxWidth: 520 }}>總席數依 TICC 大會堂座位示意圖。2M、3F 兩側：本系統即時；{s.seatmaps[0]
+        ? <>4F／5F：年代座位圖 <b>{tw(s.seatmaps[0].statAt)}</b></>
+        : <>年代：依最後上傳的售出明細 <b>{tw(s.era.at)}</b></>}。</p>
       <div className="tbl" style={{ overflowX: 'auto' }}><table style={{ width: 'auto' }}>
         <thead><tr><th style={{ textAlign: 'left' }}>區域</th><th style={r}>總席數</th><th style={r}>已售</th><th style={r}>尚可售</th></tr></thead>
         <tbody>
