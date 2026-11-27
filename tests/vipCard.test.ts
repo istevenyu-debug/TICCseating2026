@@ -30,8 +30,9 @@ describe('VIP 票卡連結', () => {
     const l = await setVipCard(db, '網管', { name: '陳秘書', email: 'boss@example.com' });
     expect(await msg(vipCardPage(db, l!.code, '', at(0)))).toContain('驗證');
     expect(await msg(sendVipOtp(db, l!.code, 'other@example.com', at(0)))).toContain('沒有權限');
-    await sendVipOtp(db, l!.code, 'boss@example.com', at(0));
+    await sendVipOtp(db, l!.code, 'boss@example.com', at(0), BASE);
     expect((await mails('vip_otp')).map((m) => m.recipient)).toEqual(['boss@example.com']);
+    expect((await mails('vip_otp'))[0].content).toContain(`${BASE}/vc/${l!.code}`); // 信裡有回到票卡頁的連結
     expect(await msg(sendVipOtp(db, l!.code, 'boss@example.com', at(0)))).toContain('1 分鐘');
     expect(await msg(verifyVipOtp(db, l!.code, '000000', at(1)))).toContain('還可以試 4 次');
     const otp = (await mails('vip_otp'))[0].content.match(/驗證碼是 (\d{6})/)![1];

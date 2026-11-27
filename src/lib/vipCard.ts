@@ -92,7 +92,7 @@ async function authed(db: Db, code: string, token: string, now: Date) {
 }
 
 /** 寄驗證碼：Email 要跟後台設定的一樣；60 秒內不重寄 */
-export async function sendVipOtp(db: Db, code: string, email: string, now = new Date()) {
+export async function sendVipOtp(db: Db, code: string, email: string, now = new Date(), base = '') {
   const l = await linkOf(db, code);
   if (email.trim().toLowerCase() !== l.email) throw new BookingError('INVALID', '這個 Email 沒有權限，請確認是主辦方登記的 Email。');
   if (l.otp && now.getTime() - Date.parse(l.otp.at) < 60_000) throw new BookingError('TOO_MANY', '驗證碼剛寄出，請 1 分鐘後再試。');
@@ -100,7 +100,7 @@ export async function sendVipOtp(db: Db, code: string, email: string, now = new 
   l.otp = { h: sha(`${l.code}:${otp}`), exp: new Date(now.getTime() + OTP_MIN * 60_000).toISOString(), tries: 0, at: now.toISOString() };
   await save(db, l);
   const ev = await ev0(db);
-  await db.insert(t.notification).values({ channel: 'email', template: 'vip_otp', recipient: l.email, content: `【${ev.name}】${l.name} 您好，VIP 票卡頁的驗證碼是 ${otp}，${OTP_MIN} 分鐘內有效。如果不是您本人操作，請忽略這封信。` });
+  await db.insert(t.notification).values({ channel: 'email', template: 'vip_otp', recipient: l.email, content: `【${ev.name}】${l.name} 您好，VIP 票卡頁的驗證碼是 ${otp}，${OTP_MIN} 分鐘內有效。請回到 VIP 票卡頁輸入驗證碼。如果不是您本人操作，請忽略這封信。${base ? `${base.replace(/\/$/, '')}/vc/${l.code}` : ''}` });
   return { sentTo: maskEmail(l.email) };
 }
 

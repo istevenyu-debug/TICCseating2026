@@ -26,7 +26,7 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const db = await getDb();
     const a = p.data;
     if (a.action === 'verify') return verifyVipOtp(db, params.code, a.otp);
-    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email) : await vipCardSend(db, params.code, tok(req), a, originOf(req));
+    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email, new Date(), process.env.PUBLIC_BASE_URL || originOf(req)) : await vipCardSend(db, params.code, tok(req), a, originOf(req));
     dispatchQueued(db).catch(() => undefined);
     return r;
   });

@@ -279,7 +279,7 @@ export function niceMail(template: string, text: string, fromName = ''): MailExt
   const { ev, url, greet, paras } = partsOf(text);
   const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' || template === 'join_issue' || template === 'join_group' ? '開啟回報頁'
     : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept', 'join_gift_ok'].includes(template) ? '開啟劃位頁'
-      : template === 'join_gift' ? '選擇取票方式' : '開啟連結';
+      : template === 'join_gift' ? '選擇取票方式' : template === 'vip_otp' ? '回到 VIP 票卡頁' : '開啟連結';
   return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button, fromName }) };
 }
 
