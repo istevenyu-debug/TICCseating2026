@@ -114,9 +114,46 @@ describe('VIP／公益 Excel 匯入', () => {
     await expect(previewImport(db, xlsx([['VIP-1', 'x']], ['a', 'b']))).rejects.toThrow('找不到表頭');
   });
 
-  it('座位貼名單：VIP 排與 VIP 類別，依座位排序，含單位', async () => {
-    await runImport(db, 'admin', xlsx([['1排34號', '林小華', '乙', 'VIP', '', ''], ['VIP-2', '王大明', '甲', '', '', ''], ['2排1號', '公益人', '丙', '公益', '', '']]));
+  it('座位貼名單分三檔：VIP 區（VIP 排＋第 1–3 排）只在 VIP；舊招待放 VIP；公益依單位', async () => {
+    await runImport(db, 'admin', xlsx([['1排34號', '林小華', '乙', 'VIP', '', ''], ['VIP-2', '王大明', '甲', '', '', ''], ['2排1號', '公益人', '丙', '公益', '', ''],
+      ['6排5號', '公益乙', '乙單位', '公益', '', ''], ['6排1號', '公益甲', '甲單位', '公益', '', ''], ['7排1號', '招待人', '', '招待', '', '']]));
     const s = await stickerRows(db);
-    expect(s.map((x) => [x.seat, x.name, x.org, x.kind])).toEqual([['VIP-2', '王大明', '甲', 'VIP'], ['1排34號', '林小華', '乙', 'VIP']]);
+    expect(s.vip.map((x) => [x.seat, x.name, x.org, x.kind])).toEqual([
+      ['VIP-2', '王大明', '甲', 'VIP'], ['1排34號', '林小華', '乙', 'VIP'], ['2排1號', '公益人', '丙', '公益'], ['7排1號', '招待人', '', '招待']]);
+    // 依單位（中文排序：乙 1 畫在甲 5 畫前）
+    expect(s.charity.map((x) => [x.seat, x.name, x.org])).toEqual([['6排5號', '公益乙', '乙單位'], ['6排1號', '公益甲', '甲單位']]);
+    expect(s.honor).toEqual([]);
+    // VIP 區改成只算 VIP 排：2 排的公益回到公益檔
+    expect((await stickerRows(db, 0)).charity.map((x) => x.seat)).toContain('2排1號');
+  });
+
+  it('座位貼名單：尊榮席 1＋2 一組，本人在前、贈票在後；同一筆 2 組照座位配對；組依本人座位排序', async () => {
+    await createLink(db, { eventId: 1, code: 'HON111', name: '尊', phone: '0911111111', quota: 0, expiresAt: new Date('2026-12-09T23:59:59+08:00') });
+    await A.publish(db, 'admin');
+    const [link] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, 'HON111'));
+    const combo = (await db.select().from(t.combo))[0].id;
+    const [paid] = await db.insert(t.priceZone).values({ eventId: 1, name: '尊榮席', color: '#aa0000', price: 30000 }).returning();
+    const [gift] = await db.insert(t.priceZone).values({ eventId: 1, name: '尊榮贈席', color: '#00aa00', price: 0 }).returning();
+    const order = async (no: string, buyer: string, seats: [string, number, string][]) => {
+      const [o] = await db.insert(t.orders).values({ eventId: 1, linkId: link.id, comboId: combo, status: 'paid', amount: 0, orderNo: no, buyerName: buyer }).returning();
+      for (const [id, zone, holder] of seats) {
+        await db.update(t.eventSeat).set({ zoneId: zone, status: 'sold', orderId: o.id }).where(eq(t.eventSeat.seatId, id));
+        await db.insert(t.orderSeat).values({ orderId: o.id, seatId: id, unitPrice: 0, holderName: holder });
+      }
+    };
+    // 第二筆在前排，組 1 應是它
+    await order('B2', '乙', [['8-1', paid.id, '乙'], ['8-2', gift.id, '乙友1'], ['8-3', gift.id, '']]);
+    await order('A1', '甲', [['10-4', gift.id, '甲友3'], ['10-1', paid.id, '甲'], ['10-2', gift.id, '甲友1'], ['10-3', gift.id, '甲友2'], ['10-5', paid.id, '甲2'], ['10-6', gift.id, '甲友4']]);
+    const h = (await stickerRows(db)).honor;
+    expect(h.map((x) => x.group)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3]);
+    expect(h.map((x) => x.role)).toEqual(['本人', '贈票', '贈票', '本人', '贈票', '贈票', '本人', '贈票', '贈票']);
+    // 組 1＝前排的乙；沒填持票人的贈票印訂購人
+    expect(h.slice(0, 3).map((x) => x.orderNo)).toEqual(['B2', 'B2', 'B2']);
+    expect(h[0].name).toBe('乙');
+    expect(h.slice(1, 3).map((x) => x.name).sort()).toEqual(['乙', '乙友1']);
+    // 甲 2 組：兩位本人各帶 2 席贈票，4 席贈票都分到
+    expect(h.slice(3).every((x) => x.orderNo === 'A1')).toBe(true);
+    expect([h[3].name, h[6].name].sort()).toEqual(['甲', '甲2']);
+    expect([h[4], h[5], h[7], h[8]].map((x) => x.name).sort()).toEqual(['甲友1', '甲友2', '甲友3', '甲友4']);
   });
 });

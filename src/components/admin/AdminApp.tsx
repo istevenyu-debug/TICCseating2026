@@ -3005,26 +3005,35 @@ async function downloadVipTemplate() {
   X.writeFile(wb, 'VIP公益名單範本.xlsx');
 }
 
-/** 座位貼名單（VIP 排、VIP 類別、尊榮席）送印用 */
+/** 座位貼名單送印用：分 VIP、尊榮席、公益三個檔（不同人負責） */
 function StickerButton() {
   const { act, busy, setMsg } = useAdmin();
-  return <button className="btn small" disabled={busy} onClick={async () => {
-    const r = await act({ action: 'vip.stickers' }) as { rows: { seat: string; name: string; org: string; kind: string; buyer: string; orderNo: string }[] } | null;
+  const [vipRows, setVipRows] = useState(3);
+  type St = Awaited<ReturnType<typeof import('@/lib/vipImport').stickerRows>>;
+  const dl = async (kind: 'vip' | 'honor' | 'charity') => {
+    const r = await act({ action: 'vip.stickers', vipRows }) as St | null;
     if (!r) return;
-    if (!r.rows.length) { setMsg({ kind: 'err', text: '目前沒有 VIP 或尊榮席的座位' }); return; }
+    const name = { vip: 'VIP', honor: '尊榮席', charity: '公益' }[kind];
     const X = await import('xlsx');
+    const sheet = (aoa: (string | number)[][], cols: number[]) => { const ws = X.utils.aoa_to_sheet(aoa); ws['!cols'] = cols.map((wch) => ({ wch })); return ws; };
+    let ws; let n = 0;
+    if (kind === 'vip') { n = r.vip.length; ws = sheet([['席號', '姓名職稱', '單位', '類別', '訂購人', '訂單編號'], ...r.vip.map((x) => [x.seat, x.name, x.org, x.kind, x.buyer, x.orderNo])], [10, 24, 20, 12, 14, 14]); }
+    else if (kind === 'honor') { n = r.honor.length; ws = sheet([['組', '席號', '身分', '姓名', '訂購人', '訂單編號'], ...r.honor.map((x) => [x.group, x.seat, x.role, x.name, x.buyer, x.orderNo])], [5, 10, 6, 20, 14, 14]); }
+    else { n = r.charity.length; ws = sheet([['席號', '姓名職稱', '單位', '類別', '訂單編號'], ...r.charity.map((x) => [x.seat, x.name, x.org, x.kind, x.orderNo])], [10, 24, 20, 10, 14]); }
+    if (!n) { setMsg({ kind: 'err', text: `目前沒有${name}的座位` }); return; }
     const wb = X.utils.book_new();
-    const head = ['席號', '姓名職稱', '單位', '類別', '訂購人', '訂單編號'];
-    const add = (name: string, rows: typeof r.rows) => {
-      const ws = X.utils.aoa_to_sheet([head, ...rows.map((x) => [x.seat, x.name, x.org, x.kind, x.buyer, x.orderNo])]);
-      ws['!cols'] = [{ wch: 10 }, { wch: 24 }, { wch: 20 }, { wch: 12 }, { wch: 14 }, { wch: 14 }];
-      X.utils.book_append_sheet(wb, ws, name.slice(0, 31));
-    };
-    add('全部', r.rows);
-    for (const k of [...new Set(r.rows.map((x) => x.kind))]) add(k.replace(/[\\/?*[\]:]/g, ''), r.rows.filter((x) => x.kind === k));
-    X.writeFile(wb, `座位貼名單-VIP尊榮-${stamp()}.xlsx`);
-    setMsg({ kind: 'ok', text: `已下載座位貼名單 ${r.rows.length} 席` });
-  }}>下載座位貼名單（VIP＋尊榮席）</button>;
+    X.utils.book_append_sheet(wb, ws, name);
+    X.writeFile(wb, `座位貼-${name}-${stamp()}.xlsx`);
+    setMsg({ kind: 'ok', text: `已下載座位貼-${name} ${n} 席` });
+  };
+  return <div>
+    <div className="small muted">座位貼名單（分三個檔）：VIP 區＝VIP 排＋2 樓第 1–<input type="number" min={0} max={12} value={vipRows} onChange={(e) => setVipRows(Math.max(0, Math.min(12, Number(e.target.value) || 0)))} style={{ width: 44 }} /> 排（這區只印在 VIP）</div>
+    <div className="row" style={{ marginTop: 4 }}>
+      <button className="btn small" disabled={busy} onClick={() => dl('vip')}>座位貼－VIP</button>
+      <button className="btn small" disabled={busy} onClick={() => dl('honor')}>座位貼－尊榮席（1＋2 一組）</button>
+      <button className="btn small" disabled={busy} onClick={() => dl('charity')}>座位貼－公益</button>
+    </div>
+  </div>;
 }
 
 type ImpPreview = Awaited<ReturnType<typeof import('@/lib/vipImport').previewImport>>;

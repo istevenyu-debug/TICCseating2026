@@ -172,19 +172,51 @@ export async function sendImportMails(db: Db, actor: string, ids: number[], base
   return go;
 }
 
-/** 座位貼名單：VIP 排、VIP 類別、尊榮席（票種名稱含「尊榮」），依座位排序 */
-export async function stickerRows(db: Db) {
+/**
+ * 座位貼名單（2026-11-28：分三個檔，不同人負責）
+ * - VIP：VIP 排與 2M 第 1–vipRows 排（只有 VIP 會坐，這區只印在 VIP）＋ VIP、舊「招待」與其他非公益類別；依座位排序。
+ * - 尊榮席：票種名稱含「尊榮」的訂單，每 1＋2 一組：本人（有價的尊榮席）在前，後面 2 席贈票；同一筆多組時照座位順序配對；組依本人座位排序。
+ * - 公益：類別「公益」；依單位、座位排序。
+ * 一席只會出現在一個檔。
+ */
+export type StickerVip = { seat: string; name: string; org: string; kind: string; buyer: string; orderNo: string };
+export type StickerHonor = { group: number; seat: string; role: '本人' | '贈票'; name: string; buyer: string; orderNo: string };
+export type StickerCharity = { seat: string; name: string; org: string; kind: string; orderNo: string };
+export async function stickerRows(db: Db, vipRows = 3): Promise<{ vip: StickerVip[]; honor: StickerHonor[]; charity: StickerCharity[] }> {
+  const out = { vip: [] as StickerVip[], honor: [] as StickerHonor[], charity: [] as StickerCharity[] };
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
-  if (!ev) return [];
+  if (!ev) return out;
   const rows = await db.select({
-    seatId: t.orderSeat.seatId, holder: t.orderSeat.holderName, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, x: t.venueSeat.x, y: t.venueSeat.y,
-    vip: t.orders.vip, cat: t.orders.vipCat, org: t.orders.vipOrg, buyer: t.orders.buyerName, orderNo: t.orders.orderNo, zone: t.priceZone.name,
+    seatId: t.orderSeat.seatId, holder: t.orderSeat.holderName, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType, floor: t.venueSeat.floor, x: t.venueSeat.x, y: t.venueSeat.y,
+    orderId: t.orders.id, vip: t.orders.vip, cat: t.orders.vipCat, org: t.orders.vipOrg, buyer: t.orders.buyerName, orderNo: t.orders.orderNo, zone: t.priceZone.name, price: t.priceZone.price,
   }).from(t.orderSeat).innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.orderSeat.seatId))
     .innerJoin(t.eventSeat, and(eq(t.eventSeat.seatId, t.orderSeat.seatId), eq(t.eventSeat.eventId, ev.id))).innerJoin(t.priceZone, eq(t.priceZone.id, t.eventSeat.zoneId))
     .where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
-  return rows.filter((r) => r.seatType === 'vip' || (r.vip && r.cat === 'VIP') || /尊榮/.test(r.zone))
-    .sort((a, b) => a.y - b.y || a.x - b.x)
-    .map((r) => ({
-      seat: seatText(r), name: r.holder ?? '', org: r.vip ? r.org : '', kind: r.vip ? (r.cat || '招待') : r.zone, buyer: r.vip ? '' : (r.buyer ?? ''), orderNo: r.orderNo ?? '',
-    }));
+  const pos = (a: { y: number; x: number }, b: { y: number; x: number }) => a.y - b.y || a.x - b.x;
+  rows.sort(pos);
+  type R = (typeof rows)[number];
+  const vipArea = (r: R) => r.seatType === 'vip' || r.rowNo === 0 || (r.floor === '2M' && r.rowNo != null && r.rowNo >= 1 && r.rowNo <= vipRows);
+  const honorByOrder = new Map<number, R[]>();
+  const charity: R[] = [];
+  for (const r of rows) {
+    if (vipArea(r) || (r.vip && r.cat !== '公益')) {
+      out.vip.push({ seat: seatText(r), name: r.holder ?? '', org: r.vip ? r.org : '', kind: r.vip ? (r.cat || '招待') : r.zone, buyer: r.vip ? '' : (r.buyer ?? ''), orderNo: r.orderNo ?? '' });
+    } else if (r.vip) charity.push(r);
+    else if (/尊榮/.test(r.zone)) honorByOrder.set(r.orderId, [...(honorByOrder.get(r.orderId) ?? []), r]);
+  }
+  charity.sort((a, b) => (a.org || '').localeCompare(b.org || '', 'zh-Hant') || pos(a, b));
+  out.charity = charity.map((r) => ({ seat: seatText(r), name: r.holder ?? '', org: r.org, kind: r.cat, orderNo: r.orderNo ?? '' }));
+  const groups: R[][] = [];
+  for (const list of honorByOrder.values()) {
+    const paid = list.filter((r) => r.price > 0), gift = list.filter((r) => r.price <= 0);
+    if (!paid.length) { groups.push(gift); continue; }
+    paid.forEach((p, i) => groups.push([p, ...gift.slice(i * 2, i * 2 + 2)]));
+    const rest = gift.slice(paid.length * 2);
+    if (rest.length) groups[groups.length - 1].push(...rest);
+  }
+  groups.sort((a, b) => pos(a[0], b[0]));
+  groups.forEach((g, i) => {
+    for (const r of g) out.honor.push({ group: i + 1, seat: seatText(r), role: r.price > 0 ? '本人' : '贈票', name: r.holder || r.buyer || '', buyer: r.buyer ?? '', orderNo: r.orderNo ?? '' });
+  });
+  return out;
 }

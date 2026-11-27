@@ -97,7 +97,7 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('vip.importPreview'), file: z.string().max(8_000_000) }),
   z.object({ action: z.literal('vip.import'), file: z.string().max(8_000_000) }),
   z.object({ action: z.literal('vip.importSend'), ids: z.array(z.number().int()).min(1).max(500) }),
-  z.object({ action: z.literal('vip.stickers') }),
+  z.object({ action: z.literal('vip.stickers'), vipRows: z.number().int().min(0).max(12).optional() }),
   z.object({ action: z.literal('charity.create'), org: z.string().max(60), name: z.string().max(60), email: z.string().trim().max(120), n: z.number().int(), cat: z.string().max(10).optional(), deadline: z.string().max(40) }),
   z.object({ action: z.literal('charity.cancel'), code: z.string().max(20) }),
   z.object({ action: z.literal('vipcard.set'), name: z.string().max(60), email: z.string().trim().max(120) }),
@@ -346,7 +346,7 @@ export async function POST(req: Request) {
         for (const id of ids) delivery.push(await deliver(db, { orderId: id }));
         return { sent: ids.length, delivery };
       }
-      case 'vip.stickers': mustBeAdmin(); return { rows: await stickerRows(db) };
+      case 'vip.stickers': mustBeAdmin(); return stickerRows(db, a.vipRows ?? 3);
       case 'charity.create': mustBeAdmin(); return createCharity(db, who, a);
       case 'charity.cancel': mustBeAdmin(); return cancelCharity(db, who, a.code);
       case 'vipcard.set': mustBeAdmin(); return setVipCard(db, who, a);
