@@ -14,7 +14,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
-import { seatLabel } from './layout';
+import { seatLabel, vipSeatId } from './layout';
 import { getVipCats, setVipCats } from './checkinBoard';
 import { createVip, listVips, setVipMode } from './vip';
 
@@ -31,7 +31,7 @@ export function half(s: string) {
 export function parseSeat(text: string): string | null {
   const s = half(text).replace(/\s+/g, '').toUpperCase();
   let m = s.match(/^VIP(?:排)?-?(\d{1,3})號?$/);
-  if (m) return `V-${Number(m[1])}`;
+  if (m) return vipSeatId(Number(m[1]));
   m = s.match(/^第?(\d{1,2})排-?第?(\d{1,3})號?$/) ?? s.match(/^(\d{1,2})-(\d{1,3})$/);
   if (m) return `${Number(m[1])}-${Number(m[2])}`;
   return null;

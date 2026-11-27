@@ -56,6 +56,9 @@ const WHEELCHAIR: [string, number, number][] = [
   ['H2', 46, 13], ['H4', 47, 13], ['H6', 48, 13], ['H8', 49, 13], ['H10', 50, 13],
 ];
 
+/** VIP 排第 n 號的座位代號（22、23 號沿用原輪椅席的代號 W-H16、W-H15） */
+export const vipSeatId = (n: number) => (n === 23 ? 'W-H15' : n === 22 ? 'W-H16' : `V-${n}`);
+
 export function buildSeats(): SeatDef[] {
   const out: Omit<SeatDef, 'block' | 'code'>[] = [];
   const n = (rowNo: number, seat: number, section: SeatDef['section'], x: number) =>

@@ -31,6 +31,15 @@ describe('VIP／公益 Excel 匯入', () => {
     expect(parseSeat('第 1 排 34 號')).toBe('1-34');
     expect(parseSeat('01-34')).toBe('1-34');
     expect(parseSeat('A1')).toBeNull();
+    // 11/27：VIP 22、23 是原輪椅席 H16、H15 改的
+    expect(parseSeat('VIP-22')).toBe('W-H16');
+    expect(parseSeat('VIP-23')).toBe('W-H15');
+  });
+
+  it('VIP-22、VIP-23 可以匯入（座位圖上的 VIP 排 22、23 號）', async () => {
+    const p = await previewImport(db, xlsx([['VIP-22', '甲 董事', '', 'VIP', '', ''], ['VIP-23、VIP-21', '乙 理事長', '', 'VIP', '', '']]));
+    expect(p.rows.map((r) => r.status)).toEqual(['ok', 'ok']);
+    expect(p.rows[1].seat).toBe('VIP-23、VIP-21');
   });
 
   it('預覽：VIP 每人一筆不寄；公益同單位合成一筆寄給有 Email 的人；空白姓名略過；錯誤標原因；不寫入', async () => {
