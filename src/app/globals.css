@@ -312,3 +312,6 @@ select.need { border-color: var(--red); }
 .cs-paper { background: #fff6d6; }
 .cs-in { background: #d9d9d9; }
 @media print { .cs-wrap { padding: 0; max-width: none; } .cs-sheet { margin: 0; } }
+
+/* VIP 票卡頁：桌機一排多張 */
+.vc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); column-gap: 16px; }

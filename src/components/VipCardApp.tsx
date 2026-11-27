@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import TicketQR from './TicketQR';
+import { copyCard, downloadCard } from './vipCardImage';
 
 type Card = { serial: string; value: string; seat: string; name: string; org: string; orderId: number; email: string; sentAt: string | null; sending: boolean; entered: boolean };
 type Data = { event: { name: string; showAt: string }; leader: string; cards: Card[]; total: number; sent: number };
@@ -25,6 +26,9 @@ export default function VipCardApp({ code }: { code: string }) {
   const [msg, setMsg] = useState<{ id: number; ok: boolean; text: string } | null>(null);
   const [mailFor, setMailFor] = useState<Record<number, string>>({});
   const [sure, setSure] = useState<number | null>(null);
+  const [desk, setDesk] = useState(false); // 桌機（滑鼠）才顯示「複製圖片／下載圖片」
+  const [imgMsg, setImgMsg] = useState<{ serial: string; ok: boolean; text: string } | null>(null);
+  useEffect(() => { try { setDesk(window.matchMedia('(pointer: fine)').matches); } catch { /* 略過 */ } }, []);
 
   const call = async <T,>(method: string, body?: unknown, tk = token): Promise<Res<T>> => {
     try {
@@ -68,6 +72,14 @@ export default function VipCardApp({ code }: { code: string }) {
     setToken(r.data.token);
     await load(r.data.token);
   }
+  async function img(c: Card, how: 'copy' | 'down') {
+    if (!data) return;
+    const x = { seat: c.seat, name: c.name, org: c.org, serial: c.serial, value: c.value, eventName: data.event.name, showAt: data.event.showAt };
+    try {
+      if (how === 'copy') { await copyCard(x); setImgMsg({ serial: c.serial, ok: true, text: '已複製，到電腦版 LINE 對話框按 Ctrl+V 貼上' }); }
+      else { await downloadCard(x); setImgMsg({ serial: c.serial, ok: true, text: '已下載圖片' }); }
+    } catch (e) { setImgMsg({ serial: c.serial, ok: false, text: (e as Error).message || '複製失敗，請改用「下載圖片」' }); }
+  }
   async function send(c: Card) {
     if (sure !== c.orderId) { setSure(c.orderId); return; }
     setSure(null); setBusy(true);
@@ -97,13 +109,14 @@ export default function VipCardApp({ code }: { code: string }) {
   const k = q.trim();
   const list = data.cards.filter((c) => !k || c.name.includes(k) || c.org.includes(k) || c.seat.includes(k));
   return (
-    <main className="wrap" style={{ maxWidth: 480 }}>
-      <div className="card">
+    <main className="wrap" style={{ maxWidth: desk ? 1140 : 480 }}>
+      <div className="card" style={{ maxWidth: 720, margin: '0 auto 12px' }}>
         <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>VIP 票卡</h1>
         <div className="small muted">{data.event.name}・{data.leader} 您好</div>
-        <p style={{ margin: '8px 0' }}>VIP 共 <b>{data.total}</b> 位・已寄給本人 <b>{data.sent}</b> 位。<br />每一席一張，<b>截圖後用 LINE 傳</b>給貴賓；或按卡片下方「寄給本人」。</p>
+        <p style={{ margin: '8px 0' }}>VIP 共 <b>{data.total}</b> 位・已寄給本人 <b>{data.sent}</b> 位。<br />每一席一張，{desk ? <><b>按「複製圖片」，到電腦版 LINE 按 Ctrl+V 貼上</b>傳給貴賓</> : <><b>截圖後用 LINE 傳</b>給貴賓</>}；或按卡片下方「寄給本人」。</p>
         <input placeholder="搜尋姓名、單位、座位" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: '100%' }} />
       </div>
+      <div className={desk ? 'vc-grid' : ''}>
       {list.map((c) => (
         <div key={c.serial} style={{ padding: '14px 0 10px' }}>
           <div style={{ maxWidth: 340, margin: '0 auto', background: '#fff', border: '4px solid #8a6a2a', borderRadius: 18, padding: '18px 16px 14px', textAlign: 'center', color: '#1f2a44' }}>
@@ -120,6 +133,11 @@ export default function VipCardApp({ code }: { code: string }) {
               <div style={{ color: '#6b7488', fontSize: 12 }}>入場出示此 QR・每個 QR 限用一次</div>
             </div>
           </div>
+          {desk && <div className="row" style={{ maxWidth: 340, margin: '8px auto 0', gap: 6 }}>
+            <button className="btn small pri" style={{ flex: 1 }} onClick={() => img(c, 'copy')}>複製圖片（貼到 LINE）</button>
+            <button className="btn small" style={{ flex: 1 }} onClick={() => img(c, 'down')}>下載圖片</button>
+          </div>}
+          {imgMsg?.serial === c.serial && <div className={`note small${imgMsg.ok ? '' : ' err'}`} style={{ maxWidth: 340, margin: '6px auto 0' }}>{imgMsg.text}</div>}
           <div className="card small" style={{ maxWidth: 340, margin: '8px auto 0', padding: 10 }}>
             {c.sentAt ? <div className="ok-text">已寄給本人 {hm(c.sentAt)}{c.email ? `（${c.email}）` : ''}</div> : c.sending ? <div>寄送中…</div> : null}
             {c.email && <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -134,6 +152,7 @@ export default function VipCardApp({ code }: { code: string }) {
           </div>
         </div>
       ))}
+      </div>
       {!list.length && <div className="card muted">{data.cards.length ? '找不到符合的貴賓' : '目前還沒有 VIP'}</div>}
       <p className="small muted" style={{ textAlign: 'center' }}>姓名、座位有誤請聯絡主辦方修改。「寄給本人」寄的是同一張票，不會換 QR。</p>
     </main>
