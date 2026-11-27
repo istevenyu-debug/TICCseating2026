@@ -31,6 +31,7 @@ import { groupSeatsExport } from '@/lib/joinSeats';
 import { cancelUpgrade, createUpgrade } from '@/lib/upgrade';
 import { previewImport, runImport, sendImportMails, stickerRows } from '@/lib/vipImport';
 import { cancelCharity, createCharity } from '@/lib/charity';
+import { setVipCard, vipCardAction } from '@/lib/vipCard';
 import { invoiceLookup, invoicePrintUrl, backfillInvoices, createForPreorder, editInvoiceBuyer, issueBatch, recheckInvoice, saveEinvConfig, voidInvoice } from '@/lib/einvoice';
 
 const joinBase = (req: Request) => (process.env.PUBLIC_BASE_URL || originOf(req)).replace(/\/$/, '');
@@ -99,6 +100,8 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('vip.stickers') }),
   z.object({ action: z.literal('charity.create'), org: z.string().max(60), name: z.string().max(60), email: z.string().trim().max(120), n: z.number().int(), cat: z.string().max(10).optional(), deadline: z.string().max(40) }),
   z.object({ action: z.literal('charity.cancel'), code: z.string().max(20) }),
+  z.object({ action: z.literal('vipcard.set'), name: z.string().max(60), email: z.string().trim().max(120) }),
+  z.object({ action: z.literal('vipcard.do'), what: z.enum(['off', 'on', 'renew']) }),
   z.object({ action: z.literal('vip.seats'), id, seatIds: z.array(z.string()).min(1, '請在座位圖上選取座位').max(60) }),
   z.object({ action: z.literal('vip.mode'), id, mode: z.enum(['scheduled', 'now', 'none']) }),
   z.object({ action: z.literal('vip.cancel'), id }),
@@ -346,6 +349,8 @@ export async function POST(req: Request) {
       case 'vip.stickers': mustBeAdmin(); return { rows: await stickerRows(db) };
       case 'charity.create': mustBeAdmin(); return createCharity(db, who, a);
       case 'charity.cancel': mustBeAdmin(); return cancelCharity(db, who, a.code);
+      case 'vipcard.set': mustBeAdmin(); return setVipCard(db, who, a);
+      case 'vipcard.do': mustBeAdmin(); return vipCardAction(db, who, a.what);
       case 'vip.seats': mustBeAdmin(); return updateVipSeats(db, who, a.id, a.seatIds, originOf(req));
       case 'vip.mode': { mustBeAdmin(); const r = await setVipMode(db, who, a.id, a.mode, originOf(req)); return { ...r, delivery: a.mode === 'now' ? await deliver(db, { orderId: a.id }) : undefined }; }
       case 'vip.cancel': mustBeAdmin(); return cancelVip(db, who, a.id);
