@@ -82,7 +82,7 @@ export default function VipCardApp({ code }: { code: string }) {
     <main className="wrap" style={{ maxWidth: 480 }}>
       <div className="card">
         <h1 style={{ fontSize: 22, margin: '0 0 6px' }}>VIP 票卡</h1>
-        <p style={{ marginTop: 0 }}>請輸入主辦方登記的 Email，我們會寄一組 6 位數驗證碼給您。驗證後這支手機 7 天內不用再驗證。</p>
+        <p style={{ marginTop: 0 }}>請輸入主辦方登記的 Email，我們會寄一組 6 位數驗證碼給您。驗證後，這支手機到活動當晚 23:00 前都不用再驗證。</p>
         <label className="f">Email<input type="email" value={email} autoComplete="email" onChange={(e) => setEmail(e.target.value)} /></label>
         <button className={`btn${sentTo ? '' : ' pri'}`} style={{ width: '100%', marginTop: 8, padding: 12 }} disabled={busy || !email.trim()} onClick={askOtp}>{sentTo ? '沒收到？重新寄驗證碼' : '寄驗證碼'}</button>
         <p className="small" style={{ margin: '12px 0 4px' }}>{sentTo ? <>驗證碼已寄到 {sentTo}，10 分鐘內有效。看完信回到這頁，輸入 6 位數即可（不用重寄）。</> : '已經收到驗證碼？直接輸入：'}</p>

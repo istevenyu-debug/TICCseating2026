@@ -2,7 +2,7 @@
  * VIP 票卡連結（11/28）：給 VIP 負責人一條連結 /vc/<code>，一頁看全部 VIP 的票卡（一席一張、剛好一個手機畫面），
  * 截圖用 LINE 傳；也可在每位 VIP 下方「寄給本人」（填或沿用 Email，寄一封只有他自己 QR 的信）。
  * - 範圍：類別 VIP、未取消的 VIP／公益訂單（之後新增、換座位自動更新）。
- * - 鎖負責人 Email：輸入 Email → 寄 6 位數驗證碼（10 分鐘、最多錯 5 次）→ 通過後這支手機記住 7 天。
+ * - 鎖負責人 Email：輸入 Email → 寄 6 位數驗證碼（10 分鐘、最多錯 5 次）→ 通過後這支手機記到演出當天 23:00（使用者 11/28 定）。
  * - 負責人不能改姓名、座位；寄給本人不換 QR（同一張票）。寄過的「演出前自動寄」不再重複。
  * 設定存 app_setting `vipcard`（全場一條，可停用、換新連結）。
  */
@@ -16,7 +16,6 @@ import { qrSecret, qrValue } from './qr';
 
 const KEY = 'vipcard';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DEVICE_DAYS = 7;
 const OTP_MIN = 10;
 const OTP_TRIES = 5;
 
@@ -116,8 +115,13 @@ export async function verifyVipOtp(db: Db, code: string, otp: string, now = new 
     throw new BookingError('INVALID', `驗證碼不對（還可以試 ${OTP_TRIES - l.otp.tries} 次）。`);
   }
   const token = randomBytes(24).toString('base64url');
+  // 這支手機記到演出當天 23:00（台北）；萬一已過了，就記 1 天
+  const ev = await ev0(db);
+  const day = ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+  const end = new Date(`${day}T23:00:00+08:00`).getTime();
+  const until = now.getTime() < end ? end : now.getTime() + 86400_000;
   l.otp = undefined;
-  l.devices = [...l.devices.filter((d) => Date.parse(d.exp) > now.getTime()), { h: sha(token), exp: new Date(now.getTime() + DEVICE_DAYS * 86400_000).toISOString() }].slice(-20);
+  l.devices = [...l.devices.filter((d) => Date.parse(d.exp) > now.getTime()), { h: sha(token), exp: new Date(until).toISOString() }].slice(-20);
   await save(db, l);
   await db.insert(t.auditLog).values({ actor: `VIP負責人:${l.name}`, action: 'vipcard_verify', target: KEY, detail: '' });
   return { token };

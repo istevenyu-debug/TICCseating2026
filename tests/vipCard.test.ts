@@ -38,7 +38,9 @@ describe('VIP 票卡連結', () => {
     expect(await msg(verifyVipOtp(db, l!.code, otp, at(11)))).toContain('過期');
     const token = await login(l!.code, at(12));
     expect((await vipCardPage(db, l!.code, token, at(13))).cards).toEqual([]);
-    expect(await msg(vipCardPage(db, l!.code, token, new Date(at(12).getTime() + 7 * 86400_000 + 60_000)))).toContain('驗證');
+    // 手機記到演出當天 23:00
+    expect((await vipCardPage(db, l!.code, token, new Date('2026-12-09T22:59:00+08:00'))).cards).toEqual([]);
+    expect(await msg(vipCardPage(db, l!.code, token, new Date('2026-12-09T23:01:00+08:00')))).toContain('驗證');
     const r = await vipCardAction(db, '網管', 'renew');
     expect(await msg(vipCardPage(db, l!.code, token, at(14)))).toContain('已更換');
     expect(await msg(vipCardPage(db, r!.code, token, at(14)))).toContain('驗證');
