@@ -40,7 +40,12 @@ export default function VipCardApp({ code }: { code: string }) {
   }
   useEffect(() => {
     let tk: string | null = null;
-    try { tk = localStorage.getItem(tkKey); } catch { /* 無痕模式 */ }
+    try {
+      tk = localStorage.getItem(tkKey);
+      // 切去收信再回來，手機瀏覽器可能重新載入頁面：記住「已寄驗證碼」10 分鐘
+      const p = JSON.parse(localStorage.getItem(`${tkKey}:otp`) ?? 'null') as { email: string; sentTo: string; at: number } | null;
+      if (p && Date.now() - p.at < 10 * 60_000) { setEmail(p.email); setSentTo(p.sentTo); }
+    } catch { /* 無痕模式 */ }
     setToken(tk);
     load(tk);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -49,14 +54,17 @@ export default function VipCardApp({ code }: { code: string }) {
     setBusy(true); setErr('');
     const r = await call<{ sentTo: string }>('POST', { action: 'otp', email });
     setBusy(false);
-    if (r.ok) setSentTo(r.data.sentTo); else setErr(r.message);
+    if (r.ok) {
+      setSentTo(r.data.sentTo);
+      try { localStorage.setItem(`${tkKey}:otp`, JSON.stringify({ email, sentTo: r.data.sentTo, at: Date.now() })); } catch { /* 略過 */ }
+    } else setErr(r.message);
   }
   async function verify() {
     setBusy(true); setErr('');
     const r = await call<{ token: string }>('POST', { action: 'verify', otp });
     setBusy(false);
     if (!r.ok) { setErr(r.message); return; }
-    try { localStorage.setItem(tkKey, r.data.token); } catch { /* 記不住就每次驗證 */ }
+    try { localStorage.setItem(tkKey, r.data.token); localStorage.removeItem(`${tkKey}:otp`); } catch { /* 記不住就每次驗證 */ }
     setToken(r.data.token);
     await load(r.data.token);
   }
@@ -76,12 +84,10 @@ export default function VipCardApp({ code }: { code: string }) {
         <h1 style={{ fontSize: 22, margin: '0 0 6px' }}>VIP 票卡</h1>
         <p style={{ marginTop: 0 }}>請輸入主辦方登記的 Email，我們會寄一組 6 位數驗證碼給您。驗證後這支手機 7 天內不用再驗證。</p>
         <label className="f">Email<input type="email" value={email} autoComplete="email" onChange={(e) => setEmail(e.target.value)} /></label>
-        <button className="btn pri" style={{ width: '100%', marginTop: 8, padding: 12 }} disabled={busy || !email.trim()} onClick={askOtp}>{sentTo ? '重新寄驗證碼' : '寄驗證碼'}</button>
-        {sentTo && <>
-          <p className="small" style={{ margin: '12px 0 4px' }}>驗證碼已寄到 {sentTo}，10 分鐘內有效。</p>
-          <label className="f">驗證碼<input inputMode="numeric" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></label>
-          <button className="btn pri" style={{ width: '100%', marginTop: 8, padding: 12 }} disabled={busy || otp.length !== 6} onClick={verify}>驗證</button>
-        </>}
+        <button className={`btn${sentTo ? '' : ' pri'}`} style={{ width: '100%', marginTop: 8, padding: 12 }} disabled={busy || !email.trim()} onClick={askOtp}>{sentTo ? '沒收到？重新寄驗證碼' : '寄驗證碼'}</button>
+        <p className="small" style={{ margin: '12px 0 4px' }}>{sentTo ? <>驗證碼已寄到 {sentTo}，10 分鐘內有效。看完信回到這頁，輸入 6 位數即可（不用重寄）。</> : '已經收到驗證碼？直接輸入：'}</p>
+        <label className="f">驗證碼<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /></label>
+        <button className="btn pri" style={{ width: '100%', marginTop: 8, padding: 12 }} disabled={busy || otp.length !== 6} onClick={verify}>驗證</button>
         {err && <p className="note err" style={{ marginTop: 10 }}>{err}</p>}
       </div>
     </main>
