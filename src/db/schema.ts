@@ -19,7 +19,7 @@ export const venueSeat = pgTable('venue_seat', {
   id: text('id').primaryKey(), // 例：'3-15'、'V-7'、'W-H11'
   section: text('section').notNull(), // WL 左側區 / L 左區 / C 中區 / R 右區 / WR 右側區 / VL VC VR VIP排 / W 輪椅席
   rowNo: integer('row_no'), // 1–12；VIP 排為 0；輪椅席為 null
-  seatNo: text('seat_no').notNull(), // 座號（輪椅席為 H1–H16）
+  seatNo: text('seat_no').notNull(), // 座號（輪椅席為 H1–H14；原 H15、H16 已改成 VIP 23、22）
   seatType: text('seat_type').notNull(), // normal / vip / wheelchair
   block: text('block').notNull(), // L2 左側區 / L1 左區 / C0 中區 / R1 右區 / R2 右側區
   code: text('code').notNull(), // 座位編號：排-席次-區，例 03-15-L1、V-07-C0、WC-H11-L2

@@ -497,7 +497,7 @@ function Usage() {
           </div>
           <h3>VIP 排</h3>
           <label className="switch"><input type="checkbox" checked={st.event.vipInstalled} disabled={busy}
-            onChange={(e) => act({ action: 'event.update', values: { vipInstalled: e.target.checked } })} />本場加裝 VIP 排（21 席，需另付裝拆費）</label>
+            onChange={(e) => act({ action: 'event.update', values: { vipInstalled: e.target.checked } })} />本場加裝 VIP 排（23 席，需另付裝拆費）</label>
         </div>
       </div>
     </div>

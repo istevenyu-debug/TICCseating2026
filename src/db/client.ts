@@ -20,6 +20,7 @@ export function getDb(): Promise<Db> {
     g.__ticcDb = connect().then(async (db) => {
       // 補齊三樓座位（已存在就不動）。出錯只記錄：三樓的問題不能讓 2M 開不了站
       await (await import('@/lib/floor')).ensureFloor3(db).catch((e) => console.error('三樓座位補齊失敗', e));
+      await (await import('@/lib/vipRow')).ensureVipRow(db).catch((e) => console.error('VIP 排 22、23 改座位失敗', e));
       (await import('@/lib/notify')).startDispatcher(db); // 每 30 秒補寄通知
       (await import('@/lib/backup')).startBackups(db); // 每小時自動備份
       (await import('@/lib/card')).startCardPoller(db); // 定時向綠界查「付款中」的訂單（防漏單）

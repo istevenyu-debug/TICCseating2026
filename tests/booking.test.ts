@@ -42,11 +42,11 @@ async function expectCode(p: Promise<unknown>, code: string) {
 }
 
 describe('座位模板', () => {
-  it('第 1–12 排共 484 席，另有 VIP 21 席、輪椅席 16 席', () => {
+  it('第 1–12 排共 484 席，另有 VIP 23 席（11/27 原輪椅席 H15、H16 改成 VIP 23、22）、輪椅席 14 席', () => {
     const seats = buildSeats();
     expect(seats.filter((s) => s.seatType === 'normal')).toHaveLength(484);
-    expect(seats.filter((s) => s.seatType === 'vip')).toHaveLength(21);
-    expect(seats.filter((s) => s.seatType === 'wheelchair')).toHaveLength(16);
+    expect(seats.filter((s) => s.seatType === 'vip')).toHaveLength(23);
+    expect(seats.filter((s) => s.seatType === 'wheelchair')).toHaveLength(14);
     expect(new Set(seats.map((s) => s.id)).size).toBe(seats.length);
     expect(new Set(seats.map((s) => `${s.x},${s.y}`)).size).toBe(seats.length);
   });

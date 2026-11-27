@@ -13,6 +13,7 @@ export async function POST(req: Request) {
     if (!buf.length) return Response.json({ ok: false, message: '請選擇備份檔' }, { status: 400 });
     const b = fromGz(buf);
     const r = await importAll(db, b);
+    await (await import('@/lib/vipRow')).ensureVipRow(db); // 舊備份的輪椅席 H15、H16 → VIP 23、22
     return Response.json({ ok: true, data: { at: b.at, preorders: r.preorder, orders: r.orders, links: r.invite_link } });
   } catch (e) {
     return Response.json({ ok: false, message: `還原失敗，資料沒有變動：${String((e as Error).message ?? e).slice(0, 200)}` }, { status: 400 });

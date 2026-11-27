@@ -51,7 +51,6 @@ const CENTER = [9, 7, 5, 3, 1, 2, 4, 6, 8, 10];
 
 /** 輪椅席：[座號, x, y] */
 const WHEELCHAIR: [string, number, number][] = [
-  ['H15', 13, 1], ['H16', 40, 1],
   ['H13', 6, 4], ['H11', 7, 4], ['H12', 46, 4], ['H14', 47, 4],
   ['H9', 3, 13], ['H7', 4, 13], ['H5', 5, 13], ['H3', 6, 13], ['H1', 7, 13],
   ['H2', 46, 13], ['H4', 47, 13], ['H6', 48, 13], ['H8', 49, 13], ['H10', 50, 13],
@@ -78,6 +77,10 @@ export function buildSeats(): SeatDef[] {
   [21, 19, 17, 15, 13, 11, 9].forEach((s, i) => v(s, 'VL', 14 + i));
   [7, 5, 3, 1, 2, 4, 6].forEach((s, i) => v(s, 'VC', 23 + i));
   [8, 10, 12, 14, 16, 18, 20].forEach((s, i) => v(s, 'VR', 33 + i));
+  // VIP 排兩端原本是輪椅席 H15、H16，11/27 改成 VIP 23（左端）、22（右端）。
+  // 內部編號沿用 W-H15／W-H16，已有的訂單、用途、備份都對得上（見 lib/vipRow.ts）
+  out.push({ id: 'W-H15', section: 'VL', rowNo: 0, seatNo: '23', seatType: 'vip', x: 13, y: 1 });
+  out.push({ id: 'W-H16', section: 'VR', rowNo: 0, seatNo: '22', seatType: 'vip', x: 40, y: 1 });
 
   for (const [h, x, y] of WHEELCHAIR) {
     out.push({ id: `W-${h}`, section: 'W', rowNo: null, seatNo: h, seatType: 'wheelchair', x, y });
