@@ -5,7 +5,7 @@
  *  - 一個位置（gate）一人。換人時若舊連結已寄出／LINE 傳過，自動換新連結（舊連結立即失效）。
  *  - 寄信一定要負責人按；伺服器再檢查一次：只寄給已分配、有 Email、還沒寄過（或位置／連結已改）的人。
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
@@ -17,8 +17,17 @@ import { isValidEmail } from './validation';
 const LEAD_KEY = 'crew.lead';
 export const ONLINE_MS = 60_000; // 驗票頁每 20 秒回報一次；1 分鐘內有回報＝在線
 
-export interface LeadCfg { name: string; email: string; lineId: string; token: string; joinToken: string; active: boolean }
-const EMPTY: LeadCfg = { name: '', email: '', lineId: '', token: '', joinToken: '', active: true };
+type Dev = { h: string; exp: string };
+export interface LeadCfg {
+  name: string; email: string; lineId: string; token: string; joinToken: string; active: boolean;
+  /** 管理頁要驗證負責人 Email（11-29 使用者：只給固定的人用）；通過的手機記到演出當天 23:00 */
+  otp?: { h: string; exp: string; tries: number; at: string }; devices: Dev[];
+}
+const EMPTY: LeadCfg = { name: '', email: '', lineId: '', token: '', joinToken: '', active: true, devices: [] };
+const OTP_MIN = 10;
+const OTP_TRIES = 5;
+const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+export const maskEmail = (e: string) => { const [u, d] = e.split('@'); return d ? `${u.slice(0, 1)}***@${d}` : ''; };
 
 async function ev0(db: Db) {
   const [ev] = await db.select().from(t.event).orderBy(t.event.id).limit(1);
@@ -31,7 +40,7 @@ const cleanEmail = (s: unknown) => String(s ?? '').trim().toLowerCase().slice(0,
 
 export async function getLead(db: Db): Promise<LeadCfg> {
   const [r] = await db.select().from(t.appSetting).where(eq(t.appSetting.key, LEAD_KEY));
-  try { return r?.value ? { ...EMPTY, ...JSON.parse(r.value) } : { ...EMPTY }; } catch { return { ...EMPTY }; }
+  try { return r?.value ? { ...EMPTY, devices: [], ...JSON.parse(r.value) } : { ...EMPTY, devices: [] }; } catch { return { ...EMPTY, devices: [] }; }
 }
 async function putLead(db: Db, v: LeadCfg) {
   await db.insert(t.appSetting).values({ key: LEAD_KEY, value: JSON.stringify(v) }).onConflictDoUpdate({ target: t.appSetting.key, set: { value: JSON.stringify(v) } });
@@ -43,14 +52,16 @@ export async function leadAdminView(db: Db) {
   const l = await getLead(db);
   const ev = await ev0(db);
   const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(t.crew).where(and(eq(t.crew.eventId, ev.id), eq(t.crew.removed, false)));
-  return { name: l.name, email: l.email, lineId: l.lineId, token: l.token, joinToken: l.joinToken, active: l.active, crew: n };
+  return { name: l.name, email: l.email, lineId: l.lineId, token: l.token, joinToken: l.joinToken, active: l.active, crew: n, devices: l.devices.filter((d) => Date.parse(d.exp) > Date.now()).length };
 }
 
 export async function saveLead(db: Db, actor: string, v: { name: string; email: string; lineId: string }) {
   const cur = await getLead(db);
   const email = cleanEmail(v.email);
   if (email && !isValidEmail(email)) throw new BookingError('INVALID', 'Email 格式不正確');
-  const next: LeadCfg = { ...cur, name: clean(v.name, 40), email, lineId: clean(v.lineId, 40).replace(/^@?/, (m) => m), token: cur.token || newToken(), joinToken: cur.joinToken || newToken() };
+  // 換了負責人 Email：已驗證的手機全部要重新驗證
+  const next: LeadCfg = { ...cur, name: clean(v.name, 40), email, lineId: clean(v.lineId, 40), token: cur.token || newToken(), joinToken: cur.joinToken || newToken(),
+    ...(email !== cur.email ? { devices: [], otp: undefined } : {}) };
   await putLead(db, next);
   await db.insert(t.auditLog).values({ actor, action: 'crew_lead_save', target: LEAD_KEY, detail: JSON.stringify({ name: next.name, email: next.email, lineId: next.lineId }) });
   return leadAdminView(db);
@@ -59,7 +70,7 @@ export async function saveLead(db: Db, actor: string, v: { name: string; email: 
 /** 換新連結：which＝manage（負責人管理）或 join（志工報名）；舊連結立即失效 */
 export async function renewLeadLink(db: Db, actor: string, which: 'manage' | 'join') {
   const cur = await getLead(db);
-  const next = { ...cur, ...(which === 'manage' ? { token: newToken() } : { joinToken: newToken() }) };
+  const next = { ...cur, ...(which === 'manage' ? { token: newToken(), devices: [], otp: undefined } : { joinToken: newToken() }) };
   await putLead(db, next);
   await db.insert(t.auditLog).values({ actor, action: 'crew_lead_renew', target: LEAD_KEY, detail: which });
   return leadAdminView(db);
@@ -77,7 +88,7 @@ export async function mailLead(db: Db, actor: string, base: string) {
   const l = await getLead(db);
   if (!l.token || !l.email) throw new BookingError('INVALID', '請先填負責人 Email 並儲存');
   const ev = await ev0(db);
-  const content = `【${ev.name}】${l.name || '負責人'} 您好，這是您的驗票管理連結，請用手機開啟：${base}/crew/m/${l.token}　開啟後可以「加入主畫面」，之後就像 APP 一樣從桌面打開。　在「招募」分頁可以把志工報名連結分享到 LINE；志工報名後，在「分配」把每個人排到位置，再到「發送」寄出驗票連結。　此連結可以看到志工的姓名、Email、電話，請勿轉傳。`;
+  const content = `【${ev.name}】${l.name || '負責人'} 您好，這是您的驗票管理連結，請用手機開啟：${base}/crew/m/${l.token}　開啟後可以「加入主畫面」，之後就像 APP 一樣從桌面打開。　在「招募」分頁可以把志工報名連結分享到 LINE；志工報名後，在「分配」把每個人排到位置，再到「發送」寄出驗票連結。　第一次打開要輸入您的 Email（${l.email}）收驗證碼，驗證過的手機可以用到演出當天。加入主畫面後，請在主畫面的 APP 裡再驗證一次。此連結請勿轉傳。`;
   const [n] = await db.insert(t.notification).values({ channel: 'email', template: 'crew_lead', recipient: l.email, content }).returning({ id: t.notification.id });
   await db.insert(t.auditLog).values({ actor, action: 'crew_lead_mail', target: LEAD_KEY, detail: JSON.stringify({ to: l.email, notif: n.id }) });
   return { to: l.email };
@@ -128,11 +139,68 @@ export async function crewFriend(db: Db, token: string, code: string) {
 
 /* ---------- 負責人管理頁 ---------- */
 
-async function byToken(db: Db, token: string) {
+async function byToken(db: Db, token: string, admin = false) {
   const l = await getLead(db);
   if (!l.token || token !== l.token) throw new BookingError('LINK_NOT_FOUND', '管理連結不存在或已換新，請向系統管理員索取新連結。');
-  if (!l.active) throw new BookingError('LINK_DISABLED', '管理連結已停用。');
+  if (!l.active && !admin) throw new BookingError('LINK_DISABLED', '管理連結已停用。');
   return l;
+}
+
+/**
+ * 誰在操作：負責人（這支手機驗證過 Email 的通行碼）或已登入後台的系統管理員（不用驗證碼，停用中也能看；
+ * 紀錄記系統管理員本人）。由 API 依後台登入 cookie 判斷，前端送不進來。
+ */
+export type CrewAuth = string | { admin: string };
+async function authed(db: Db, token: string, auth: CrewAuth, now: Date) {
+  if (typeof auth === 'object') return { l: await byToken(db, token, true), actor: `系統管理員:${auth.admin}`, asAdmin: true };
+  const l = await byToken(db, token);
+  const h = sha(auth || '-');
+  if (!auth || !l.devices.some((d) => d.h === h && Date.parse(d.exp) > now.getTime())) throw new BookingError('AUTH', '請先驗證 Email。');
+  return { l, actor: `驗票負責人:${l.name || '負責人'}`, asAdmin: false };
+}
+
+/** 驗證頁用：只回負責人稱呼與遮住的 Email */
+export async function leadGate(db: Db, token: string) {
+  const l = await byToken(db, token);
+  const ev = await ev0(db);
+  return { event: ev.name, leadName: l.name, email: maskEmail(l.email), ready: !!l.email };
+}
+
+/** 寄驗證碼：Email 要跟後台設定的一樣；60 秒內不重寄 */
+export async function sendLeadOtp(db: Db, token: string, email: string, now = new Date(), base = '') {
+  const l = await byToken(db, token);
+  if (!l.email) throw new BookingError('INVALID', '系統管理員還沒設定負責人 Email。');
+  if (cleanEmail(email) !== l.email) throw new BookingError('INVALID', '這個 Email 沒有權限，請確認是主辦方登記的負責人 Email。');
+  if (l.otp && now.getTime() - Date.parse(l.otp.at) < 60_000) throw new BookingError('TOO_MANY', '驗證碼剛寄出，請 1 分鐘後再試。');
+  const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  l.otp = { h: sha(`${l.token}:${otp}`), exp: new Date(now.getTime() + OTP_MIN * 60_000).toISOString(), tries: 0, at: now.toISOString() };
+  await putLead(db, l);
+  const ev = await ev0(db);
+  await db.insert(t.notification).values({ channel: 'email', template: 'crew_otp', recipient: l.email,
+    content: `【${ev.name}】${l.name || '負責人'} 您好，驗票管理頁的驗證碼是 ${otp}，${OTP_MIN} 分鐘內有效。請回到驗票管理頁輸入驗證碼。如果不是您本人操作，請忽略這封信。${base ? `${base.replace(/\/$/, '')}/crew/m/${l.token}` : ''}` });
+  return { sentTo: maskEmail(l.email) };
+}
+
+/** 驗證：通過後回傳這支手機的通行碼（記到演出當天 23:00） */
+export async function verifyLeadOtp(db: Db, token: string, otp: string, now = new Date()) {
+  const l = await byToken(db, token);
+  if (!l.otp || Date.parse(l.otp.exp) < now.getTime()) throw new BookingError('INVALID', '驗證碼已過期，請重新寄送。');
+  if (l.otp.tries >= OTP_TRIES) throw new BookingError('INVALID', '錯太多次了，請重新寄送驗證碼。');
+  if (sha(`${l.token}:${String(otp).trim()}`) !== l.otp.h) {
+    l.otp.tries++;
+    await putLead(db, l);
+    throw new BookingError('INVALID', `驗證碼不對（還可以試 ${OTP_TRIES - l.otp.tries} 次）。`);
+  }
+  const dev = randomBytes(24).toString('base64url');
+  const ev = await ev0(db);
+  const day = ev.showAt.toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+  const end = new Date(`${day}T23:00:00+08:00`).getTime();
+  const until = now.getTime() < end ? end : now.getTime() + 86400_000;
+  l.otp = undefined;
+  l.devices = [...l.devices.filter((d) => Date.parse(d.exp) > now.getTime()), { h: sha(dev), exp: new Date(until).toISOString() }].slice(-10);
+  await putLead(db, l);
+  await db.insert(t.auditLog).values({ actor: `驗票負責人:${l.name || '負責人'}`, action: 'crew_lead_verify', target: LEAD_KEY, detail: '' });
+  return { token: dev };
 }
 
 const sentKey = (g: { id: number; token: string }) => `${g.id}|${g.token}`;
@@ -140,8 +208,8 @@ const lineText = (ev: string, name: string, pos: string, url: string, base: stri
   `${name} 您好，\n12/9「${ev}」您負責 ${pos} 驗票。\n您的驗票連結（只給您用，請勿轉傳）：\n${url}\n點開 → 按「開始掃描」→ 允許相機。17:00 以前掃都算練習，可以先掃自己的票試試。\n練習單：${base}/crew/practice`;
 
 /** 管理頁資料 */
-export async function leadState(db: Db, token: string, base: string, now = new Date()) {
-  const l = await byToken(db, token);
+export async function leadState(db: Db, token: string, auth: CrewAuth, base: string, now = new Date()) {
+  const { l, asAdmin } = await authed(db, token, auth, now);
   const ev = await ev0(db);
   const live = await liveAt(db);
   const crew = await db.select().from(t.crew).where(and(eq(t.crew.eventId, ev.id), eq(t.crew.removed, false))).orderBy(t.crew.id);
@@ -163,7 +231,7 @@ export async function leadState(db: Db, token: string, base: string, now = new D
   });
   return {
     event: ev.name, showAt: ev.showAt.toISOString(), liveAt: live.toISOString(), practice: now < live, now: now.toISOString(),
-    lead: { name: l.name, lineId: l.lineId }, joinUrl: `${base}/crew/j/${l.joinToken}`, practiceUrl: `${base}/crew/practice`,
+    asAdmin, lead: { name: l.name, lineId: l.lineId }, joinUrl: `${base}/crew/j/${l.joinToken}`, practiceUrl: `${base}/crew/practice`,
     positions,
     crew: crew.map((c) => {
       const g = gates.find((x) => x.id === c.gateId);
@@ -220,10 +288,9 @@ export type LeadAction =
   | { action: 'crew.remove'; crewId: number }
   | { action: 'crew.edit'; crewId: number; name: string; email: string; phone: string };
 
-export async function leadAction(db: Db, token: string, a: LeadAction, base: string) {
-  const l = await byToken(db, token);
+export async function leadAction(db: Db, token: string, auth: CrewAuth, a: LeadAction, base: string, now = new Date()) {
+  const { actor } = await authed(db, token, auth, now);
   const ev = await ev0(db);
-  const actor = `驗票負責人:${l.name || '負責人'}`;
   const crewOf = async (id: number) => {
     const [c] = await db.select().from(t.crew).where(and(eq(t.crew.id, id), eq(t.crew.eventId, ev.id), eq(t.crew.removed, false)));
     if (!c) throw new BookingError('NOT_FOUND', '找不到這位志工');

@@ -7,9 +7,9 @@ type Crew = {
   id: number; name: string; email: string; phone: string; friend: boolean; gateId: number | null; gateName: string;
   mail: { status: string; error: string; at: string } | null; mailStale: boolean; lineAt: string | null; line: string; createdAt: string;
 };
-type State = { event: string; showAt: string; liveAt: string; practice: boolean; now: string; lead: { name: string; lineId: string }; joinUrl: string; practiceUrl: string; positions: Pos[]; crew: Crew[] };
+type State = { asAdmin?: boolean; event: string; showAt: string; liveAt: string; practice: boolean; now: string; lead: { name: string; lineId: string }; joinUrl: string; practiceUrl: string; positions: Pos[]; crew: Crew[] };
 type Preview = { send: { id: number; name: string; email: string; gate: string; again: boolean }[]; skipSent: number; skipNoGate: number };
-type Res<T> = { ok: true; data: T } | { ok: false; message: string };
+type Res<T> = { ok: true; data: T } | { ok: false; code?: string; message: string };
 type Tab = 'join' | 'assign' | 'send' | 'day';
 
 const tw = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -34,13 +34,18 @@ export default function CrewLeadApp({ token }: { token: string }) {
   const [edit, setEdit] = useState<Crew | null>(null);
   const [newPos, setNewPos] = useState('');
   const [standalone, setStandalone] = useState(true);
+  const [needAuth, setNeedAuth] = useState(false);
+  const tkKey = `crew-tk:${token}`;
+  const headers = useCallback((): Record<string, string> => {
+    try { const tk = localStorage.getItem(tkKey); return tk ? { 'x-crew-token': tk } : {}; } catch { return {}; }
+  }, [tkKey]);
 
   const load = useCallback(async () => {
     try {
-      const r: Res<State> = await (await fetch(url, { cache: 'no-store' })).json();
-      if (r.ok) setSt(r.data); else setFatal(r.message);
+      const r: Res<State> = await (await fetch(url, { cache: 'no-store', headers: headers() })).json();
+      if (r.ok) { setSt(r.data); setNeedAuth(false); } else if (r.code === 'AUTH') setNeedAuth(true); else setFatal(r.message);
     } catch { /* 網路暫時不通：下次再試 */ }
-  }, [url]);
+  }, [url, headers]);
   useEffect(() => { load(); const i = setInterval(load, tab === 'day' ? 10_000 : 20_000); return () => clearInterval(i); }, [load, tab]);
   useEffect(() => {
     try { setStandalone(window.matchMedia('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true); } catch { /* 不支援 */ }
@@ -51,8 +56,8 @@ export default function CrewLeadApp({ token }: { token: string }) {
   async function act<T = unknown>(body: unknown, ok?: string): Promise<T | null> {
     setBusy(true); setMsg(null);
     try {
-      const r: Res<T> = await (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
-      if (!r.ok) { setMsg({ ok: false, text: r.message }); return null; }
+      const r: Res<T> = await (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify(body) })).json();
+      if (!r.ok) { if (r.code === 'AUTH') setNeedAuth(true); setMsg({ ok: false, text: r.message }); return null; }
       if (ok) setMsg({ ok: true, text: ok });
       await load();
       return r.data;
@@ -61,6 +66,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
   const twice = (key: string, fn: () => void) => { if (sure === key) fn(); else setSure(key); };
 
   if (fatal) return <main className="wrap" style={{ maxWidth: 520, padding: 16 }}><div className="card"><h2>無法開啟</h2><p>{fatal}</p></div></main>;
+  if (needAuth) return <Verify url={url} tkKey={tkKey} onDone={() => { setNeedAuth(false); load(); }} />;
   if (!st) return <main className="wrap" style={{ maxWidth: 520, padding: 16 }}><div className="card">載入中…</div></main>;
 
   const assigned = st.crew.filter((c) => c.gateId);
@@ -86,7 +92,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
           <b style={{ fontSize: 17 }}>驗票管理</b>
           <span style={{ fontSize: 12, opacity: 0.85 }}>{st.practice ? `練習中・${tw(st.liveAt)} 起正式` : '正式驗票中'}</span>
         </div>
-        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>{st.event}{st.lead.name ? `・負責人 ${st.lead.name}` : ''}</div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>{st.event}{st.lead.name ? `・負責人 ${st.lead.name}` : ''}{st.asAdmin ? '・系統管理員檢視' : ''}</div>
         <nav style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', marginTop: 10 }}>
           {tabs.map(([k, label]) => (
             <button key={k} onClick={() => go(k)} style={{ background: 'none', border: 0, color: '#fff', padding: '8px 0 10px', fontSize: 15, borderBottom: tab === k ? '3px solid #f0c060' : '3px solid transparent', opacity: tab === k ? 1 : 0.75 }}>{label}</button>
@@ -258,5 +264,41 @@ function EditCrew({ c, busy, sure, twice, onClose, onSave, onRemove }: {
         <p className="small muted" style={{ margin: 0 }}>改了 Email 要重新寄信。</p>
       </div>
     </div>
+  );
+}
+
+/** 第一次打開：輸入負責人 Email → 收 6 位數驗證碼 → 這支手機記到演出當天 */
+function Verify({ url, tkKey, onDone }: { url: string; tkKey: string; onDone: () => void }) {
+  const [g, setG] = useState<{ event: string; leadName: string; email: string; ready: boolean } | null>(null);
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState('');
+  const [otp, setOtp] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { fetch(`${url}?gate=1`, { cache: 'no-store' }).then((r) => r.json()).then((r: Res<{ event: string; leadName: string; email: string; ready: boolean }>) => (r.ok ? setG(r.data) : setErr(r.message))).catch(() => setErr('網路連線異常')); }, [url]);
+  const post = async <T,>(body: unknown): Promise<Res<T>> => {
+    try { return await (await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json(); } catch { return { ok: false, message: '網路連線異常，請再試一次。' }; }
+  };
+  return (
+    <main className="wrap" style={{ maxWidth: 480, padding: 16 }}>
+      <div className="card">
+        <h2>驗票管理・驗證</h2>
+        {g && <p className="small muted" style={{ marginTop: 0 }}>{g.event}{g.leadName ? `・負責人 ${g.leadName}` : ''}<br />只有主辦方登記的負責人 Email（{g.email || '尚未設定'}）可以使用。驗證過的手機可以用到演出當天。</p>}
+        {!sent ? (
+          <form onSubmit={async (e) => { e.preventDefault(); setBusy(true); setErr(''); const r = await post<{ sentTo: string }>({ action: 'otp', email }); setBusy(false); if (r.ok) setSent(r.data.sentTo); else setErr(r.message); }} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <label>負責人 Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoComplete="email" required style={{ width: '100%' }} /></label>
+            <button className="btn pri" disabled={busy || !g?.ready} style={{ padding: '11px 0' }}>{busy ? '寄送中…' : '寄驗證碼'}</button>
+          </form>
+        ) : (
+          <form onSubmit={async (e) => { e.preventDefault(); setBusy(true); setErr(''); const r = await post<{ token: string }>({ action: 'verify', otp }); setBusy(false); if (r.ok) { try { localStorage.setItem(tkKey, r.data.token); } catch { /* 記不住就每次驗證 */ } onDone(); } else setErr(r.message); }} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <p style={{ margin: 0 }}>驗證碼已寄到 {sent}（10 分鐘內有效，也看一下垃圾郵件匣）。</p>
+            <label>6 位數驗證碼<input value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" required style={{ width: '100%', fontSize: 20, letterSpacing: 4 }} /></label>
+            <button className="btn pri" disabled={busy || otp.length !== 6} style={{ padding: '11px 0' }}>{busy ? '驗證中…' : '確認'}</button>
+            <button type="button" className="btn small" onClick={() => { setSent(''); setOtp(''); }}>重新寄送</button>
+          </form>
+        )}
+        {err && <div className="note err" style={{ marginTop: 10 }}>{err}</div>}
+      </div>
+    </main>
   );
 }

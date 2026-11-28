@@ -8,7 +8,12 @@ import { getBookingState, holdSeats, submitOrder } from '@/lib/booking';
 import { createGates, gateInfo, listGates, scan } from '@/lib/ticket';
 import { PRACTICE_QR, clearPractice, liveAt, practiceStats, setLiveAt } from '@/lib/practice';
 import { parseEraQr } from '@/lib/eraQr';
-import { crewFriend, crewSignup, getLead, joinInfo, leadAction, leadState, mailLead, renewLeadLink, saveLead } from '@/lib/crew';
+import { crewFriend, crewSignup, getLead, joinInfo, leadAction as leadAction0, leadState as leadState0, mailLead, renewLeadLink, saveLead, sendLeadOtp, setLeadActive, verifyLeadOtp } from '@/lib/crew';
+
+// 系統管理員身分（後台登入）；驗證流程另外測
+const ADM = { admin: '測試管理員' };
+const leadState = (db: Db, token: string, base: string, now?: Date) => leadState0(db, token, ADM, base, now);
+const leadAction = (db: Db, token: string, a: Parameters<typeof leadAction0>[3], base: string) => leadAction0(db, token, ADM, a, base);
 
 const BASE = 'https://ticket.example.com';
 const T0 = new Date('2026-11-29T10:00:00+08:00');
@@ -199,5 +204,36 @@ describe('驗票志工：報名、分配、寄連結（防誤寄）、換人換�
     const later = await leadState(db, l.token, BASE, new Date(now.getTime() + 5 * 60_000));
     expect(later.positions.find((x) => x.name === '4F左-A')!.online).toBe(false);
     expect(later.positions.find((x) => x.name === '4F左-B')!.openedAt).toBeNull();
+  });
+});
+
+describe('驗票管理頁驗證：只有負責人 Email；系統管理員直接進', () => {
+  it('沒驗證不能看；Email 不對不寄；驗證碼對了這支手機可用；換 Email、換新連結後要重驗；停用時負責人不能用、系統管理員可以', async () => {
+    await saveLead(db, 'admin', { name: '林組長', email: 'lead@example.com', lineId: 'lead123' });
+    const l = await getLead(db);
+    expect(await msg(leadState0(db, l.token, '', BASE))).toContain('驗證');
+    expect(await msg(leadState0(db, l.token, 'random', BASE))).toContain('驗證');
+    expect(await msg(sendLeadOtp(db, l.token, 'other@example.com'))).toContain('沒有權限');
+    const now = new Date('2026-12-01T10:00:00+08:00');
+    expect((await sendLeadOtp(db, l.token, 'LEAD@example.com', now)).sentTo).toBe('l***@example.com');
+    expect(await msg(sendLeadOtp(db, l.token, 'lead@example.com', new Date(now.getTime() + 30_000)))).toContain('1 分鐘');
+    const [n] = await db.select().from(t.notification).where(eq(t.notification.template, 'crew_otp'));
+    expect(n.recipient).toBe('lead@example.com');
+    const code = n.content.match(/驗證碼是 (\d{6})/)![1];
+    expect(await msg(verifyLeadOtp(db, l.token, code === '000000' ? '111111' : '000000', now))).toContain('不對');
+    const { token: dev } = await verifyLeadOtp(db, l.token, code, now);
+    const st = await leadState0(db, l.token, dev, BASE, now);
+    expect(st.asAdmin).toBe(false);
+    expect(await msg(leadAction0(db, l.token, dev, { action: 'pos.add', names: ['2M-A'] }, BASE, now))).toBe('');
+    // 演出當天 23:00 後失效
+    expect(await msg(leadState0(db, l.token, dev, BASE, new Date('2026-12-09T23:30:00+08:00')))).toContain('驗證');
+    // 停用：負責人不能用，系統管理員照樣可以看
+    await setLeadActive(db, 'admin', false);
+    expect(await msg(leadState0(db, l.token, dev, BASE, now))).toContain('停用');
+    expect((await leadState0(db, l.token, ADM, BASE, now)).asAdmin).toBe(true);
+    await setLeadActive(db, 'admin', true);
+    // 換負責人 Email：已驗證的手機要重驗
+    await saveLead(db, 'admin', { name: '林組長', email: 'new@example.com', lineId: 'lead123' });
+    expect(await msg(leadState0(db, l.token, dev, BASE, now))).toContain('驗證');
   });
 });

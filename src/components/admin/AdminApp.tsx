@@ -2411,12 +2411,12 @@ function CrewAdmin() {
           </>}
         </div>
         {l.token && <div className="row small" style={{ marginTop: 6 }}>
-          <span className="muted">報名 {l.crew} 人・{l.active ? '使用中' : '已停用'}</span>
+          <span className="muted">報名 {l.crew} 人・已驗證手機 {l.devices} 支・{l.active ? '使用中' : '已停用'}</span>
           <button className="btn small" disabled={busy} onClick={() => act({ action: 'crew.lead.active', active: !l.active }, l.active ? '已停用管理與報名連結' : '已啟用')}>{l.active ? '停用' : '啟用'}</button>
           <button className="btn small" disabled={busy} onClick={() => confirm2('crew-rm', () => act({ action: 'crew.lead.renew', which: 'manage' }, '已換新管理連結，舊的立即失效'))}>{sure === 'crew-rm' ? '再按一次確認' : '換新管理連結'}</button>
           <button className="btn small" disabled={busy} onClick={() => confirm2('crew-rj', () => act({ action: 'crew.lead.renew', which: 'join' }, '已換新報名連結，舊的立即失效'))}>{sure === 'crew-rj' ? '再按一次確認' : '換新報名連結'}</button>
         </div>}
-        <p className="small muted">管理連結看得到志工姓名、Email、電話，只給負責人。驗票位置＝上面的「驗票門口」，負責人也可以在管理頁新增。</p>
+        <p className="small muted">管理頁要用負責人 Email 收驗證碼才能進（驗證過的手機用到演出當天；換 Email 或換新管理連結要重驗）。您在這個瀏覽器已登入後台，按「開啟管理頁」直接進、不用驗證（停用中也能看），操作記在您的名下。驗票位置＝上面的「驗票門口」，負責人也可以在管理頁新增。</p>
       </>}
       <h3>練習紀錄 {p.total} 筆 <a className="small" href="/crew/practice" target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>練習單</a></h3>
       {p.byGate.length ? <div className="small">{p.byGate.map((g) => `${gateName(g.gateId)} ${g.n}（${g.kinds.join('、')}）`).join('；')}</div> : <p className="small muted" style={{ margin: 0 }}>還沒有人練習。</p>}
