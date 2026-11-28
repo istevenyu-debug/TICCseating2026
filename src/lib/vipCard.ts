@@ -3,7 +3,10 @@
  * 截圖用 LINE 傳；也可在每位 VIP 下方「寄給本人」（填或沿用 Email，寄一封只有他自己 QR 的信）。
  * - 範圍：類別 VIP、未取消的 VIP／公益訂單（之後新增、換座位自動更新）。
  * - 鎖負責人 Email：輸入 Email → 寄 6 位數驗證碼（10 分鐘、最多錯 5 次）→ 通過後這支手機記到演出當天 23:00（使用者 11/28 定）。
- * - 負責人不能改姓名、座位；寄給本人不換 QR（同一張票）。寄過的「演出前自動寄」不再重複。
+ * - 負責人不能改已有的姓名、座位；寄給本人不換 QR（同一張票）。寄過的「演出前自動寄」不再重複。
+ * - 11/28：沒有姓名的票卡，負責人可以補填（只填空白，不能改已有的）；QR 不變。
+ * - 11/28：負責人可以自己劃 VIP 座位：VIP 排＋2 樓第 1–12 排的空位（可賣的空位與 VIP 排；保留席、輪椅席、年代、揪團贈席不行）；
+ *   每席一筆 VIP（類別 VIP、不寄信），票卡馬上出現在頁面。不能自己取消，要取消請找後台。
  * 設定存 app_setting `vipcard`（全場一條，可停用、換新連結）。
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto';
@@ -13,11 +16,18 @@ import * as t from '@/db/schema';
 import { ticketData, linkUrl } from './admin';
 import { BookingError } from './booking';
 import { qrSecret, qrValue } from './qr';
+import { createVip } from './vip';
+import { seatLabel } from './layout';
+import type { ViewSeatStatus } from './booking';
 
 const KEY = 'vipcard';
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const OTP_MIN = 10;
 const OTP_TRIES = 5;
+/** 負責人自己劃位：2 樓第 1–N 排（加 VIP 排） */
+export const VIP_SELF_ROWS = 12;
+/** 沒有姓名（空白、只有符號、待定之類） */
+export const blankName = (s: string | null | undefined) => /^[\s\-—_?？.。、]*$|^(待定|未定|待補|保留|空|無)$/.test((s ?? '').trim());
 
 type Dev = { h: string; exp: string };
 export type VipCardLink = {
@@ -149,7 +159,7 @@ export async function vipCardPage(db: Db, code: string, token: string, now = new
     const sent = n.find((x) => x.status === 'sent');
     const queued = n.find((x) => x.status === 'queued');
     return {
-      serial: tk.serial, value: qrValue(secret, tk.serial), seat: tk.label, name: tk.holderName || o.buyerName || '', org: o.vipOrg,
+      serial: tk.serial, value: qrValue(secret, tk.serial), seat: tk.label, seatId: tk.seatId, name: blankName(tk.holderName) ? '' : tk.holderName, needName: blankName(tk.holderName), org: o.vipOrg,
       orderId: o.id, email: o.buyerEmail ? maskEmail(o.buyerEmail) : '', sentAt: sent?.sentAt?.toISOString() ?? null,
       sending: !!queued && (!queued.sendAfter || queued.sendAfter <= now), entered: used.some((u) => u.serial === tk.serial),
     };
@@ -183,4 +193,81 @@ export async function vipCardSend(db: Db, code: string, token: string, v: { orde
     await tx.insert(t.auditLog).values({ actor: `VIP負責人:${l.name}`, action: 'vipcard_send', target: `order:${o.id}`, detail: JSON.stringify({ email, before: o.buyerEmail }) });
   });
   return { to: maskEmail(email) };
+}
+
+/** 補填姓名：只能填空白的（已有姓名的不能改）；QR 不變 */
+export async function vipCardName(db: Db, code: string, token: string, v: { orderId: number; seatId: string; name: string }, now = new Date()) {
+  const l = await authed(db, code, token, now);
+  const ev = await ev0(db);
+  const name = v.name.trim().slice(0, 60);
+  if (blankName(name)) throw new BookingError('INVALID', '請填姓名職稱');
+  const [o] = await db.select().from(t.orders).where(and(eq(t.orders.id, v.orderId), eq(t.orders.eventId, ev.id), eq(t.orders.vip, true), eq(t.orders.status, 'paid'), eq(t.orders.vipCat, 'VIP')));
+  if (!o) throw new BookingError('NOT_FOUND', '找不到這位 VIP，請重新整理頁面。');
+  const [os] = await db.select().from(t.orderSeat).where(and(eq(t.orderSeat.orderId, o.id), eq(t.orderSeat.seatId, v.seatId)));
+  if (!os) throw new BookingError('NOT_FOUND', '找不到這個座位，請重新整理頁面。');
+  if (!blankName(os.holderName)) throw new BookingError('INVALID', '這席已經有姓名了，要修改請聯絡主辦方。');
+  await db.transaction(async (tx) => {
+    await tx.update(t.orderSeat).set({ holderName: name }).where(and(eq(t.orderSeat.orderId, o.id), eq(t.orderSeat.seatId, v.seatId)));
+    if (blankName(o.buyerName)) {
+      await tx.update(t.orders).set({ buyerName: name }).where(eq(t.orders.id, o.id));
+      await tx.update(t.inviteLink).set({ name }).where(eq(t.inviteLink.id, o.linkId));
+    }
+    await tx.insert(t.auditLog).values({ actor: `VIP負責人:${l.name}`, action: 'vipcard_name', target: `order:${o.id}`, detail: JSON.stringify({ seatId: v.seatId, name }) });
+  });
+  return { ok: true };
+}
+
+/** 負責人自己劃位：座位圖（VIP 排＋2 樓第 1–12 排） */
+async function selfSeats(db: Db, eventId: number) {
+  return db.select({
+    id: t.venueSeat.id, x: t.venueSeat.x, y: t.venueSeat.y, rowNo: t.venueSeat.rowNo, code: t.venueSeat.code, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType,
+    zoneId: t.eventSeat.zoneId, status: t.eventSeat.status, sellable: t.seatUsage.sellable, usage: t.seatUsage.code,
+  }).from(t.eventSeat).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.eventSeat.seatId)).innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId))
+    .where(and(eq(t.eventSeat.eventId, eventId), eq(t.venueSeat.floor, '2M')));
+}
+type SelfSeat = Awaited<ReturnType<typeof selfSeats>>[number];
+const inRange = (s: SelfSeat, vipInstalled: boolean) => (s.seatType === 'vip' ? vipInstalled : s.seatType !== 'wheelchair' && s.rowNo != null && s.rowNo >= 1 && s.rowNo <= VIP_SELF_ROWS);
+const canTake = (s: SelfSeat) => s.status === 'free' && !['join-gift', 'era-sold'].includes(s.usage) && (s.sellable || s.seatType === 'vip');
+
+export async function vipCardSeatMap(db: Db, code: string, token: string, now = new Date()) {
+  await authed(db, code, token, now);
+  const ev = await ev0(db);
+  const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M')));
+  const rows = (await selfSeats(db, ev.id)).filter((s) => inRange(s, ev.vipInstalled));
+  return {
+    vipInstalled: ev.vipInstalled, rows: VIP_SELF_ROWS,
+    zones: zones.map((z) => ({ id: z.id, name: z.name, color: z.color, gift: z.price === 0 })),
+    seats: rows.map((s) => ({
+      id: s.id, x: s.x, y: s.y, no: s.seatNo, type: s.seatType, code: s.code, label: seatLabel(s), zoneId: s.zoneId, bundle: null as string | null,
+      status: (canTake(s) ? 'free' : s.status !== 'free' ? 'sold' : 'blocked') as ViewSeatStatus,
+    })),
+  };
+}
+
+/** 負責人自己劃位：每席一筆 VIP（類別 VIP、不寄信）；任何一席不行就都不建立 */
+export async function vipCardBook(db: Db, code: string, token: string, v: { seats: { seatId: string; name: string }[]; org?: string }, now = new Date()) {
+  const l = await authed(db, code, token, now);
+  const ev = await ev0(db);
+  const list = v.seats.map((x) => ({ seatId: x.seatId, name: x.name.trim().slice(0, 60) }));
+  if (!list.length) throw new BookingError('INVALID', '請先選座位');
+  if (list.length > 20) throw new BookingError('INVALID', '一次最多 20 席');
+  if (new Set(list.map((x) => x.seatId)).size !== list.length) throw new BookingError('INVALID', '座位重複了');
+  if (list.some((x) => blankName(x.name))) throw new BookingError('INVALID', '每一席都要填姓名職稱');
+  const all = await selfSeats(db, ev.id);
+  const pick = list.map((x) => all.find((s) => s.id === x.seatId));
+  if (pick.some((s) => !s || !inRange(s, ev.vipInstalled))) throw new BookingError('INVALID', `只能選 VIP 排和 2 樓第 1–${VIP_SELF_ROWS} 排的座位`);
+  const taken = pick.filter((s) => !canTake(s!));
+  if (taken.length) throw new BookingError('SEAT_TAKEN', `${taken.map((s) => seatLabel(s!)).join('、')} 已經不能選了，請重新選。`, taken.map((s) => s!.id));
+  const org = (v.org ?? '').trim().slice(0, 60);
+  const done: string[] = [];
+  for (const x of list) {
+    try {
+      await createVip(db, `VIP負責人:${l.name}`, { name: x.name, phone: '', email: '', seatIds: [x.seatId], mode: 'none', cat: 'VIP', org, holders: [x.name], note: `VIP 負責人自己劃位 ${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}` });
+      done.push(x.seatId);
+    } catch (e) {
+      const lb = (id: string) => seatLabel(all.find((s) => s.id === id)!);
+      throw new BookingError('SEAT_TAKEN', `${done.length ? `已完成 ${done.map(lb).join('、')}；` : ''}${lb(x.seatId)} 沒有成功（${(e as Error).message}），請重新選。`);
+    }
+  }
+  return { count: done.length };
 }

@@ -4,7 +4,7 @@ import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
 import * as t from '@/db/schema';
 import { createVip } from '@/lib/vip';
-import { sendVipOtp, setVipCard, verifyVipOtp, vipCardAction, vipCardPage, vipCardSend } from '@/lib/vipCard';
+import { sendVipOtp, setVipCard, verifyVipOtp, vipCardAction, vipCardBook, vipCardName, vipCardPage, vipCardSeatMap, vipCardSend } from '@/lib/vipCard';
 import { qrSecret, qrValue } from '@/lib/qr';
 
 let db: Db;
@@ -80,5 +80,47 @@ describe('VIP 票卡連結', () => {
     expect(await msg(vipCardSend(db, l!.code, token, { orderId: charity.id }, BASE, at(5)))).toContain('找不到');
     p = await vipCardPage(db, l!.code, token, at(6));
     expect(p.cards.filter((c) => c.orderId === a.orderId).every((c) => c.email === 'w***@corp.com')).toBe(true);
+  });
+
+  it('沒姓名的票卡可以補填（只填空白、QR 不變）；已有姓名不能改', async () => {
+    const a = await createVip(db, '網管', { name: '王董事長', phone: '', email: '', seatIds: ['V-1', 'V-3'], mode: 'none', cat: 'VIP', holders: ['王董事長', '王夫人'] }, BASE);
+    await db.update(t.orderSeat).set({ holderName: '' }).where(eq(t.orderSeat.seatId, 'V-3'));
+    const l = await setVipCard(db, '網管', { name: '陳秘書', email: 'boss@example.com' });
+    const token = await login(l!.code);
+    let p = await vipCardPage(db, l!.code, token, at(1));
+    const blank = p.cards.find((c) => c.seatId === 'V-3')!;
+    expect(blank).toMatchObject({ name: '', needName: true });
+    const qr = blank.value;
+    expect(await msg(vipCardName(db, l!.code, token, { orderId: a.orderId, seatId: 'V-3', name: '  ' }, at(1)))).toContain('請填');
+    await vipCardName(db, l!.code, token, { orderId: a.orderId, seatId: 'V-3', name: '林小姐 執行長' }, at(1));
+    p = await vipCardPage(db, l!.code, token, at(2));
+    expect(p.cards.find((c) => c.seatId === 'V-3')).toMatchObject({ name: '林小姐 執行長', needName: false, value: qr });
+    expect(await msg(vipCardName(db, l!.code, token, { orderId: a.orderId, seatId: 'V-1', name: '別人' }, at(2)))).toContain('已經有姓名');
+    expect(await msg(vipCardName(db, l!.code, '', { orderId: a.orderId, seatId: 'V-3', name: 'x' }, at(2)))).toContain('驗證');
+  });
+
+  it('負責人自己劃位：只能選 VIP 排與 2 樓第 1–12 排的空位；每席一筆 VIP、不寄信；不行的座位整批不建立', async () => {
+    await db.update(t.event).set({ vipInstalled: true });
+    const l = await setVipCard(db, '網管', { name: '陳秘書', email: 'boss@example.com' });
+    const token = await login(l!.code);
+    const m = await vipCardSeatMap(db, l!.code, token, at(1));
+    const rows = new Set(m.seats.map((s) => s.label.match(/^第(\d+)排/)?.[1]).filter(Boolean).map(Number));
+    expect(Math.max(...rows)).toBe(12);
+    expect(m.seats.some((s) => s.id === 'V-1' && s.status === 'free')).toBe(true);
+    expect(m.seats.some((s) => s.id.startsWith('13-'))).toBe(false);
+    expect(await msg(vipCardBook(db, l!.code, token, { seats: [{ seatId: '13-1', name: 'x' }] }, at(1)))).toContain('第 1–12 排');
+    expect(await msg(vipCardBook(db, l!.code, token, { seats: [{ seatId: '3-1', name: '' }] }, at(1)))).toContain('姓名');
+    // 已有人的座位 → 整批不建立
+    await createVip(db, '網管', { name: '已有人', phone: '', email: '', seatIds: ['3-2'], mode: 'none', cat: 'VIP' }, BASE);
+    expect(await msg(vipCardBook(db, l!.code, token, { seats: [{ seatId: '3-1', name: '甲' }, { seatId: '3-2', name: '乙' }] }, at(1)))).toContain('不能選');
+    expect((await vipCardPage(db, l!.code, token, at(1))).total).toBe(1);
+    const n0 = (await db.select().from(t.notification)).length;
+    const r = await vipCardBook(db, l!.code, token, { seats: [{ seatId: 'V-5', name: '甲 理事' }, { seatId: '3-1', name: '乙 董事' }], org: '丙會' }, at(2));
+    expect(r.count).toBe(2);
+    const p = await vipCardPage(db, l!.code, token, at(3));
+    expect(p.total).toBe(3);
+    expect(p.cards.filter((c) => c.org === '丙會').map((c) => c.name).sort()).toEqual(['乙 董事', '甲 理事']);
+    expect((await db.select().from(t.notification)).length).toBe(n0); // 不寄信
+    expect((await vipCardSeatMap(db, l!.code, token, at(3))).seats.find((s) => s.id === '3-1')!.status).toBe('sold');
   });
 });

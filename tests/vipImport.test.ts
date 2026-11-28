@@ -131,9 +131,11 @@ describe('VIP／公益 Excel 匯入', () => {
     await createLink(db, { eventId: 1, code: 'HON111', name: '尊', phone: '0911111111', quota: 0, expiresAt: new Date('2026-12-09T23:59:59+08:00') });
     await A.publish(db, 'admin');
     const [link] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.code, 'HON111'));
-    const combo = (await db.select().from(t.combo))[0].id;
-    const [paid] = await db.insert(t.priceZone).values({ eventId: 1, name: '尊榮席', color: '#aa0000', price: 30000 }).returning();
-    const [gift] = await db.insert(t.priceZone).values({ eventId: 1, name: '尊榮贈席', color: '#00aa00', price: 0 }).returning();
+    // 跟正式資料一樣：方案名稱「尊榮席」，票種是金區＋贈席（票種名稱沒有「尊榮」）
+    const [hc] = await db.insert(t.combo).values({ eventId: 1, name: '尊榮席（1+2）', price: 30000 }).returning();
+    const combo = hc.id;
+    const [paid] = await db.insert(t.priceZone).values({ eventId: 1, name: '金區', color: '#aa0000', price: 10000 }).returning();
+    const [gift] = await db.insert(t.priceZone).values({ eventId: 1, name: '贈席', color: '#00aa00', price: 0 }).returning();
     const order = async (no: string, buyer: string, seats: [string, number, string][]) => {
       const [o] = await db.insert(t.orders).values({ eventId: 1, linkId: link.id, comboId: combo, status: 'paid', amount: 0, orderNo: no, buyerName: buyer }).returning();
       for (const [id, zone, holder] of seats) {
