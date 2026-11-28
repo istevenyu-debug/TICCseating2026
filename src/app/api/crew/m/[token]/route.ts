@@ -32,6 +32,8 @@ const body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('verify'), otp: z.string().max(10) }),
   z.object({ action: z.literal('pos.add'), names: z.array(z.string().max(20)).min(1).max(20) }),
   z.object({ action: z.literal('pos.renew'), gateId: id }),
+  z.object({ action: z.literal('pos.edit'), gateId: id, name: z.string().max(20).optional(), active: z.boolean().optional() }),
+  z.object({ action: z.literal('pos.delete'), gateId: id }),
   z.object({ action: z.literal('assign'), gateId: id, crewId: id.nullable() }),
   z.object({ action: z.literal('mail.preview') }),
   z.object({ action: z.literal('mail.send'), ids: z.array(id).max(300) }),

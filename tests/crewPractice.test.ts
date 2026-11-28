@@ -237,3 +237,31 @@ describe('驗票管理頁驗證：只有負責人 Email；系統管理員直接�
     expect(await msg(leadState0(db, l.token, dev, BASE, now))).toContain('驗證');
   });
 });
+
+describe('負責人設定驗票位置', () => {
+  it('新增、改名（不能重名）、停用（連結不能用）、刪除（已有正式入場的不能刪）', async () => {
+    await saveLead(db, 'admin', { name: '林組長', email: 'lead@example.com', lineId: '' });
+    const l = await getLead(db);
+    await leadAction(db, l.token, { action: 'pos.add', names: ['2M-A', '2M-B'] }, BASE);
+    let st = await leadState(db, l.token, BASE);
+    const pid = (n: string) => st.positions.find((p) => p.name === n)!.id;
+    expect(await msg(leadAction(db, l.token, { action: 'pos.edit', gateId: pid('2M-A'), name: '2M-B' }, BASE))).toContain('已經有');
+    await leadAction(db, l.token, { action: 'pos.edit', gateId: pid('2M-A'), name: '2M 左門-A' }, BASE);
+    st = await leadState(db, l.token, BASE);
+    expect(st.positions.map((p) => p.name)).toContain('2M 左門-A');
+    await leadAction(db, l.token, { action: 'pos.edit', gateId: pid('4F左-A'), active: false }, BASE);
+    expect(await msg(gateInfo(db, tok['4F左-A']))).toContain('停用');
+    // 4F左-B 有正式入場紀錄：不能刪
+    await scan(db, tok['4F左-B'], { qr }, after);
+    expect(await msg(leadAction(db, l.token, { action: 'pos.delete', gateId: pid('4F左-B') }, BASE))).toContain('不能刪除');
+    // 2M-B 有人、有練習：可以刪，人回到未分配
+    const c = await crewSignup(db, l.joinToken, { name: '王', email: 'w@x.co', phone: '0912345678' });
+    st = await leadState(db, l.token, BASE);
+    await leadAction(db, l.token, { action: 'assign', gateId: pid('2M-B'), crewId: st.crew[0].id }, BASE);
+    await leadAction(db, l.token, { action: 'pos.delete', gateId: pid('2M-B') }, BASE);
+    st = await leadState(db, l.token, BASE);
+    expect(st.positions.map((p) => p.name)).not.toContain('2M-B');
+    expect(st.crew[0].gateId).toBeNull();
+    expect(c.code).toBeTruthy();
+  });
+});

@@ -280,6 +280,8 @@ async function renewIfSent(db: Db, actor: string, gateId: number, prev: typeof t
 export type LeadAction =
   | { action: 'pos.add'; names: string[] }
   | { action: 'pos.renew'; gateId: number }
+  | { action: 'pos.edit'; gateId: number; name?: string; active?: boolean }
+  | { action: 'pos.delete'; gateId: number }
   | { action: 'assign'; gateId: number; crewId: number | null }
   | { action: 'mail.preview' }
   | { action: 'mail.send'; ids: number[] }
@@ -311,6 +313,34 @@ export async function leadAction(db: Db, token: string, auth: CrewAuth, a: LeadA
       await gateOf(a.gateId);
       await db.update(t.gate).set({ token: newToken(), openedAt: null, seenAt: null }).where(eq(t.gate.id, a.gateId));
       await db.insert(t.auditLog).values({ actor, action: 'gate_update', target: `gate:${a.gateId}`, detail: JSON.stringify({ renewToken: true }) });
+      return { ok: true };
+    }
+    case 'pos.edit': {
+      const g = await gateOf(a.gateId);
+      const set: Partial<typeof t.gate.$inferInsert> = {};
+      if (a.name !== undefined) {
+        const name = clean(a.name, 20);
+        if (!name) throw new BookingError('INVALID', '請填位置名稱');
+        const [dup] = await db.select().from(t.gate).where(and(eq(t.gate.eventId, ev.id), eq(t.gate.name, name)));
+        if (dup && dup.id !== g.id) throw new BookingError('INVALID', `已經有「${name}」了`);
+        set.name = name;
+      }
+      if (a.active !== undefined) set.active = a.active;
+      await db.update(t.gate).set(set).where(eq(t.gate.id, g.id));
+      await db.insert(t.auditLog).values({ actor, action: 'gate_update', target: `gate:${g.id}`, detail: JSON.stringify({ from: g.name, ...a }) });
+      return { ok: true };
+    }
+    case 'pos.delete': {
+      // 已經有正式入場紀錄的位置不能刪（紀錄要留著看是哪個門），改用停用
+      const g = await gateOf(a.gateId);
+      const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(t.checkin).where(eq(t.checkin.gateId, g.id));
+      if (n) throw new BookingError('INVALID', `「${g.name}」已經驗過 ${n} 張票，不能刪除，請改用「停用」。`);
+      await db.transaction(async (tx) => {
+        await tx.update(t.crew).set({ gateId: null, updatedAt: new Date() }).where(eq(t.crew.gateId, g.id));
+        await tx.delete(t.checkinPractice).where(eq(t.checkinPractice.gateId, g.id));
+        await tx.delete(t.gate).where(eq(t.gate.id, g.id));
+        await tx.insert(t.auditLog).values({ actor, action: 'gate_delete', target: `gate:${g.id}`, detail: g.name });
+      });
       return { ok: true };
     }
     case 'assign': {

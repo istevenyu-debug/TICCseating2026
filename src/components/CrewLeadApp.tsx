@@ -33,6 +33,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [edit, setEdit] = useState<Crew | null>(null);
   const [newPos, setNewPos] = useState('');
+  const [editPos, setEditPos] = useState(false);
   const [standalone, setStandalone] = useState(true);
   const [needAuth, setNeedAuth] = useState(false);
   const tkKey = `crew-tk:${token}`;
@@ -71,7 +72,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
 
   const assigned = st.crew.filter((c) => c.gateId);
   const free = st.crew.filter((c) => !c.gateId);
-  const staffed = st.positions.filter((p) => p.crewId);
+  const staffed = st.positions.filter((p) => p.crewId && p.active);
   const online = staffed.filter((p) => p.online).length;
   const posOf = (c: Crew) => st.positions.find((p) => p.id === c.gateId);
   const mailBadge = (c: Crew) => {
@@ -142,8 +143,12 @@ export default function CrewLeadApp({ token }: { token: string }) {
 
         {tab === 'assign' && <>
           <div className="card">
-            <h2>位置 {st.positions.length} 個 <span className="small muted">一個位置一人、一條驗票連結</span></h2>
-            {st.positions.map((p) => (
+            <h2>位置 {st.positions.filter((p) => p.active).length} 個 <button className="btn small" onClick={() => setEditPos(!editPos)}>{editPos ? '完成' : '改名／停用／刪除'}</button></h2>
+            {editPos && st.positions.map((p) => <PosEdit key={p.id} p={p} busy={busy} sure={sure} twice={twice}
+              onSave={(name) => act({ action: 'pos.edit', gateId: p.id, name }, `已改名為 ${name}`)}
+              onActive={(active) => act({ action: 'pos.edit', gateId: p.id, active }, active ? `已啟用 ${p.name}` : `已停用 ${p.name}（連結暫時不能用）`)}
+              onDelete={() => act({ action: 'pos.delete', gateId: p.id }, `已刪除 ${p.name}`)} />)}
+            {!editPos && st.positions.filter((p) => p.active).map((p) => (
               <div key={p.id} style={{ borderTop: `1px solid ${C.line}`, padding: '8px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <b style={{ minWidth: 72 }}>{p.name}{!p.active && <span className="small" style={{ color: C.bad }}>（停用）</span>}</b>
                 <select value={p.crewId ?? ''} disabled={busy} style={{ flex: 1, maxWidth: 220 }} onChange={async (e) => {
@@ -164,6 +169,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
               <input value={newPos} onChange={(e) => setNewPos(e.target.value)} placeholder="新增位置，例：4F右-A 4F右-B" style={{ flex: 1 }} />
               <button className="btn" disabled={busy || !newPos.trim()}>新增</button>
             </form>
+            {!editPos && st.positions.some((p) => !p.active) && <p className="small muted">已停用：{st.positions.filter((p) => !p.active).map((p) => p.name).join('、')}</p>}
             <p className="small muted" style={{ marginBottom: 0 }}>建議一門兩人：A 專門掃 QR，B 處理貴賓券、問題票。換人時，若舊的人已經拿到連結，系統會自動換新連結（舊的立即失效）。</p>
           </div>
           {!!free.length && <div className="card"><h2>還沒分配 {free.length} 人</h2><div className="small">{free.map((c) => c.name).join('、')}</div></div>}
@@ -219,7 +225,7 @@ export default function CrewLeadApp({ token }: { token: string }) {
           </div>
           <div className="card">
             <h2>各位置 <span className="small muted">每 10 秒更新</span></h2>
-            {st.positions.map((p) => {
+            {st.positions.filter((p) => p.active).map((p) => {
               const c = st.crew.find((x) => x.id === p.crewId);
               const dot = !p.crewId ? '⚪' : p.online ? '🟢' : p.openedAt ? '🔴' : '⚪';
               return (
@@ -242,6 +248,21 @@ export default function CrewLeadApp({ token }: { token: string }) {
         </>}
       </div>
     </main>
+  );
+}
+
+function PosEdit({ p, busy, sure, twice, onSave, onActive, onDelete }: {
+  p: Pos; busy: boolean; sure: string; twice: (k: string, fn: () => void) => void; onSave: (name: string) => void; onActive: (v: boolean) => void; onDelete: () => void;
+}) {
+  const [name, setName] = useState(p.name);
+  return (
+    <div style={{ borderTop: '1px solid #e3e7ef', padding: '8px 0', display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+      <input value={name} onChange={(e) => setName(e.target.value)} style={{ flex: 1, minWidth: 110 }} />
+      <button className="btn small" disabled={busy || !name.trim() || name.trim() === p.name} onClick={() => onSave(name.trim())}>改名</button>
+      <button className="btn small" disabled={busy} onClick={() => onActive(!p.active)}>{p.active ? '停用' : '啟用'}</button>
+      <button className="btn small danger" disabled={busy} onClick={() => twice(`pd${p.id}`, onDelete)}>{sure === `pd${p.id}` ? '確定刪除？' : '刪除'}</button>
+      {p.crewName && <span className="small muted" style={{ width: '100%' }}>目前：{p.crewName}（刪除或停用後他的連結不能用）</span>}
+    </div>
   );
 }
 
