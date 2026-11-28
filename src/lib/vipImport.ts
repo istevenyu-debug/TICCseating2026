@@ -17,6 +17,7 @@ import { BookingError } from './booking';
 import { seatLabel, vipSeatId } from './layout';
 import { getVipCats, setVipCats } from './checkinBoard';
 import { createVip, listVips, setVipMode } from './vip';
+import { isGearUsage } from './gear';
 
 export const IMPORT_HEAD = ['席號', '姓名職稱', '單位', '類別', 'email', '推薦人'] as const;
 export const IMPORT_NOTE = 'Excel 匯入';
@@ -78,7 +79,7 @@ export async function previewImport(db: Db, b64: string) {
   const allIds = [...new Set(raws.flatMap((r) => r.seat.split(/[、,，;；\n]/).map((x) => parseSeat(x)).filter((x): x is string => !!x)))];
   const info = allIds.length ? await db.select({
     id: t.venueSeat.id, rowNo: t.venueSeat.rowNo, seatNo: t.venueSeat.seatNo, seatType: t.venueSeat.seatType,
-    status: t.eventSeat.status, orderId: t.eventSeat.orderId, usage: t.seatUsage.code,
+    status: t.eventSeat.status, orderId: t.eventSeat.orderId, usage: t.seatUsage.code, usageName: t.seatUsage.name,
   }).from(t.venueSeat).innerJoin(t.eventSeat, and(eq(t.eventSeat.seatId, t.venueSeat.id), eq(t.eventSeat.eventId, ev.id)))
     .innerJoin(t.seatUsage, eq(t.seatUsage.id, t.eventSeat.usageId)).where(inArray(t.venueSeat.id, allIds)) : [];
   const orderIds = [...new Set(info.map((s) => s.orderId).filter((x): x is number => !!x))];
@@ -106,6 +107,8 @@ export async function previewImport(db: Db, b64: string) {
     const done = seats.every((id) => { const s = info.find((x) => x.id === id)!; const o = owners.find((x) => x.id === s.orderId);
       return s.status === 'sold' && o?.vip && o.status === 'paid' && holders.find((h) => h.orderId === o.id && h.seatId === id)?.name === r.name; });
     if (done) return { ...base, seats, seat: labels.join('、'), cat, status: 'skip', reason: '已匯入過，略過' };
+    const gear = seats.map((id) => info.find((x) => x.id === id)!).find((s) => s.status === 'free' && isGearUsage({ code: s.usage, name: s.usageName }));
+    if (gear) return { ...base, seats, seat: labels.join('、'), cat, status: 'err', reason: `${seatText(gear)} 是器材位（${gear.usageName}），不能安排` };
     const bad = seats.map((id) => info.find((x) => x.id === id)!).filter((s) => s.status !== 'free' || ['join-gift', 'era-sold'].includes(s.usage));
     if (bad.length) {
       const s = bad[0]; const o = owners.find((x) => x.id === s.orderId);

@@ -74,6 +74,24 @@ describe('招待（VIP）', () => {
     await expect(createVip(db, '網管', { name: '甲', phone: '', email: '', seatIds: ['2-1'], mode: 'none' })).rejects.toThrow('已有人訂');
   });
 
+  it('器材位（保留：攝影、不開放（設備/視線））不能安排 VIP／公益；其他保留席（公關）可以；已在自己訂單裡的不擋', async () => {
+    const usage = async (code: string) => (await db.select().from(t.seatUsage).where(eq(t.seatUsage.code, code)))[0];
+    const closed = await usage('closed');
+    const [photo] = await db.insert(t.seatUsage).values({ eventId: 1, code: 'hold-photo', name: '保留：攝影', sellable: false }).returning();
+    const pr = await usage('hold-pr');
+    await db.update(t.eventSeat).set({ usageId: closed.id }).where(eq(t.eventSeat.seatId, '3-1'));
+    await db.update(t.eventSeat).set({ usageId: photo.id }).where(eq(t.eventSeat.seatId, '3-3'));
+    await db.update(t.eventSeat).set({ usageId: pr.id }).where(eq(t.eventSeat.seatId, '3-5'));
+    await expect(createVip(db, '網管', { name: '甲', phone: '', email: '', seatIds: ['3-1'], mode: 'none' })).rejects.toThrow('器材位');
+    await expect(createVip(db, '網管', { name: '甲', phone: '', email: '', seatIds: ['3-5', '3-3'], mode: 'none' })).rejects.toThrow('保留：攝影');
+    const r = await createVip(db, '網管', { name: '乙', phone: '', email: '', seatIds: ['3-5'], mode: 'none' });
+    expect(r.orderNo).toBeTruthy();
+    // 先排好、之後才被塗成器材位：改座位時原本的座位不擋，新加的器材位擋
+    await db.update(t.eventSeat).set({ usageId: photo.id }).where(eq(t.eventSeat.seatId, '3-5'));
+    await updateVipSeats(db, '網管', r.orderId, ['3-5', '3-7']);
+    await expect(updateVipSeats(db, '網管', r.orderId, ['3-5', '3-1'])).rejects.toThrow('器材位');
+  });
+
   it('改座位、改寄送方式、改天數、取消', async () => {
     const r = await createVip(db, '網管', { name: '王董', phone: '', email: 'wang@example.com', seatIds: ['1-1', '1-3'], mode: 'scheduled' });
     await updateVipSeats(db, '網管', r.orderId, ['1-5', '1-7', '1-9']);

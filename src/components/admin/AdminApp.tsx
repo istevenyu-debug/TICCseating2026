@@ -19,6 +19,7 @@ import AdminMap, { type SeatLook } from './AdminMap';
 import { INV_TYPES } from '@/lib/invoiceRules';
 import { appsScript } from '@/lib/formScript';
 import { leaderboard } from '@/lib/leaderboard';
+import { isGearUsage } from '@/lib/gear';
 
 type NotifyPublic = {
   email: { host: string; port: number; user: string; fromName: string; passSet: boolean; ready: boolean };
@@ -3238,9 +3239,18 @@ function Vips() {
     const z = zoneById[s.zoneId];
     if (vip && !mine.has(s.id)) return { kind: 'free', bg: vip.id === openId ? '#f5b800' : '#5b2a86', ink: vip.id === openId ? '#18213a' : '#ffffff', sel: sel.has(s.id), title: `${s.label}・${vip.cat}：${vip.name}` };
     if (s.status !== 'free' && !mine.has(s.id)) return { kind: 'sold', dim: true, title: `${s.label}・已有訂單` };
+    const u = usageOf(s);
+    if (u && !u.sellable && !mine.has(s.id)) {
+      const gear = isGearUsage(u);
+      return { kind: 'free', bg: gear ? 'repeating-linear-gradient(45deg, #2b2f36 0 3px, #5d636e 3px 6px)' : 'repeating-linear-gradient(45deg, #9aa0ab 0 3px, #d3d6dc 3px 6px)', ink: gear ? '#ffffff' : '#18213a', sel: sel.has(s.id), title: `${s.label}・${u.name}${gear ? '（器材位，不能安排）' : ''}` };
+    }
     return { kind: 'free', bg: z?.color ?? '#fff', ink: z ? inkFor(z.color) : '#18213a', sel: sel.has(s.id), title: `${s.label}・${s.code}・${z?.name ?? ''}${usageNote(s)}${s.bundle ? '・連座（招待會拆成單人）' : ''}` };
   };
-  function usageNote(s: Seat) { const u = st.usages.find((x) => x.id === s.usageId); return u && !u.sellable ? `・${u.name}` : ''; }
+  function usageOf(s: Seat) { return st.usages.find((x) => x.id === s.usageId); }
+  function usageNote(s: Seat) { const u = usageOf(s); return u && !u.sellable ? `・${u.name}` : ''; }
+  const isGear = (id: string) => { const s = st.seats.find((x) => x.id === id); const u = s && usageOf(s); return !!u && !mine.has(id) && isGearUsage(u); };
+  const holdCount = new Map<string, number>();
+  st.seats.forEach((s) => { const u = usageOf(s); if (u && !u.sellable && s.status === 'free' && s.installed) holdCount.set(u.name, (holdCount.get(u.name) ?? 0) + 1); });
   const paint = (ids: string[]) => {
     // 不在改座位時，點到已安排的招待座位＝打開清單裡那一位
     const hit = !editing && ids.length ? vipOf.get(ids[0]) : undefined;
@@ -3249,7 +3259,9 @@ function Vips() {
       setTimeout(() => document.getElementById(`vip-row-${hit.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
       return;
     }
-    const ok = ids.filter((id) => { const s = st.seats.find((x) => x.id === id); return s && (s.status === 'free' || mine.has(id)); });
+    const gear = ids.filter(isGear);
+    if (gear.length) setMsg({ kind: 'err', text: `${gear.length} 席是器材位，不能安排 VIP／公益` });
+    const ok = ids.filter((id) => { const s = st.seats.find((x) => x.id === id); return s && !isGear(id) && (s.status === 'free' || mine.has(id)); });
     setSel((p) => { const n = new Set(p); const allOn = ok.every((i) => n.has(i)); ok.forEach((i) => (allOn ? n.delete(i) : n.add(i))); return n; });
   };
   const selLabels = st.seats.filter((s) => sel.has(s.id)).map((s) => s.label);
@@ -3274,7 +3286,7 @@ function Vips() {
     <div className="grid2">
       <div className="pstack">
         <AdminMap seats={st.seats} vipInstalled={st.event.vipInstalled} look={look} onPaint={paint}
-          caption="深紫色＝已安排的 VIP／公益，金色＝清單裡展開的那一位（點紫色座位可直接打開）。點按或拖曳選取空位（紅框）；灰色已有訂單不能選。保留席（例如公關）也可以安排。" />
+          caption={`深紫色＝已安排的 VIP／公益，金色＝清單裡展開的那一位（點紫色座位可直接打開）。點按或拖曳選取空位（紅框）；灰色已有訂單不能選。深色斜線＝器材位（不能安排）；淺色斜線＝其他保留席（例如公關，可以安排）。${holdCount.size ? `　保留空位：${[...holdCount].map(([n, c]) => `${n} ${c} 席`).join('、')}` : ''}`} />
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
             <h2 style={{ margin: 0 }}>VIP／公益清單 <span className="small muted">{live.length} 位・{live.reduce((a, x) => a + x.seats.length, 0)} 席</span></h2>

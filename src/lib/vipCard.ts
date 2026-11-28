@@ -180,7 +180,9 @@ export async function vipCardSend(db: Db, code: string, token: string, v: { orde
   if (!email) throw new BookingError('INVALID', '請填這位 VIP 的 Email。');
   if (!EMAIL.test(email)) throw new BookingError('INVALID', 'Email 格式不對');
   const [last] = await db.select().from(t.notification).where(and(eq(t.notification.orderId, o.id), eq(t.notification.channel, 'email'))).orderBy(desc(t.notification.createdAt)).limit(1);
-  if (last && now.getTime() - last.createdAt.getTime() < 120_000) throw new BookingError('TOO_MANY', '剛剛寄過了，請 2 分鐘後再試。');
+  // 時間差要 ≥ 0：測試用的 now 比資料庫寫入時間早時不算（之前 11/28 10:00 後測試會壞）
+  const ago = last ? now.getTime() - last.createdAt.getTime() : -1;
+  if (last && ago >= 0 && ago < 120_000) throw new BookingError('TOO_MANY', '剛剛寄過了，請 2 分鐘後再試。');
   const [lk] = await db.select().from(t.inviteLink).where(eq(t.inviteLink.id, o.linkId));
   const seats = (await ticketData(db, [o.id])).tickets.map((x) => x.label).join('、');
   const when = ev.showAt.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
