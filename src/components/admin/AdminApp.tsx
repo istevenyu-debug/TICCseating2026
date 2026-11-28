@@ -34,7 +34,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>>; charity?: Awaited<ReturnType<typeof import('@/lib/charity').listCharity>> | null; vipCard?: ReturnType<typeof import('@/lib/vipCard').adminView> };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>>; charity?: Awaited<ReturnType<typeof import('@/lib/charity').listCharity>> | null; vipCard?: ReturnType<typeof import('@/lib/vipCard').adminView>; charityCard?: ReturnType<typeof import('@/lib/vipCard').adminView> };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -3110,24 +3110,26 @@ function VipImport() {
 
 /** 公益劃位專屬連結：一個單位一條，負責人從「保留：公益」座位池選 N 席並填姓名職稱 */
 /** VIP 票卡連結：給 VIP 負責人一頁看全部 VIP 票卡（截圖用 LINE 傳／寄給本人）；鎖負責人 Email */
-function VipCardLink() {
+function VipCardLink({ kind = 'vip' }: { kind?: 'vip' | 'charity' }) {
   const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
-  const v = st.vipCard ?? null;
+  const v = (kind === 'vip' ? st.vipCard : st.charityCard) ?? null;
+  const L = kind === 'vip' ? 'VIP' : '公益';
   const [f, setF] = useState({ name: v?.name ?? '', email: v?.email ?? '' });
   const [edit, setEdit] = useState(!v);
   if (st.user.role !== 'admin') return null;
   const base = typeof window !== 'undefined' ? location.origin : '';
   const url = v ? `${base}/vc/${v.code}` : '';
-  const nVip = st.vips.list.filter((x) => x.status === 'paid' && x.cat === 'VIP').length;
+  const n = st.vips.list.filter((x) => x.status === 'paid' && x.cat === (kind === 'vip' ? 'VIP' : '公益')).length;
   const copy = () => {
     if (!v) return;
-    const text = `${v.name} 您好：這是 VIP 貴賓的票卡頁，所有 VIP 的入場 QR 都在這一頁，每一席一張，截圖後用 LINE 傳給貴賓即可；也可以在每張卡下方按「寄給本人」直接寄到貴賓信箱。第一次打開請輸入您的 Email（${v.email}）收驗證碼。連結：${url}`;
-    navigator.clipboard?.writeText(text).then(() => setMsg({ kind: 'ok', text: '已複製說明＋連結，請私訊給 VIP 負責人' }), () => setMsg({ kind: 'ok', text }));
+    const text = `${v.name} 您好：這是${L}票卡頁，所有${L}的入場 QR 都在這一頁，每一席一張。可以截圖用 LINE 傳，或在卡片下方按「寄給本人」（也有「全部寄出」，會先列出清單給您核對）；對方收到信可以按「確認收到」，您在頁面上就看得到。${kind === 'vip' ? '也可以自己新增 VIP 座位。' : '也可以從公益保留席自己劃位。'}第一次打開請輸入您的 Email（${v.email}）收驗證碼。連結：${url}`;
+    navigator.clipboard?.writeText(text).then(() => setMsg({ kind: 'ok', text: `已複製說明＋連結，請私訊給${L}負責人` }), () => setMsg({ kind: 'ok', text }));
   };
+  const k = kind === 'vip' ? 'vc' : 'gc';
   return (
     <div className="card">
-      <h2>VIP 票卡連結</h2>
-      <p className="small muted" style={{ marginTop: 0 }}>給 VIP 負責人一條連結：一頁看全部 VIP（目前 {nVip} 位，類別 VIP）的票卡，截圖用 LINE 傳，或在卡片下方「寄給本人」。只有下面這個 Email 收得到驗證碼、進得去；之後新增 VIP、換座位會自動更新。負責人不能改姓名、座位。</p>
+      <h2>{L} 票卡連結</h2>
+      <p className="small muted" style={{ marginTop: 0 }}>給{L}負責人一條連結：一頁看全部{L}（目前 {n} 筆，類別 {L}）的票卡，截圖用 LINE 傳、「寄給本人」或「全部寄出」（一定要負責人按才寄）、看誰確認收到；{kind === 'vip' ? '可自己劃 VIP 排與 2 樓 1–12 排' : '可自己劃「保留：公益」的座位'}。已有姓名不能改，要換人＝取消這席再新增（全部留紀錄）。只有下面這個 Email 收得到驗證碼、進得去。</p>
       {v && !edit && (
         <div className="note" style={{ margin: '4px 0' }}>
           <div className="small"><b>{v.name}</b>・{v.email}・{v.status === 'on' ? <b className="ok-text">使用中</b> : <span className="err-text">已停用</span>}・已驗證手機 {v.devices} 支</div>
@@ -3137,19 +3139,19 @@ function VipCardLink() {
             <a className="btn small" href={url} target="_blank" rel="noreferrer">開啟</a>
             <button className="btn small" onClick={() => { setF({ name: v.name, email: v.email }); setEdit(true); }}>改負責人</button>
             {v.status === 'on'
-              ? <button className="btn small danger" disabled={busy} onClick={() => confirm2('vc-off', () => act({ action: 'vipcard.do', what: 'off' }, '已停用 VIP 票卡連結'))}>{sure === 'vc-off' ? '再按一次停用' : '停用'}</button>
-              : <button className="btn small" disabled={busy} onClick={() => act({ action: 'vipcard.do', what: 'on' }, '已啟用，連結不變')}>啟用</button>}
-            <button className="btn small" disabled={busy} onClick={() => confirm2('vc-renew', () => act({ action: 'vipcard.do', what: 'renew' }, '已換新連結，舊連結失效，請重新傳給負責人'))}>{sure === 'vc-renew' ? '再按一次：舊連結失效' : '換新連結'}</button>
+              ? <button className="btn small danger" disabled={busy} onClick={() => confirm2(`${k}-off`, () => act({ action: 'vipcard.do', what: 'off', kind }, `已停用${L}票卡連結`))}>{sure === `${k}-off` ? '再按一次停用' : '停用'}</button>
+              : <button className="btn small" disabled={busy} onClick={() => act({ action: 'vipcard.do', what: 'on', kind }, '已啟用，連結不變')}>啟用</button>}
+            <button className="btn small" disabled={busy} onClick={() => confirm2(`${k}-renew`, () => act({ action: 'vipcard.do', what: 'renew', kind }, '已換新連結，舊連結失效，請重新傳給負責人'))}>{sure === `${k}-renew` ? '再按一次：舊連結失效' : '換新連結'}</button>
           </div>
         </div>
       )}
       {edit && <form onSubmit={async (e) => {
         e.preventDefault();
-        const r = await act({ action: 'vipcard.set', ...f }, v ? '已更新負責人' : '已建立 VIP 票卡連結，按「複製說明＋連結」私訊給負責人');
+        const r = await act({ action: 'vipcard.set', ...f, kind }, v ? '已更新負責人' : `已建立${L}票卡連結，按「複製說明＋連結」私訊給負責人`);
         if (r) setEdit(false);
       }}>
         <div className="fields">
-          <label className="f">VIP 負責人姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+          <label className="f">{L}負責人姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
           <label className="f">Email（驗證碼寄這裡）<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
         </div>
         {v && v.email !== f.email.trim().toLowerCase() && <p className="small muted" style={{ margin: '4px 0 0' }}>改 Email 後，已驗證的手機要重新驗證；連結不變。</p>}
@@ -3369,6 +3371,7 @@ function Vips() {
       <div className="side">
         <VipImport />
         <VipCardLink />
+        <VipCardLink kind="charity" />
         <CharityLinks />
         {editing ? (
           <div className="card">

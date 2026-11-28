@@ -279,7 +279,7 @@ export function niceMail(template: string, text: string, fromName = ''): MailExt
   const { ev, url, greet, paras } = partsOf(text);
   const button = template === 'join_rlink' || template === 'join_report' || template === 'join_fix' || template === 'join_issue' || template === 'join_group' ? '開啟回報頁'
     : ['join_plink', 'join_soon', 'join_turn', 'join_missed', 'join_kept', 'join_gift_ok'].includes(template) ? '開啟劃位頁'
-      : template === 'join_gift' ? '選擇取票方式' : template === 'vip_otp' ? '回到 VIP 票卡頁' : '開啟連結';
+      : template === 'join_gift' ? '選擇取票方式' : template === 'vip_otp' ? '回到票卡頁' : '開啟連結';
   return { html: mailLayout({ ev, title: MAIL_TITLE[template] ?? '通知', greet, paras, url, button, fromName }) };
 }
 
@@ -346,9 +346,12 @@ export async function ticketMail(db: Db, orderId: number, text: string, fromName
         <b>電子發票</b> <span style="font-family:monospace;font-size:16px">${esc(inv.invoiceNo)}</span>${inv.env !== 'prod' ? '<span style="color:#b45309">（測試，非正式發票）</span>' : ''}<br>
         開立日期 ${esc(inv.invoiceDate.slice(0, 10))}・隨機碼 ${esc(inv.randomNumber)}<br>
         <span style="color:#5b6579">${esc(inv.buyer)}。可至財政部電子發票整合服務平台查詢。</span></div>`;
-  const { greet, paras } = partsOf(text);
+  const { greet, paras, url } = partsOf(text);
+  // VIP／公益票卡頁寄的信：有「確認收到」按鈕（/vr/…；開頁面後還要再按一次才算）
+  const receipt = /\/vr\/\d+-[0-9a-f]+$/.test(url) ? url : undefined;
   const html = mailLayout({
     ev: event.name, title: '劃位成功', greet, paras: [`演出時間：${when}・台北國際會議中心 大會堂`, ...paras.filter((x) => !/QR code 請至|入場時請出示/.test(x))],
+    url: receipt, button: '確認收到',
     extraHtml: `${invHtml}<p style="margin:6px 0 10px;font-weight:700">入場時請出示以下 QR code（每張票一個，可截圖保存）</p>${cards.join('')}`,
     note: '每個 QR code 只能入場一次，請勿轉傳給他人。', fromName,
   });

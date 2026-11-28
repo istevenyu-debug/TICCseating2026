@@ -61,11 +61,11 @@ describe('VIP 票卡連結', () => {
     expect(p.cards.map((c) => c.name)).toContain('王夫人');
     const sec = await qrSecret(db);
     expect(p.cards.every((c) => c.value === qrValue(sec, c.serial))).toBe(true);
-    expect(p.cards.find((c) => c.orderId === b.orderId)!.email).toBe('l***@x.org');
+    expect(p.cards.find((c) => c.orderId === b.orderId)!.email).toBe('li@x.org'); // 負責人看完整 Email 才好核對
     // 沒有 Email：要填
     expect(await msg(vipCardSend(db, l!.code, token, { orderId: a.orderId }, BASE, at(2)))).toContain('Email');
     const r = await vipCardSend(db, l!.code, token, { orderId: a.orderId, email: 'Wang@Corp.com' }, BASE, at(2));
-    expect(r.to).toBe('w***@corp.com');
+    expect(r.to).toBe('wang@corp.com');
     const [oa] = await db.select().from(t.orders).where(eq(t.orders.id, a.orderId));
     expect(oa).toMatchObject({ buyerEmail: 'wang@corp.com', notifyMode: 'now' });
     expect((await mails('order_confirmed')).filter((m) => m.orderId === a.orderId).map((m) => m.recipient)).toEqual(['wang@corp.com']);
@@ -79,7 +79,7 @@ describe('VIP 票卡連結', () => {
     const charity = (await db.select().from(t.orders).where(eq(t.orders.vipCat, '公益')))[0];
     expect(await msg(vipCardSend(db, l!.code, token, { orderId: charity.id }, BASE, at(5)))).toContain('找不到');
     p = await vipCardPage(db, l!.code, token, at(6));
-    expect(p.cards.filter((c) => c.orderId === a.orderId).every((c) => c.email === 'w***@corp.com')).toBe(true);
+    expect(p.cards.filter((c) => c.orderId === a.orderId).every((c) => c.email === 'wang@corp.com')).toBe(true);
   });
 
   it('沒姓名的票卡可以補填（只填空白、QR 不變）；已有姓名不能改', async () => {

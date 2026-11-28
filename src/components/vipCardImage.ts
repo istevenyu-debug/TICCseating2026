@@ -4,7 +4,7 @@
  * 把 VIP 票卡畫成一張 PNG（桌機「複製圖片」貼到電腦版 LINE、「下載圖片」用）。
  * 跟畫面上的票卡同樣內容：VIP 貴賓席、座位、姓名職稱、單位、QR、序號、活動名稱、日期地點。
  */
-export type CardImg = { seat: string; name: string; org: string; serial: string; value: string; eventName: string; showAt: string };
+export type CardImg = { seat: string; name: string; org: string; serial: string; value: string; eventName: string; showAt: string; badge?: string; prefix?: string };
 
 const FONT = '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", "Heiti TC", sans-serif';
 const GOLD = '#8a6a2a';
@@ -29,7 +29,7 @@ export async function cardBlob(c: CardImg): Promise<Blob> {
   // 「VIP 貴賓席」膠囊
   ctx.fillStyle = GOLD;
   ctx.beginPath(); ctx.roundRect(W / 2 - 120, 44, 240, 56, 28); ctx.fill();
-  ctx.fillStyle = '#fff'; ctx.font = `700 30px ${FONT}`; ctx.fillText('VIP 貴賓席', W / 2, 73);
+  ctx.fillStyle = '#fff'; ctx.font = `700 30px ${FONT}`; ctx.fillText(c.badge ?? 'VIP 貴賓席', W / 2, 73);
   // 座位、姓名、單位
   ctx.fillStyle = '#1f2a44';
   fitText(ctx, c.seat, 64, 800, W - 80); ctx.fillText(c.seat, W / 2, 160);
@@ -62,7 +62,7 @@ export async function downloadCard(c: CardImg) {
   const url = URL.createObjectURL(b);
   const a = document.createElement('a');
   // 檔名用英數（部分瀏覽器遇到中文檔名會變成 download）：VIP_座位數字_序號.png，例 VIP_23_T1-00003-01.png
-  a.download = `VIP_${c.seat.replace(/\D+/g, '-').replace(/^-|-$/g, '')}_${c.serial}.png`;
+  a.download = `${c.prefix ?? 'VIP'}_${c.seat.replace(/\D+/g, '-').replace(/^-|-$/g, '')}_${c.serial}.png`;
   a.href = url;
   a.style.display = 'none';
   document.body.appendChild(a);

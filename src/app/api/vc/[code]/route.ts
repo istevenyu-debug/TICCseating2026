@@ -6,7 +6,7 @@ import { BookingError } from '@/lib/booking';
 import { SESSION_COOKIE, sessionUser } from '@/lib/auth';
 import type { Db } from '@/db/client';
 import { dispatchQueued } from '@/lib/notify';
-import { type VcAuth, sendVipOtp, verifyVipOtp, vipCardBook, vipCardName, vipCardPage, vipCardSeatMap, vipCardSend } from '@/lib/vipCard';
+import { type VcAuth, sendVipOtp, verifyVipOtp, vipCardBook, vipCardCancel, vipCardName, vipCardPage, vipCardSeatMap, vipCardSend, vipCardSendAll } from '@/lib/vipCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +28,9 @@ const body = z.discriminatedUnion('action', [
   z.object({ action: z.literal('verify'), otp: z.string().max(10) }),
   z.object({ action: z.literal('send'), orderId: z.number().int().positive(), email: z.string().max(120).optional() }),
   z.object({ action: z.literal('name'), orderId: z.number().int().positive(), seatId: z.string().max(40), name: z.string().max(80) }),
-  z.object({ action: z.literal('book'), seats: z.array(z.object({ seatId: z.string().max(40), name: z.string().max(80) })).min(1).max(20), org: z.string().max(80).optional() }),
+  z.object({ action: z.literal('book'), seats: z.array(z.object({ seatId: z.string().max(40), name: z.string().max(80), email: z.string().max(120).optional() })).min(1).max(20), org: z.string().max(80).optional() }),
+  z.object({ action: z.literal('cancel'), orderId: z.number().int().positive(), seatId: z.string().max(40) }),
+  z.object({ action: z.literal('sendAll'), dry: z.boolean(), pick: z.array(z.object({ orderId: z.number().int().positive(), email: z.string().max(120) })).max(300).optional() }),
 ]);
 export async function POST(req: Request, { params }: { params: { code: string } }) {
   return handle(async () => {
@@ -39,7 +41,11 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     if (a.action === 'verify') return verifyVipOtp(db, params.code, a.otp);
     if (a.action === 'name') return vipCardName(db, params.code, await who(db, req), a);
     if (a.action === 'book') return vipCardBook(db, params.code, await who(db, req), a);
-    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email, new Date(), process.env.PUBLIC_BASE_URL || originOf(req)) : await vipCardSend(db, params.code, await who(db, req), a, originOf(req));
+    if (a.action === 'cancel') return vipCardCancel(db, params.code, await who(db, req), a);
+    const base = process.env.PUBLIC_BASE_URL || originOf(req);
+    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email, new Date(), base)
+      : a.action === 'sendAll' ? await vipCardSendAll(db, params.code, await who(db, req), a, base)
+        : await vipCardSend(db, params.code, await who(db, req), a, base);
     dispatchQueued(db).catch(() => undefined);
     return r;
   });
