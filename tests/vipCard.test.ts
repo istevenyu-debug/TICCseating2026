@@ -123,4 +123,21 @@ describe('VIP 票卡連結', () => {
     expect((await db.select().from(t.notification)).length).toBe(n0); // 不寄信
     expect((await vipCardSeatMap(db, l!.code, token, at(3))).seats.find((s) => s.id === '3-1')!.status).toBe('sold');
   });
+
+  it('已登入後台的系統管理員：不用驗證碼、停用中也能看；操作記在系統管理員；不影響負責人的手機', async () => {
+    const a = await createVip(db, '網管', { name: '王董事長', phone: '', email: '', seatIds: ['V-1'], mode: 'none', cat: 'VIP' }, BASE);
+    const l = await setVipCard(db, '網管', { name: '陳秘書', email: 'boss@example.com' });
+    const token = await login(l!.code);
+    const p = await vipCardPage(db, l!.code, { admin: 'Steven' }, at(1));
+    expect(p.asAdmin).toBe(true);
+    expect(p.cards).toHaveLength(1);
+    await vipCardSend(db, l!.code, { admin: 'Steven' }, { orderId: a.orderId, email: 'w@corp.com' }, BASE, at(2));
+    const log = await db.select().from(t.auditLog).where(eq(t.auditLog.action, 'vipcard_send'));
+    expect(log[0].actor).toBe('系統管理員:Steven');
+    expect((await vipCardPage(db, l!.code, token, at(3))).asAdmin).toBe(false); // 負責人照常
+    await vipCardAction(db, '網管', 'off');
+    expect(await msg(vipCardPage(db, l!.code, token, at(4)))).toContain('停用');
+    expect((await vipCardPage(db, l!.code, { admin: 'Steven' }, at(4))).off).toBe(true);
+    expect(await msg(vipCardPage(db, 'wrong-code', { admin: 'Steven' }, at(4)))).toContain('不存在');
+  });
 });

@@ -88,17 +88,26 @@ export function adminView(l: VipCardLink | null) {
 
 /* ---------- 負責人頁 /vc/<code> ---------- */
 
-async function linkOf(db: Db, code: string) {
+async function linkOf(db: Db, code: string, admin = false) {
   const l = await getVipCard(db);
   if (!l || l.code !== code) throw new BookingError('LINK_NOT_FOUND', '連結不存在或已更換，請向主辦方索取新連結。');
-  if (l.status !== 'on') throw new BookingError('LINK_CLOSED', '這條連結目前停用中，請聯絡主辦方。');
+  if (l.status !== 'on' && !admin) throw new BookingError('LINK_CLOSED', '這條連結目前停用中，請聯絡主辦方。');
   return l;
 }
-async function authed(db: Db, code: string, token: string, now: Date) {
+/**
+ * 誰在操作：負責人（這支手機的通行碼）或已登入後台的系統管理員（11/28：系統管理員不用驗證碼直接進，
+ * 停用中也能看；操作紀錄記系統管理員本人，不影響負責人的登入）。由 API 依後台登入 cookie 判斷，前端送不進來。
+ */
+export type VcAuth = string | { admin: string };
+async function authed(db: Db, code: string, auth: VcAuth, now: Date) {
+  if (typeof auth === 'object') {
+    const l = await linkOf(db, code, true);
+    return Object.assign(l, { actor: `系統管理員:${auth.admin}`, asAdmin: true });
+  }
   const l = await linkOf(db, code);
-  const h = sha(token || '-');
-  if (!token || !l.devices.some((d) => d.h === h && Date.parse(d.exp) > now.getTime())) throw new BookingError('AUTH', '請先驗證 Email。');
-  return l;
+  const h = sha(auth || '-');
+  if (!auth || !l.devices.some((d) => d.h === h && Date.parse(d.exp) > now.getTime())) throw new BookingError('AUTH', '請先驗證 Email。');
+  return Object.assign(l, { actor: `VIP負責人:${l.name}`, asAdmin: false });
 }
 
 /** 寄驗證碼：Email 要跟後台設定的一樣；60 秒內不重寄 */
@@ -143,7 +152,7 @@ async function vipOrders(db: Db, eventId: number) {
 }
 
 /** 票卡頁資料：每席一張（依座位排序），每位 VIP 的寄送狀態 */
-export async function vipCardPage(db: Db, code: string, token: string, now = new Date()) {
+export async function vipCardPage(db: Db, code: string, token: VcAuth, now = new Date()) {
   const l = await authed(db, code, token, now);
   const ev = await ev0(db);
   const os = await vipOrders(db, ev.id);
@@ -165,13 +174,13 @@ export async function vipCardPage(db: Db, code: string, token: string, now = new
     };
   });
   return {
-    event: { name: ev.name, showAt: ev.showAt.toISOString() }, leader: l.name, cards,
+    event: { name: ev.name, showAt: ev.showAt.toISOString() }, leader: l.name, cards, asAdmin: l.asAdmin, off: l.status !== 'on',
     total: os.length, sent: os.filter((o) => notes.some((x) => x.orderId === o.id && x.status === 'sent')).length,
   };
 }
 
 /** 寄給本人：可填新 Email（會存進那位 VIP 的資料）；寄一封只有他自己 QR 的信；2 分鐘內不重寄 */
-export async function vipCardSend(db: Db, code: string, token: string, v: { orderId: number; email?: string }, base: string, now = new Date()) {
+export async function vipCardSend(db: Db, code: string, token: VcAuth, v: { orderId: number; email?: string }, base: string, now = new Date()) {
   const l = await authed(db, code, token, now);
   const ev = await ev0(db);
   const [o] = await db.select().from(t.orders).where(and(eq(t.orders.id, v.orderId), eq(t.orders.eventId, ev.id), eq(t.orders.vip, true), eq(t.orders.status, 'paid'), eq(t.orders.vipCat, 'VIP')));
@@ -192,13 +201,13 @@ export async function vipCardSend(db: Db, code: string, token: string, v: { orde
     await tx.delete(t.notification).where(and(eq(t.notification.orderId, o.id), eq(t.notification.status, 'queued')));
     await tx.update(t.orders).set({ buyerEmail: email, notifyMode: 'now' }).where(eq(t.orders.id, o.id));
     await tx.insert(t.notification).values({ orderId: o.id, linkId: o.linkId, channel: 'email', template: 'order_confirmed', recipient: email, content, createdAt: now });
-    await tx.insert(t.auditLog).values({ actor: `VIP負責人:${l.name}`, action: 'vipcard_send', target: `order:${o.id}`, detail: JSON.stringify({ email, before: o.buyerEmail }) });
+    await tx.insert(t.auditLog).values({ actor: l.actor, action: 'vipcard_send', target: `order:${o.id}`, detail: JSON.stringify({ email, before: o.buyerEmail }) });
   });
   return { to: maskEmail(email) };
 }
 
 /** 補填姓名：只能填空白的（已有姓名的不能改）；QR 不變 */
-export async function vipCardName(db: Db, code: string, token: string, v: { orderId: number; seatId: string; name: string }, now = new Date()) {
+export async function vipCardName(db: Db, code: string, token: VcAuth, v: { orderId: number; seatId: string; name: string }, now = new Date()) {
   const l = await authed(db, code, token, now);
   const ev = await ev0(db);
   const name = v.name.trim().slice(0, 60);
@@ -214,7 +223,7 @@ export async function vipCardName(db: Db, code: string, token: string, v: { orde
       await tx.update(t.orders).set({ buyerName: name }).where(eq(t.orders.id, o.id));
       await tx.update(t.inviteLink).set({ name }).where(eq(t.inviteLink.id, o.linkId));
     }
-    await tx.insert(t.auditLog).values({ actor: `VIP負責人:${l.name}`, action: 'vipcard_name', target: `order:${o.id}`, detail: JSON.stringify({ seatId: v.seatId, name }) });
+    await tx.insert(t.auditLog).values({ actor: l.actor, action: 'vipcard_name', target: `order:${o.id}`, detail: JSON.stringify({ seatId: v.seatId, name }) });
   });
   return { ok: true };
 }
@@ -231,7 +240,7 @@ type SelfSeat = Awaited<ReturnType<typeof selfSeats>>[number];
 const inRange = (s: SelfSeat, vipInstalled: boolean) => (s.seatType === 'vip' ? vipInstalled : s.seatType !== 'wheelchair' && s.rowNo != null && s.rowNo >= 1 && s.rowNo <= VIP_SELF_ROWS);
 const canTake = (s: SelfSeat) => s.status === 'free' && !['join-gift', 'era-sold'].includes(s.usage) && (s.sellable || s.seatType === 'vip');
 
-export async function vipCardSeatMap(db: Db, code: string, token: string, now = new Date()) {
+export async function vipCardSeatMap(db: Db, code: string, token: VcAuth, now = new Date()) {
   await authed(db, code, token, now);
   const ev = await ev0(db);
   const zones = await db.select().from(t.priceZone).where(and(eq(t.priceZone.eventId, ev.id), eq(t.priceZone.floor, '2M')));
@@ -247,7 +256,7 @@ export async function vipCardSeatMap(db: Db, code: string, token: string, now = 
 }
 
 /** 負責人自己劃位：每席一筆 VIP（類別 VIP、不寄信）；任何一席不行就都不建立 */
-export async function vipCardBook(db: Db, code: string, token: string, v: { seats: { seatId: string; name: string }[]; org?: string }, now = new Date()) {
+export async function vipCardBook(db: Db, code: string, token: VcAuth, v: { seats: { seatId: string; name: string }[]; org?: string }, now = new Date()) {
   const l = await authed(db, code, token, now);
   const ev = await ev0(db);
   const list = v.seats.map((x) => ({ seatId: x.seatId, name: x.name.trim().slice(0, 60) }));
@@ -264,7 +273,7 @@ export async function vipCardBook(db: Db, code: string, token: string, v: { seat
   const done: string[] = [];
   for (const x of list) {
     try {
-      await createVip(db, `VIP負責人:${l.name}`, { name: x.name, phone: '', email: '', seatIds: [x.seatId], mode: 'none', cat: 'VIP', org, holders: [x.name], note: `VIP 負責人自己劃位 ${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}` });
+      await createVip(db, l.actor, { name: x.name, phone: '', email: '', seatIds: [x.seatId], mode: 'none', cat: 'VIP', org, holders: [x.name], note: `${l.asAdmin ? '系統管理員從 VIP 票卡頁' : 'VIP 負責人自己'}劃位 ${now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false })}` });
       done.push(x.seatId);
     } catch (e) {
       const lb = (id: string) => seatLabel(all.find((s) => s.id === id)!);

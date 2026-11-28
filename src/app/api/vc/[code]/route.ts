@@ -1,18 +1,26 @@
+import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { handle, originOf } from '@/lib/api';
 import { BookingError } from '@/lib/booking';
+import { SESSION_COOKIE, sessionUser } from '@/lib/auth';
+import type { Db } from '@/db/client';
 import { dispatchQueued } from '@/lib/notify';
-import { sendVipOtp, verifyVipOtp, vipCardBook, vipCardName, vipCardPage, vipCardSeatMap, vipCardSend } from '@/lib/vipCard';
+import { type VcAuth, sendVipOtp, verifyVipOtp, vipCardBook, vipCardName, vipCardPage, vipCardSeatMap, vipCardSend } from '@/lib/vipCard';
 
 export const dynamic = 'force-dynamic';
 
-const tok = (req: Request) => req.headers.get('x-vc-token') ?? '';
+/** 已登入後台的系統管理員直接進（看後台登入 cookie，前端送不進來）；否則用負責人手機的通行碼 */
+async function who(db: Db, req: Request): Promise<VcAuth> {
+  const u = await sessionUser(db, cookies().get(SESSION_COOKIE)?.value).catch(() => null);
+  if (u?.role === 'admin') return { admin: u.displayName };
+  return req.headers.get('x-vc-token') ?? '';
+}
 
 /** VIP 票卡頁：驗證過的手機才看得到 */
 export async function GET(req: Request, { params }: { params: { code: string } }) {
   const seats = new URL(req.url).searchParams.get('seats') === '1';
-  return handle(async () => (seats ? vipCardSeatMap : vipCardPage)(await getDb(), params.code, tok(req)));
+  return handle(async () => { const db = await getDb(); return (seats ? vipCardSeatMap : vipCardPage)(db, params.code, await who(db, req)); });
 }
 
 const body = z.discriminatedUnion('action', [
@@ -29,9 +37,9 @@ export async function POST(req: Request, { params }: { params: { code: string } 
     const db = await getDb();
     const a = p.data;
     if (a.action === 'verify') return verifyVipOtp(db, params.code, a.otp);
-    if (a.action === 'name') return vipCardName(db, params.code, tok(req), a);
-    if (a.action === 'book') return vipCardBook(db, params.code, tok(req), a);
-    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email, new Date(), process.env.PUBLIC_BASE_URL || originOf(req)) : await vipCardSend(db, params.code, tok(req), a, originOf(req));
+    if (a.action === 'name') return vipCardName(db, params.code, await who(db, req), a);
+    if (a.action === 'book') return vipCardBook(db, params.code, await who(db, req), a);
+    const r = a.action === 'otp' ? await sendVipOtp(db, params.code, a.email, new Date(), process.env.PUBLIC_BASE_URL || originOf(req)) : await vipCardSend(db, params.code, await who(db, req), a, originOf(req));
     dispatchQueued(db).catch(() => undefined);
     return r;
   });

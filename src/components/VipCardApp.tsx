@@ -6,7 +6,7 @@ import SeatMap from './SeatMap';
 import { copyCard, downloadCard } from './vipCardImage';
 
 type Card = { serial: string; value: string; seat: string; seatId: string; name: string; needName: boolean; org: string; orderId: number; email: string; sentAt: string | null; sending: boolean; entered: boolean };
-type Data = { event: { name: string; showAt: string }; leader: string; cards: Card[]; total: number; sent: number };
+type Data = { event: { name: string; showAt: string }; leader: string; asAdmin?: boolean; off?: boolean; cards: Card[]; total: number; sent: number };
 type MapProps = Parameters<typeof SeatMap>[0];
 type SeatView = { vipInstalled: boolean; rows: number; zones: unknown[]; seats: { id: string; label: string; status: string }[] };
 type Res<T> = { ok: true; data: T } | { ok: false; message: string; code?: string };
@@ -154,6 +154,7 @@ export default function VipCardApp({ code }: { code: string }) {
   return (
     <main className="wrap" style={{ maxWidth: desk ? 1140 : 480 }}>
       <div className="card" style={{ maxWidth: 720, margin: '0 auto 12px' }}>
+        {data.asAdmin && <div className="note small" style={{ margin: '0 0 8px', background: '#eef2ff' }}>系統管理員檢視（已登入後台，不用驗證碼）：畫面與負責人 {data.leader} 看到的相同；您的操作會記在您的帳號。{data.off ? '　※ 連結目前停用中，負責人進不來。' : ''}</div>}
         <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>VIP 票卡</h1>
         <div className="small muted">{data.event.name}・{data.leader} 您好</div>
         <p style={{ margin: '8px 0' }}>VIP 共 <b>{data.total}</b> 位・已寄給本人 <b>{data.sent}</b> 位。<br />每一席一張，{desk ? <><b>按「複製圖片」，到電腦版 LINE 按 Ctrl+V 貼上</b>傳給貴賓</> : <><b>截圖後用 LINE 傳</b>給貴賓</>}；或按卡片下方「寄給本人」。</p>
