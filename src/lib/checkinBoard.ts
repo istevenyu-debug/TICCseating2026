@@ -6,6 +6,7 @@
  *  - vip:<類別>        招待（類別：招待／公益／VIP…，空白＝招待）
  *  - viprow            VIP 排的座位（不論哪種訂單，優先）
  *  - gift3f            三樓揪團贈席選 QR 的（序號 JG…）
+ *  - gift3fp           三樓揪團贈席拿年代紙本（貴賓券）的：驗票頁搜排號「紙本入場」（序號 JGP…）
  *  - era               年代票（3–5 樓不分樓層，11-25 使用者）：應驗＝年代售出明細已售張數；已驗＝掃到的年代 QR
  */
 import { randomBytes } from 'node:crypto';
@@ -13,7 +14,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
 import { BookingError } from './booking';
-import { giftCheckRows } from './joinGift';
+import { giftCheckRows, giftPaperSerial } from './joinGift';
 import { eraFloorOf } from './eraQr';
 
 const LINK_KEY = 'checkin.board';
@@ -55,7 +56,7 @@ export async function updateBoardLink(db: Db, actor: string, v: { renew?: boolea
 /** 預設歸屬：尊榮／感恩（買五送一併入感恩）＋「贈席」；招待；VIP 排；3F 贈票；年代各樓 */
 export function defaultBox(key: string, label: string): string {
   if (key === 'era') return '年代';
-  if (key === 'gift3f') return '3F 贈票';
+  if (key === 'gift3f' || key === 'gift3fp') return '3F 贈票';
   if (key === 'viprow') return 'VIP';
   if (key === 'vip:VIP') return 'VIP';
   if (key.startsWith('vip:')) return '公益'; // 公益與其他類別（含舊資料的「招待」）
@@ -94,9 +95,14 @@ async function sources(db: Db) {
     add(key, label, 1);
     seatKey.set(`${s.orderId}|${s.seatId}`, key);
   }
-  const gifts = (await giftCheckRows(db, ev.id)).filter((x) => x.serial);
+  const allGifts = await giftCheckRows(db, ev.id);
+  const gifts = allGifts.filter((x) => x.serial);
   add('gift3f', '三樓揪團贈席（QR）', gifts.length);
+  // 紙本（年代貴賓券）：驗票頁搜排號 →「紙本入場」，序號 JGP…（11-29）
+  const papers = allGifts.filter((x) => !x.serial);
+  add('gift3fp', '三樓揪團贈席（紙本）', papers.length);
   const giftSerials = new Set(gifts.map((x) => x.serial));
+  const paperSerials = new Set(papers.map((x) => giftPaperSerial(x.no)));
   // 年代：售出明細依樓層（已退不算）
   const era = await db.select({ floor: t.joinEraTicket.floor, at: t.joinEraTicket.updatedAt }).from(t.joinEraTicket)
     .where(and(eq(t.joinEraTicket.eventId, ev.id), eq(t.joinEraTicket.status, 'sold')));
@@ -110,7 +116,7 @@ async function sources(db: Db) {
   for (const c of ck) {
     let key: string | undefined;
     if (c.serial.startsWith('ERA:')) key = 'era';
-    else if (c.serial.startsWith('JG')) key = giftSerials.has(c.serial) ? 'gift3f' : undefined;
+    else if (c.serial.startsWith('JG')) key = giftSerials.has(c.serial) ? 'gift3f' : paperSerials.has(c.serial) ? 'gift3fp' : undefined;
     else key = seatKey.get(`${c.orderId}|${c.seatId}`);
     if (!key) { key = 'other'; if (!src.has(key)) add(key, '其他（已取消或已改的票）', 0); }
     src.get(key)!.done++;

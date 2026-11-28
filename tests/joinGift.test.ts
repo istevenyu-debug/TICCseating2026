@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setLiveAt } from '@/lib/practice';
 import { and, eq, inArray } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
@@ -28,6 +29,7 @@ const msg = async (p: Promise<unknown>) => { try { await p; return ''; } catch (
 
 beforeEach(async () => {
   db = await createPgliteDb();
+  await setLiveAt(db, 'test', '2020-01-01T00:00:00Z'); // 這些測試驗正式入場（不是練習）
   await seedVenue(db);
   await createEvent(db, { name: '古儒吉大師課程', showAt: new Date('2026-12-09T19:30:00+08:00'), bankName: 'b', bankAccount: '1', accountName: 'c' });
   await ensureFloor3(db);
@@ -236,11 +238,11 @@ describe('負責人劃位頁：每席選方式、填入座者', () => {
     g = (await leader(a.pickCode!, at(18)))!;
     expect(g.seats[2].qr!.serial).not.toBe(qr.serial);
     expect((await scan(db, token, { qr: qr.value }, at(19))).result).toBe('invalid');
-    // 驗票搜尋：紙本的列出但沒有序號
+    // 驗票搜尋：紙本的列出，按「紙本入場」（11-29 起）
     const found = await searchTickets(db, token, '王一');
     expect(found).toHaveLength(1);
-    expect(found[0].serial).toBe('');
-    expect(found[0].label).toContain('紙本票');
+    expect(found[0].paper).toBeGreaterThan(0);
+    expect(found[0].note).toContain('紙本贈席');
   });
 
   it('只能改自己群的座位；未寄調查信不能存', async () => {
@@ -301,6 +303,38 @@ describe('取票選項（做活的）', () => {
   });
 });
 
+describe('紙本贈席（年代貴賓券）：搜排號 → 紙本入場（11-29）', () => {
+  it('搜「排-號」只列那一席；紙本按入場、再按＝已入場過；選 QR 的不能紙本入場；看板 3F 贈票分 QR／紙本', async () => {
+    const { a } = await setup();
+    await sendGiftSurvey(db, '網管', BASE, {}, at(10));
+    const s = (await leader(a.pickCode!, at(11)))!.seats;
+    await saveGiftSeats(db, '負責人', a.id, { seats: s.map((x, i) => ({ slotId: x.slotId, optionKey: i === 2 ? 'onsite' : 'qr', name: ['王一', '王二', '王三'][i], email: `w${i}@example.com` })) }, at(12), BASE);
+    const token = await gate();
+    const rows = await db.select({ no: t.joinSlot.no, row: t.venueSeat.rowNo, seat: t.venueSeat.seatNo }).from(t.joinSlot).innerJoin(t.venueSeat, eq(t.venueSeat.id, t.joinSlot.seatId)).where(eq(t.joinSlot.regId, a.id)).orderBy(t.joinSlot.no);
+    const paperRow = rows[2]; const qrRow = rows[0];
+    const f = await searchTickets(db, token, `${paperRow.row}-${paperRow.seat}`, at(13));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ paper: paperRow.no, holderName: 'A場' });
+    expect((await searchTickets(db, token, `${paperRow.row}排${paperRow.seat}號`, at(13)))[0].paper).toBe(paperRow.no);
+    const r1 = await scan(db, token, { paper: paperRow.no }, at(14));
+    expect(r1).toMatchObject({ result: 'ok', giftPaper: true, serial: `JGP${String(paperRow.no).padStart(3, '0')}` });
+    expect((await scan(db, token, { paper: paperRow.no }, at(15))).result).toBe('used');
+    // 選 QR 的那席：搜得到（給 QR 入場），但不能按紙本入場
+    expect((await searchTickets(db, token, `${qrRow.row}-${qrRow.seat}`, at(15)))[0].paper).toBeUndefined();
+    expect(await scan(db, token, { paper: qrRow.no }, at(15))).toMatchObject({ result: 'invalid' });
+    // 不存在的座位：空的
+    expect(await searchTickets(db, token, '99-1', at(15))).toHaveLength(0);
+    // 看板（用現在時間算：回覆已截止，C 群沒選的視為預設 QR）：3F 贈票＝QR 4 席＋紙本 1 席，同一框分兩行
+    const { boardAdminState } = await import('@/lib/checkinBoard');
+    const b = await boardAdminState(db);
+    expect(b.sources.find((x) => x.key === 'gift3f')).toMatchObject({ total: 4, done: 0, box: '3F 贈票' });
+    expect(b.sources.find((x) => x.key === 'gift3fp')).toMatchObject({ total: 1, done: 1, box: '3F 贈票' });
+    // 斷線名單：紙本那席標已入場
+    const list = await checkinList(db, 'seat', at(16));
+    expect(list.rows.find((x) => x.holderName === '王三')!.entered).not.toBeNull();
+  });
+});
+
 describe('驗票、入場名單、後台', () => {
   it('應到人數含贈席 QR；搜尋姓名、群名；斷線名單列出贈席；劃位序取消後 QR 無效', async () => {
     const { a } = await setup();
@@ -312,10 +346,10 @@ describe('驗票、入場名單、後台', () => {
     const r = await scan(db, token, { serial: q0.serial }, at(14));
     expect(r.result).toBe('ok');
     expect(r.result === 'ok' && r.side).toMatch(/^(左|右)側門$/); // 贈席也顯示入口
-    expect(r.total).toBe(2); // 只算選 QR 的 2 席（C 群還沒選、未截止）
+    expect(r.total).toBe(5); // 11-29 起：贈席 QR＋紙本＋未選 全部算應到（紙本也在驗票頁入場）
     expect(r.entered).toBe(1);
     expect((await searchTickets(db, token, 'A場')).length).toBe(3);
-    expect((await checkinSummary(db, at(14))).total).toBe(2);
+    expect((await checkinSummary(db, at(14))).total).toBe(5);
     const list = await checkinList(db, 'seat', at(14));
     const mine = list.rows.filter((x) => x.zoneName === '揪團贈席');
     expect(mine).toHaveLength(5);

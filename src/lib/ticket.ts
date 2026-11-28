@@ -11,7 +11,8 @@ import { BookingError } from './booking';
 import { ticketData } from './admin';
 
 import { qrSecret, readQr } from './qr';
-import { findGiftTicket, giftCheckRows, giftQrCount, isGiftSerial } from './joinGift';
+import { findGiftTicket, giftCheckRows, giftPaperSerial, isGiftPaperSerial, isGiftSerial } from './joinGift';
+import { PRACTICE_QR, PRACTICE_SEAT, isPracticeQr, isPracticeSerial, liveAt, practiceHere } from './practice';
 import { ERA_SEAT, eraSerial, parseEraQr } from './eraQr';
 import { isSafeMode } from './safeMode';
 export { qrSecret, qrValue, readQr } from './qr';
@@ -87,40 +88,98 @@ async function counts(db: Db, eventId: number, gateId: number, now = new Date())
     entered: sql<number>`(count(*) filter (where ${t.checkin.serial} not like 'ERA:%'))::int`,
     era: sql<number>`(count(*) filter (where ${t.checkin.serial} like 'ERA:%'))::int`,
   }).from(t.checkin).where(eq(t.checkin.eventId, eventId));
-  const gift = await giftQrCount(db, eventId, now); // 揪團贈席電子票（選 QR 的）
+  const gift = (await giftCheckRows(db, eventId, now)).length; // 揪團贈席：QR 與紙本（11-29 起紙本也在驗票頁入場）
   const [{ here }] = await db.select({ here: sql<number>`count(*)::int` }).from(t.checkin).where(and(eq(t.checkin.eventId, eventId), eq(t.checkin.gateId, gateId)));
-  return { total: total + gift, entered, here, era };
+  const live = await liveAt(db);
+  return { total: total + gift, entered, here, era, practice: now < live, liveAt: live.toISOString(), prac: await practiceHere(db, eventId, gateId) };
+}
+type Counts = Awaited<ReturnType<typeof counts>>;
+
+/** 記錄這條連結有人在用（負責人頁看「已開啟／在線」） */
+async function touchGate(db: Db, id: number, now: Date) {
+  await db.update(t.gate).set({ seenAt: now, openedAt: sql`coalesce(${t.gate.openedAt}, ${now.toISOString()}::timestamptz)` }).where(eq(t.gate.id, id));
 }
 
-export async function gateInfo(db: Db, token: string) {
+export async function gateInfo(db: Db, token: string, now = new Date()) {
   const g = await gateByToken(db, token);
+  await touchGate(db, g.id, now);
   const [ev] = await db.select().from(t.event).where(eq(t.event.id, g.eventId));
-  return { gate: g.name, event: ev.name, showAt: ev.showAt.toISOString(), safeMode: isSafeMode(), ...(await counts(db, ev.id, g.id)) };
+  return { gate: g.name, event: ev.name, showAt: ev.showAt.toISOString(), safeMode: isSafeMode(), ...(await counts(db, ev.id, g.id, now)) };
 }
 
 export type ScanResult =
-  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true }
+  | { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true; eraPaper?: true; giftPaper?: true }
   | { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; isEra?: true }
   | { result: 'invalid'; reason: string };
 
-/** 掃描或手動輸入序號入場 */
-export async function scan(db: Db, token: string, input: { qr?: string; serial?: string }, now = new Date()): Promise<ScanResult & { total: number; entered: number; here: number; era: number }> {
+const pad3 = (n: number) => String(n).padStart(3, '0');
+
+/**
+ * 掃描、手動輸入序號，或紙本贈席入場（paper＝劃位序；-1＝練習座位）。
+ * 正式驗票時間（預設演出當天 17:00）以前一律只記「練習」，不會讓票變成已入場。
+ */
+export async function scan(db: Db, token: string, input: { qr?: string; serial?: string; paper?: number }, now = new Date()): Promise<ScanResult & Counts> {
   const g = await gateByToken(db, token);
-  const done = async (r: ScanResult) => ({ ...r, ...(await counts(db, g.eventId, g.id, now)) });
-  let serial: string;
+  await touchGate(db, g.id, now);
+  const practice = now < (await liveAt(db));
   const manual = !input.qr;
-  // 年代電子票：掃到就計數（同一張只算一次），不分樓層（11-25 使用者）
-  const era = input.qr ? parseEraQr(input.qr) : null;
-  if (era?.kind === 'pending') return done({ result: 'invalid', reason: '年代票：轉贈尚未接收。請收票的人先在年代 App 按「接收票券」，再出示 QR。' });
-  if (era?.kind === 'era') {
-    serial = eraSerial(era.id);
-    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: ERA_SEAT, gateId: g.id, manual: false, at: now }).onConflictDoNothing().returning();
-    if (!ins.length) {
+  const raw = (input.qr ?? input.serial ?? (input.paper !== undefined ? `紙本贈席 ${input.paper}` : '')).slice(0, 200);
+  let kind = '';
+  const done = async (r: ScanResult) => {
+    // 練習時無效的掃描也記下來（看年代紙本格式、志工練了什麼）
+    if (practice && r.result === 'invalid') {
+      await db.insert(t.checkinPractice).values({ eventId: g.eventId, gateId: g.id, key: null, kind, result: 'invalid', reason: r.reason, raw, manual, at: now });
+    }
+    return { ...r, ...(await counts(db, g.eventId, g.id, now)) };
+  };
+  /** 入場（或練習入場）：同一張票只能一次；回傳之前那次的時間、門口 */
+  const record = async (serial: string, orderId: number, seatId: string): Promise<{ fresh: true } | { fresh: false; at: string; gate: string }> => {
+    if (!practice) {
+      const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId, seatId, gateId: g.id, manual, at: now }).onConflictDoNothing().returning();
+      if (ins.length) return { fresh: true };
       const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
       const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
-      return done({ result: 'used', serial, label: '年代票', holderName: '', at: prev.at.toISOString(), gate: pg?.name ?? '後台', isEra: true });
+      return { fresh: false, at: prev.at.toISOString(), gate: pg?.name ?? '後台' };
     }
-    return done({ result: 'ok', serial, label: '年代票', code: '', zoneName: '', side: '', holderName: '', holderId4: '', orderNo: '', manual: false, isEra: true });
+    const key = `${g.id}|${serial}`;
+    const ins = await db.insert(t.checkinPractice).values({ eventId: g.eventId, gateId: g.id, key, serial, kind, result: 'ok', raw, manual, at: now }).onConflictDoNothing().returning();
+    if (ins.length) return { fresh: true };
+    const [prev] = await db.select().from(t.checkinPractice).where(and(eq(t.checkinPractice.eventId, g.eventId), eq(t.checkinPractice.key, key)));
+    await db.insert(t.checkinPractice).values({ eventId: g.eventId, gateId: g.id, key: null, serial, kind, result: 'used', raw, manual, at: now });
+    return { fresh: false, at: prev.at.toISOString(), gate: `${g.name}（練習）` };
+  };
+
+  // 練習單上的特例練習票：正式時間後一律無效
+  if ((input.qr && isPracticeQr(input.qr)) || (input.serial && isPracticeSerial(input.serial)) || input.paper === -1) {
+    kind = '練習票';
+    if (!practice) return done({ result: 'invalid', reason: '練習票，不可入場。這是驗票練習單上的票，請對方出示真正的票。' });
+    return done(await practiceTicket(input, record));
+  }
+
+  // 揪團贈席拿年代紙本（貴賓券）：搜排號後按「紙本入場」
+  if (input.paper !== undefined) {
+    kind = '贈席紙本';
+    const row = (await giftCheckRows(db, g.eventId, now)).find((x) => x.no === input.paper);
+    if (!row) return done({ result: 'invalid', reason: '找不到這個贈席，請重新搜尋。' });
+    if (row.serial) return done({ result: 'invalid', reason: `這席（${row.label}）選了 QR 電子票，請對方出示 QR；沒有 QR 時請搜尋姓名入場。` });
+    const serial = giftPaperSerial(row.no);
+    const label = `三樓 ${row.label}`;
+    const r = await record(serial, 0, row.seatId);
+    if (!r.fresh) return done({ result: 'used', serial, label, holderName: row.group, at: r.at, gate: r.gate });
+    return done({ result: 'ok', serial, label, code: row.code, zoneName: '揪團贈席・紙本', side: '', holderName: row.group, holderId4: '', orderNo: `劃位序 ${row.no}`, manual: true, giftPaper: true });
+  }
+
+  let serial: string;
+  // 年代票（電子、紙本）：掃到就計數（同一張只算一次），不分樓層（11-25 使用者）
+  const era = input.qr ? parseEraQr(input.qr) : null;
+  if (era?.kind === 'pending') { kind = '年代轉贈待接收'; return done({ result: 'invalid', reason: '年代票：轉贈尚未接收。請收票的人先在年代 App 按「接收票券」，再出示 QR。' }); }
+  if (era?.kind === 'era') {
+    kind = era.paper ? '年代紙本' : '年代';
+    serial = eraSerial(era.id);
+    const label = era.paper ? '年代紙本票' : '年代票';
+    const r = await record(serial, 0, ERA_SEAT);
+    if (!r.fresh) return done({ result: 'used', serial, label, holderName: '', at: r.at, gate: r.gate, isEra: true });
+    return done({ result: 'ok', serial, label, code: '', zoneName: '', side: '', holderName: '', holderId4: '', orderNo: '', manual: false, isEra: true, ...(era.paper ? { eraPaper: true as const } : {}) });
   }
   if (input.qr) {
     const q = readQr(await qrSecret(db), input.qr);
@@ -132,57 +191,108 @@ export async function scan(db: Db, token: string, input: { qr?: string; serial?:
   }
   // 揪團贈席電子票（序號 JG…）
   if (isGiftSerial(serial)) {
+    kind = '贈席 QR';
     const { ticket: gt, reason } = await findGiftTicket(db, g.eventId, serial, now);
     if (!gt) return done({ result: 'invalid', reason });
-    const ins = await db.insert(t.checkin).values({ eventId: g.eventId, serial, orderId: 0, seatId: gt.seatId, gateId: g.id, manual, at: now }).onConflictDoNothing().returning();
     const label = `三樓 ${gt.label}`;
-    if (!ins.length) {
-      const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
-      const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
-      return done({ result: 'used', serial, label, holderName: gt.holderName, at: prev.at.toISOString(), gate: pg?.name ?? '後台' });
-    }
+    const r = await record(serial, 0, gt.seatId);
+    if (!r.fresh) return done({ result: 'used', serial, label, holderName: gt.holderName, at: r.at, gate: r.gate });
     return done({ result: 'ok', serial, label, code: gt.code, zoneName: gt.zoneName, side: gt.side, holderName: gt.holderName, holderId4: '', orderNo: `${gt.group}・劃位序 ${gt.no}`, manual });
   }
+  kind = '我們的票';
   const { ticket, order } = await findTicket(db, serial);
   if (!ticket) {
     return done({ result: 'invalid', reason: !order ? '查無此票' : order.status === 'pending' ? '尚未確認劃位，不能入場' : '此訂單已取消，票券無效' });
   }
-  const ins = await db.insert(t.checkin).values({
-    eventId: g.eventId, serial, orderId: ticket.orderId, seatId: ticket.seatId, gateId: g.id, manual, at: now,
-  }).onConflictDoNothing().returning();
-  if (!ins.length) {
-    const [prev] = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), eq(t.checkin.serial, serial)));
-    const [pg] = prev?.gateId ? await db.select().from(t.gate).where(eq(t.gate.id, prev.gateId)) : [];
-    return done({ result: 'used', serial, label: ticket.label, holderName: ticket.holderName, at: prev.at.toISOString(), gate: pg?.name ?? '後台' });
-  }
+  const r = await record(serial, ticket.orderId, ticket.seatId);
+  if (!r.fresh) return done({ result: 'used', serial, label: ticket.label, holderName: ticket.holderName, at: r.at, gate: r.gate });
   return done({
     result: 'ok', serial, label: ticket.label, code: ticket.code, zoneName: ticket.zoneName, side: sideOf(ticket.code),
     holderName: ticket.holderName, holderId4: ticket.holderId4, orderNo: ticket.orderNo ?? '', manual,
   });
 }
 
-/** 驗票頁搜尋：序號、持票人姓名、購票人姓名或手機 */
-export async function searchTickets(db: Db, token: string, q: string) {
+type Rec = (serial: string, orderId: number, seatId: string) => Promise<{ fresh: true } | { fresh: false; at: string; gate: string }>;
+
+/** 特例練習票（只在練習時間內） */
+async function practiceTicket(input: { qr?: string; serial?: string; paper?: number }, record: Rec): Promise<ScanResult> {
+  const q = (input.qr ?? '').trim().toUpperCase();
+  const base = { code: '', side: '', holderId4: '', orderNo: '', manual: !input.qr };
+  if (input.paper === -1) {
+    const r = await record('JGP-PRAC', 0, 'PRAC');
+    if (!r.fresh) return { result: 'used', serial: 'JGP-PRAC', label: PRACTICE_SEAT.label, holderName: PRACTICE_SEAT.group, at: r.at, gate: r.gate };
+    return { result: 'ok', serial: 'JGP-PRAC', label: PRACTICE_SEAT.label, zoneName: '揪團贈席・紙本（練習）', holderName: PRACTICE_SEAT.group, ...base, manual: true, giftPaper: true };
+  }
+  if (q === PRACTICE_QR.ok || isPracticeSerial(input.serial ?? '')) {
+    const r = await record('PRAC-OK', 0, 'PRAC');
+    if (!r.fresh) return { result: 'used', serial: 'PRAC-OK', label: '2 樓 第 5 排 12 號（練習）', holderName: '練習生', at: r.at, gate: r.gate };
+    return { result: 'ok', serial: 'PRAC-OK', label: '2 樓 第 5 排 12 號（練習）', zoneName: '練習票', holderName: '練習生', ...base, holderId4: '1234' };
+  }
+  if (q === PRACTICE_QR.used) {
+    return { result: 'used', serial: 'PRAC-USED', label: '2 樓 第 6 排 8 號（練習）', holderName: '練習生', at: new Date(Date.now() - 12 * 60_000).toISOString(), gate: '4F左-A（練習）' };
+  }
+  if (q === PRACTICE_QR.cancel) return { result: 'invalid', reason: '此訂單已取消，票券無效（練習）' };
+  if (q === PRACTICE_QR.vip) {
+    const r = await record('PRAC-VIP', 0, 'PRAC');
+    if (!r.fresh) return { result: 'used', serial: 'PRAC-VIP', label: 'VIP 排 8 號（練習）', holderName: '練習貴賓', at: r.at, gate: r.gate };
+    return { result: 'ok', serial: 'PRAC-VIP', label: 'VIP 排 8 號（練習）', zoneName: 'VIP', holderName: '練習貴賓', ...base };
+  }
+  if (q === PRACTICE_QR.era || q === PRACTICE_QR.eraPaper) {
+    const paper = q === PRACTICE_QR.eraPaper;
+    const s = paper ? 'ERA:PRAC-P' : 'ERA:PRAC';
+    const label = paper ? '年代紙本票（練習）' : '年代票（練習）';
+    const r = await record(s, 0, ERA_SEAT);
+    if (!r.fresh) return { result: 'used', serial: s, label, holderName: '', at: r.at, gate: r.gate, isEra: true };
+    return { result: 'ok', serial: s, label, zoneName: '', holderName: '', ...base, isEra: true, ...(paper ? { eraPaper: true as const } : {}) };
+  }
+  return { result: 'invalid', reason: '不是本活動的入場 QR code（練習）' };
+}
+
+/** 驗票頁搜尋結果：paper＝紙本贈席（劃位序，-1 是練習座位），按「紙本入場」 */
+export type Found = { serial: string; label: string; holderName: string; holderId4: string; entered: string | null; paper?: number; note?: string };
+
+/** 「18-3」「18排3號」「18 3」→ 排、號 */
+export function parseSeatQuery(q: string) {
+  const m = q.trim().replace(/[－—]/g, '-').match(/^(?:3\s*(?:樓|F)\s*-?\s*)?(\d{1,2})\s*(?:-|排|\s)\s*(\d{1,3})\s*號?$/i);
+  return m ? { row: parseInt(m[1], 10), seat: parseInt(m[2], 10) } : null;
+}
+
+/** 驗票頁搜尋：序號、持票人姓名、購票人姓名或手機；贈席另可用票上印的「排-號」搜 */
+export async function searchTickets(db: Db, token: string, q: string, now = new Date()): Promise<Found[]> {
   const g = await gateByToken(db, token);
   const k = q.trim();
   if (k.length < 2) return [];
+  const practice = now < (await liveAt(db));
+  const seatQ = parseSeatQuery(k);
+  // 揪團贈席：入座者、群名、負責人姓名或手機、序號、排號（紙本的按「紙本入場」）
+  const kd = k.replace(/\D/g, '');
+  const rows = await giftCheckRows(db, g.eventId, now);
+  const gifts = seatQ
+    ? rows.filter((x) => Number(x.rowNo) === seatQ.row && parseInt(String(x.seatNo), 10) === seatQ.seat)
+    : rows.filter((x) => x.holderName.includes(k) || x.group.includes(k) || x.headName.includes(k)
+      || (kd.length >= 3 && x.headPhone.includes(kd)) || (x.serial && x.serial.includes(k.toUpperCase()))).slice(0, 20);
+  const giftOut: Found[] = gifts.map((x) => (x.serial
+    ? { serial: x.serial, label: `三樓 ${x.label}`, holderName: x.holderName, holderId4: x.group, entered: null }
+    : { serial: giftPaperSerial(x.no), label: `三樓 ${x.label}`, holderName: x.group, holderId4: x.holderName, entered: null, paper: x.no, note: x.paper === '尚未選擇' ? '紙本贈席（未選取票方式）' : '紙本贈席・貴賓券' }));
+  const giftSerials = giftOut.map((x) => x.serial);
+  const giftUsed = giftSerials.length
+    ? await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, giftSerials))) : [];
+  for (const x of giftOut) x.entered = practice ? null : giftUsed.find((u) => u.serial === x.serial)?.at.toISOString() ?? null;
+  if (seatQ) {
+    if (practice && seatQ.row === PRACTICE_SEAT.row && seatQ.seat === PRACTICE_SEAT.seat) {
+      giftOut.unshift({ serial: 'JGP-PRAC', label: PRACTICE_SEAT.label, holderName: PRACTICE_SEAT.group, holderId4: '', entered: null, paper: -1, note: '紙本贈席・貴賓券（練習）' });
+    }
+    return giftOut;
+  }
   const hit = await db.selectDistinct({ id: t.orders.id }).from(t.orders)
     .innerJoin(t.orderSeat, eq(t.orderSeat.orderId, t.orders.id))
     .where(and(eq(t.orders.eventId, g.eventId), eq(t.orders.status, 'paid'), or(
       ilike(t.orders.orderNo, `%${k}%`), ilike(t.orders.buyerName, `%${k}%`), ilike(t.orders.buyerPhone, `%${k.replace(/\D/g, '') || k}%`),
       ilike(t.orderSeat.holderName, `%${k}%`),
     ))).limit(10);
-  // 揪團贈席：入座者、群名、負責人姓名或手機、序號（紙本的也列出，標「紙本票」、不能按入場）
-  const kd = k.replace(/\D/g, '');
-  const gifts = (await giftCheckRows(db, g.eventId)).filter((x) => x.holderName.includes(k) || x.group.includes(k) || x.headName.includes(k)
-    || (kd.length >= 3 && x.headPhone.includes(kd)) || (x.serial && x.serial.includes(k.toUpperCase()))).slice(0, 20);
-  const giftOut = gifts.map((x) => ({ serial: x.serial, label: `三樓 ${x.label}${x.serial ? '' : `（${x.paper}${x.paper === '尚未選擇' ? '' : '・紙本票'}）`}`, holderName: x.holderName, holderId4: x.group, entered: null as string | null }));
-  const giftUsed = giftOut.filter((x) => x.serial).length
-    ? await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, giftOut.filter((x) => x.serial).map((x) => x.serial)))) : [];
-  for (const x of giftOut) x.entered = giftUsed.find((u) => u.serial === x.serial)?.at.toISOString() ?? null;
   if (!hit.length) return giftOut;
   const { tickets } = await ticketData(db, hit.map((h) => h.id));
-  const used = await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, tickets.map((x) => x.serial))));
+  const used = practice ? [] : await db.select().from(t.checkin).where(and(eq(t.checkin.eventId, g.eventId), inArray(t.checkin.serial, tickets.map((x) => x.serial))));
   return [...tickets.slice(0, 30).map((x) => ({ serial: x.serial, label: x.label, holderName: x.holderName, holderId4: x.holderId4, entered: used.find((u) => u.serial === x.serial)?.at.toISOString() ?? null })), ...giftOut];
 }
 
@@ -193,7 +303,7 @@ export async function checkinSummary(db: Db, now = new Date()) {
   const [{ total: paidSeats }] = await db.select({ total: sql<number>`count(*)::int` }).from(t.orderSeat)
     .innerJoin(t.orders, eq(t.orders.id, t.orderSeat.orderId)).where(and(eq(t.orders.eventId, ev.id), eq(t.orders.status, 'paid')));
   const giftRows = await giftCheckRows(db, ev.id, now);
-  const total = paidSeats + giftRows.filter((x) => x.serial).length;
+  const total = paidSeats + giftRows.length;
   const recent = await db.select({ id: t.checkin.id, serial: t.checkin.serial, at: t.checkin.at, manual: t.checkin.manual, gate: t.gate.name, seatId: t.checkin.seatId, holder: t.orderSeat.holderName })
     .from(t.checkin).leftJoin(t.gate, eq(t.gate.id, t.checkin.gateId))
     .leftJoin(t.orderSeat, and(eq(t.orderSeat.orderId, t.checkin.orderId), eq(t.orderSeat.seatId, t.checkin.seatId)))
@@ -202,7 +312,9 @@ export async function checkinSummary(db: Db, now = new Date()) {
     entered: sql<number>`(count(*) filter (where ${t.checkin.serial} not like 'ERA:%'))::int`,
     era: sql<number>`(count(*) filter (where ${t.checkin.serial} like 'ERA:%'))::int`,
   }).from(t.checkin).where(eq(t.checkin.eventId, ev.id));
-  return { total, entered, era, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName ?? (r.serial.startsWith('ERA:') ? '年代票' : null), at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
+  return { total, entered, era, recent: recent.map((r) => ({ ...r, holder: r.holder ?? giftRows.find((x) => x.serial === r.serial)?.holderName
+      ?? (isGiftPaperSerial(r.serial) ? `紙本贈席 ${giftRows.find((x) => giftPaperSerial(x.no) === r.serial)?.group ?? ''}` : null)
+      ?? (r.serial.startsWith('ERA:') ? '年代票' : null), at: r.at.toISOString(), gate: r.gate ?? '後台' })) };
 }
 
 /** 撤銷入場（誤掃）：這張票可以再掃一次 */
@@ -238,7 +350,7 @@ export async function checkinList(db: Db, sort: 'name' | 'seat' = 'name', now = 
   });
   // 揪團贈席：電子票（QR）列序號；紙本的列「紙本：方式」，給門口核對
   for (const x of await giftCheckRows(db, ev.id, now)) {
-    const u = x.serial ? used.find((c) => c.serial === x.serial) : undefined;
+    const u = used.find((c) => c.serial === (x.serial || giftPaperSerial(x.no)));
     rows.push({
       serial: x.serial || `紙本：${x.paper}`, holderName: x.holderName || '（未填）', holderId4: '', label: `三樓 ${x.label}`, code: x.code, zoneName: '揪團贈席',
       buyerName: `${x.group}（${x.headName}）`, entered: u ? { at: u.at.toISOString(), gate: u.gate ?? '後台' } : null,

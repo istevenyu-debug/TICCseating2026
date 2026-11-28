@@ -15,7 +15,7 @@ export async function GET(req: Request, { params }: { params: { token: string } 
   });
 }
 
-const body = z.object({ qr: z.string().max(200).optional(), serial: z.string().max(40).optional() });
+const body = z.object({ qr: z.string().max(200).optional(), serial: z.string().max(40).optional(), paper: z.number().int().min(-1).max(100000).optional() });
 
 /** 掃描（qr）或手動輸入序號（serial）入場 */
 export async function POST(req: Request, { params }: { params: { token: string } }) {

@@ -6,16 +6,23 @@
  * 轉贈尚未接收時，QR 內容是文字「轉贈待接收」。
  * 我們驗不了真假（不知道年代的檢查算法），只用 ID 計數：同一張票只算一次。
  */
-export type EraQr = { kind: 'era'; id: string } | { kind: 'pending' } | null;
+export type EraQr = { kind: 'era'; id: string; paper?: true } | { kind: 'pending' } | null;
 
 const RE = /^([A-Z0-9]{10,20})-(\d{8}[0-9A-Z]{2,4})$/;
+/**
+ * 年代紙本票（11/24 樣本「貴賓券」3樓-15排-36號）：QR 是一串固定英數，例 D136DSP1IL8XQYN（15 碼，沒有橫線）。
+ * 只有一張樣本：放寬成 12–20 碼、同時有英文和數字；練習時會記下原文，再依實際樣本調整。
+ */
+const PAPER_RE = /^(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{12,20}$/;
 
 export function parseEraQr(text: string): EraQr {
   const s = String(text ?? '').trim();
   if (!s) return null;
   if (s.includes('轉贈')) return { kind: 'pending' };
-  const m = s.toUpperCase().match(RE);
-  return m ? { kind: 'era', id: m[1] } : null;
+  const u = s.toUpperCase();
+  const m = u.match(RE);
+  if (m) return { kind: 'era', id: m[1] };
+  return PAPER_RE.test(s) ? { kind: 'era', id: s, paper: true } : null;
 }
 
 export const ERA_FLOORS = ['3F', '4F', '5F'] as const;

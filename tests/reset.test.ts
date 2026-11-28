@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { setLiveAt } from '@/lib/practice';
 import { eq } from 'drizzle-orm';
 import { createPgliteDb, type Db } from '@/db/client';
 import { createEvent, seedVenue } from '@/db/seed';
@@ -22,6 +23,7 @@ async function book(code: string, seats: string[]) {
 
 beforeEach(async () => {
   db = await createPgliteDb();
+  await setLiveAt(db, 'test', '2020-01-01T00:00:00Z'); // 這些測試驗正式入場（不是練習）
   await seedVenue(db);
   await createEvent(db, { name: '法會', showAt: new Date('2026-12-20T19:30:00+08:00'), bankName: 'b', bankAccount: '1', accountName: 'c' });
   await A.publish(db, 'admin');

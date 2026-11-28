@@ -19,6 +19,8 @@ import { requestUpdate } from '@/lib/updater';
 import { importBank, ignoreBank, clearBank, checkPaidMany } from '@/lib/bank';
 import { restorePreorder, setPreorderRemits, cancelConfirmedPreorder, cancelPreorder, confirmPreorder, markPreorderSeen, setPushLink, setLineCfg, checkPreorder, setPreorderItems, releasePreorder, updatePreorderEmail, resendReceived, clearMenuCache, setPreorderSettings, promoteWaitlist, setFlowImage } from '@/lib/preorder';
 import { createGates, undoCheckin, updateGate } from '@/lib/ticket';
+import { clearPractice, setLiveAt } from '@/lib/practice';
+import { mailLead, renewLeadLink, saveLead, setLeadActive } from '@/lib/crew';
 import { resetPreview, resetSales } from '@/lib/reset';
 import { addVenues, decideReg, deleteReg, deleteVenue, editReg, mergeVenue, paintFloor3, presetFloor3, renewPickCode, sendLinks, sendPickLinks, setJoinSettings, setRegVenue, updateVenue } from '@/lib/join';
 import { mergeGroups, moveReport, renameGroup } from '@/lib/joinGroup';
@@ -194,6 +196,12 @@ const action = z.discriminatedUnion('action', [
   z.object({ action: z.literal('gate.create'), names: z.array(z.string().trim().min(1).max(20)).min(1).max(20) }),
   z.object({ action: z.literal('gate.update'), id, values: z.object({ active: z.boolean(), renewToken: z.boolean(), name: z.string().trim().min(1).max(20) }).partial() }),
   z.object({ action: z.literal('checkin.undo'), id }),
+  z.object({ action: z.literal('checkin.liveAt'), at: z.string().max(40) }),
+  z.object({ action: z.literal('checkin.clearPractice') }),
+  z.object({ action: z.literal('crew.lead.save'), name: z.string().max(40), email: z.string().max(120), lineId: z.string().max(40) }),
+  z.object({ action: z.literal('crew.lead.renew'), which: z.enum(['manage', 'join']) }),
+  z.object({ action: z.literal('crew.lead.active'), active: z.boolean() }),
+  z.object({ action: z.literal('crew.lead.mail') }),
   z.object({ action: z.literal('reset.preview') }),
   z.object({ action: z.literal('reset.run'), confirm: z.literal('清除', { errorMap: () => ({ message: '請輸入「清除」兩個字確認' }) }),
     keepLinkIds: z.array(id).max(500), close: z.boolean() }),
@@ -464,6 +472,12 @@ export async function POST(req: Request) {
       case 'gate.create': return createGates(db, who, a.names);
       case 'gate.update': return updateGate(db, who, a.id, a.values);
       case 'checkin.undo': return undoCheckin(db, who, a.id);
+      case 'checkin.liveAt': mustBeAdmin(); return setLiveAt(db, who, a.at);
+      case 'checkin.clearPractice': mustBeAdmin(); return clearPractice(db, who);
+      case 'crew.lead.save': mustBeAdmin(); return saveLead(db, who, a);
+      case 'crew.lead.renew': mustBeAdmin(); return renewLeadLink(db, who, a.which);
+      case 'crew.lead.active': mustBeAdmin(); return setLeadActive(db, who, a.active);
+      case 'crew.lead.mail': { mustBeAdmin(); const r = await mailLead(db, who, joinBase(req)); dispatchQueued(db).catch(() => undefined); return r; }
       case 'reset.preview': return resetPreview(db);
       case 'reset.run': return resetSales(db, who, { keepLinkIds: a.keepLinkIds, close: a.close });
       case 'bundle.create': return A.bundleByRule(db, who, a.rows, a.blocks, a.size);

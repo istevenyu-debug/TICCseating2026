@@ -8,7 +8,7 @@
  * - 驗票：序號 JG<劃位序 3 碼>-<版本>，與一般票共用「九、驗票」。
  */
 import { randomBytes } from 'node:crypto';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '@/db/client';
 import * as t from '@/db/schema';
@@ -96,6 +96,9 @@ async function usedKeys(db: Db) {
 
 export const giftSerial = (no: number, ver: number) => `JG${String(no).padStart(3, '0')}-${ver}`;
 export const isGiftSerial = (s: string) => /^JG\d{3,}-\d+$/.test(s);
+/** 揪團贈席拿年代紙本（貴賓券）：驗票頁搜排號 →「紙本入場」，入場紀錄序號 JGP<劃位序> */
+export const giftPaperSerial = (no: number) => `JGP${String(no).padStart(3, '0')}`;
+export const isGiftPaperSerial = (s: string) => /^JGP\d{3,}$/.test(s);
 export const giftUrl = (base: string, code: string) => `${base}/join/q/${code}`;
 const newCode = () => randomBytes(12).toString('base64url');
 /** 入座者是不是群主本人（比對時去空白） */
@@ -375,7 +378,8 @@ export async function giftCheckRows(db: Db, eventId: number, now = new Date()) {
     const e = effectiveOf(r.gift, reg, s, now);
     const group = reg ? (reg.venueId ? vs.find((v) => v.id === reg.venueId)?.name ?? reg.venueText : reg.venueText) : '';
     return {
-      slotId: r.slot.id, no: r.slot.no, serial: e.opt?.kind === 'qr' ? giftSerial(r.slot.no, r.gift.ver) : '', paper: e.opt?.kind === 'paper' ? e.opt.name : e.opt ? '' : '尚未選擇',
+      slotId: r.slot.id, no: r.slot.no, seatId: r.slot.seatId ?? '', rowNo: r.rowNo, seatNo: r.seatNo,
+      serial: e.opt?.kind === 'qr' ? giftSerial(r.slot.no, r.gift.ver) : '', paper: e.opt?.kind === 'paper' ? e.opt.name : e.opt ? '' : '尚未選擇',
       holderName: r.gift.name, label: seatLabel(r), code: r.code, group, headName: reg?.headName ?? '', headPhone: reg?.headPhone ?? '',
     };
   });
@@ -525,7 +529,8 @@ export async function resetGiftGroup(db: Db, actor: string, regId: number, now =
         optionKey: '', name: reg.headName, email: '', phone: '', address: '', ver: r.gift.ver + 1, code: newCode(),
         chosenBy: '', chosenAt: null, mailedTo: '', mailedVer: 0, mailedAt: null, updatedAt: now,
       }).where(eq(t.joinGift.slotId, r.slot.id));
-      const del = await tx.delete(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like ${`JG${String(r.slot.no).padStart(3, '0')}-%`}`)).returning({ id: t.checkin.id });
+      const del = await tx.delete(t.checkin).where(and(eq(t.checkin.eventId, ev.id), eq(t.checkin.orderId, 0),
+        or(sql`${t.checkin.serial} like ${`JG${String(r.slot.no).padStart(3, '0')}-%`}`, eq(t.checkin.serial, giftPaperSerial(r.slot.no))))).returning({ id: t.checkin.id });
       checkins += del.length;
     }
     await tx.update(t.joinReg).set({ giftSentAt: null }).where(eq(t.joinReg.id, regId));
@@ -540,7 +545,8 @@ export async function giftCheckinsOf(db: Db, regId: number) {
   if (!slots.length) return 0;
   const rows = await db.select({ serial: t.checkin.serial }).from(t.checkin).where(and(eq(t.checkin.orderId, 0), sql`${t.checkin.serial} like 'JG%'`));
   const pre = slots.map((x) => `JG${String(x.no).padStart(3, '0')}-`);
-  return rows.filter((r) => pre.some((p) => r.serial.startsWith(p))).length;
+  const paper = new Set(slots.map((x) => giftPaperSerial(x.no)));
+  return rows.filter((r) => paper.has(r.serial) || pre.some((p) => r.serial.startsWith(p))).length;
 }
 
 /** 刪除全部入場紀錄（下週測驗票用）。截止時間後停用 */

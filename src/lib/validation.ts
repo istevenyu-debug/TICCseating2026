@@ -50,3 +50,5 @@ export const submitInput = z.object({
 });
 
 export type SubmitInput = z.infer<typeof submitInput>;
+
+export const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s ?? '').trim());

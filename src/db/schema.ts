@@ -260,6 +260,8 @@ export const gate = pgTable('gate', {
   active: boolean('active').notNull().default(true),
   sort: integer('sort').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  openedAt: timestamp('opened_at', { withTimezone: true }), // 第一次有人打開這條連結（換新連結時清空）
+  seenAt: timestamp('seen_at', { withTimezone: true }), // 最近一次連線（驗票頁每 20 秒回報）
 }, (t) => ({ token: uniqueIndex('gate_token_idx').on(t.token) }));
 
 /** 入場紀錄：每張票（序號）只能一筆 */
@@ -273,6 +275,43 @@ export const checkin = pgTable('checkin', {
   manual: boolean('manual').notNull().default(false), // 手動輸入序號或搜尋入場（非掃描）
   at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ serial: uniqueIndex('checkin_serial_idx').on(t.eventId, t.serial) }));
+
+/**
+ * 練習入場（正式驗票時間前的所有掃描）：跟 checkin 分開存，不算入場、不影響正式驗票。
+ * key＝門口＋序號（每支手機各自練習，同一支再掃同一張才會「已入場過」）；重複、無效的掃描也記一筆（key 空白），
+ * raw 保留 QR 原文，事後用來看年代紙本票的格式。
+ */
+export const checkinPractice = pgTable('checkin_practice', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  gateId: integer('gate_id'),
+  key: text('key'),
+  serial: text('serial').notNull().default(''),
+  kind: text('kind').notNull().default(''), // 我們的票／年代／年代紙本／贈席紙本／練習票…
+  result: text('result').notNull(), // ok / used / invalid
+  reason: text('reason').notNull().default(''),
+  raw: text('raw').notNull().default(''),
+  manual: boolean('manual').notNull().default(false),
+  at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ key: uniqueIndex('checkin_practice_key_idx').on(t.eventId, t.key) }));
+
+/** 驗票志工：志工自己用報名連結填，負責人在驗票管理頁分配到位置（gate） */
+export const crew = pgTable('crew', {
+  id: serial('id').primaryKey(),
+  eventId: integer('event_id').notNull().references(() => event.id),
+  code: text('code').notNull(), // 報名完成頁用（按「加好友」時記錄）
+  name: text('name').notNull(),
+  email: text('email').notNull(),
+  phone: text('phone').notNull().default(''),
+  friend: boolean('friend').notNull().default(false), // 報名後按過「加負責人 LINE 好友」
+  gateId: integer('gate_id'), // 分配的位置（一個位置一人）
+  mailNotifId: integer('mail_notif_id'), // 最近一次寄驗票連結的通知
+  mailedGate: text('mailed_gate').notNull().default(''), // 寄出時的位置＋連結（換人／換連結後要重寄）
+  lineAt: timestamp('line_at', { withTimezone: true }), // 負責人按過「LINE 傳送」
+  removed: boolean('removed').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({ code: uniqueIndex('crew_code_idx').on(t.code), email: uniqueIndex('crew_email_idx').on(t.eventId, t.email), gate: uniqueIndex('crew_gate_idx').on(t.gateId) }));
 
 /** 手機推播訂閱：消費者在購票頁按「開啟通知」後建立 */
 export const pushSub = pgTable('push_sub', {

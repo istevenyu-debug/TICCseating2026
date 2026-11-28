@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-type Info = { gate: string; event: string; showAt: string; total: number; entered: number; here: number; era: number; safeMode?: boolean };
-type Ok = { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true };
+type Cnt = { total: number; entered: number; here: number; era: number; practice?: boolean; liveAt?: string; prac?: number };
+type Info = Cnt & { gate: string; event: string; showAt: string; safeMode?: boolean };
+type Ok = { result: 'ok'; serial: string; label: string; code: string; zoneName: string; side: string; holderName: string; holderId4: string; orderNo: string; manual: boolean; isEra?: true; eraPaper?: true; giftPaper?: true };
 type Used = { result: 'used'; serial: string; label: string; holderName: string; at: string; gate: string; isEra?: true };
 type Bad = { result: 'invalid'; reason: string };
-type Res = (Ok | Used | Bad) & { total: number; entered: number; here: number; era: number };
-type Found = { serial: string; label: string; holderName: string; holderId4: string; entered: string | null };
+type Res = (Ok | Used | Bad) & Cnt;
+type Found = { serial: string; label: string; holderName: string; holderId4: string; entered: string | null; paper?: number; note?: string };
+const when = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false });
 
@@ -58,15 +60,15 @@ export default function ScanApp({ token }: { token: string }) {
   }, [url]);
   useEffect(() => { load(); const i = setInterval(load, 20_000); return () => clearInterval(i); }, [load]);
 
-  const submit = useCallback(async (body: { qr?: string; serial?: string }) => {
+  const submit = useCallback(async (body: { qr?: string; serial?: string; paper?: number }) => {
     if (busy.current) return;
-    const bad = (reason: string) => { setRes({ result: 'invalid', reason, total: info?.total ?? 0, entered: info?.entered ?? 0, here: info?.here ?? 0, era: info?.era ?? 0 }); beep(false); hold.current = Date.now() + 3500; };
+    const bad = (reason: string) => { setRes({ result: 'invalid', reason, total: info?.total ?? 0, entered: info?.entered ?? 0, here: info?.here ?? 0, era: info?.era ?? 0, practice: info?.practice }); beep(false); hold.current = Date.now() + 3500; };
     busy.current = true;
     const r = await call<Res>(url, body);
     busy.current = false;
     if (!r.ok) { bad(r.message); return; }
     setRes(r.data);
-    setInfo((p) => (p ? { ...p, total: r.data.total, entered: r.data.entered, here: r.data.here, era: r.data.era } : p));
+    setInfo((p) => (p ? { ...p, total: r.data.total, entered: r.data.entered, here: r.data.here, era: r.data.era, practice: r.data.practice, liveAt: r.data.liveAt, prac: r.data.prac } : p));
     beep(r.data.result === 'ok');
     hold.current = Date.now() + (r.data.result === 'ok' ? 1800 : 3500);
   }, [url, info]);
@@ -129,9 +131,12 @@ export default function ScanApp({ token }: { token: string }) {
   return (
     <main className="scan">
       {info.safeMode && <div style={{ background: '#b42318', color: '#fff', padding: '6px 16px', fontSize: 14 }}>⚠ 測試機：這裡的入場紀錄不算正式</div>}
+      {info.practice && <div style={{ background: '#fdd835', color: '#3d2c00', padding: '6px 16px', fontSize: 14 }}>練習中，不算入場・{info.liveAt ? when(info.liveAt) : ''} 起正式驗票</div>}
       <header className="scan-head">
         <div><b>驗票・{info.gate}</b><div className="scan-sub">{info.event}</div></div>
-        <div className="scan-count"><b>{info.entered}</b> / {info.total}<div className="scan-sub">本門 {info.here}・年代 {info.era}</div></div>
+        {info.practice
+          ? <div className="scan-count"><b>{info.prac ?? 0}</b><div className="scan-sub">這支手機練習張數</div></div>
+          : <div className="scan-count"><b>{info.entered}</b> / {info.total}<div className="scan-sub">本門 {info.here}・年代 {info.era}</div></div>}
       </header>
 
       <div className="scan-cam">
@@ -145,9 +150,11 @@ export default function ScanApp({ token }: { token: string }) {
         )}
         {res && (
           <div className={`scan-result ${kind === 'ok' ? 'good' : 'bad'}`} role="status" onClick={() => { setRes(null); hold.current = 0; }}>
+            {res.practice && <div className="scan-sub" style={{ background: '#fdd835', color: '#3d2c00', borderRadius: 6, padding: '2px 8px', marginBottom: 6 }}>練習，不算入場</div>}
             {res.result === 'ok' && res.isEra && <>
-              <div className="scan-big">✓ 年代票</div>
-              <div className="scan-holder">請看對方手機上的座位</div>
+              <div className="scan-big">✓ {res.eraPaper ? '年代紙本票' : '年代票'}</div>
+              <div className="scan-holder">{res.eraPaper ? '請看票上印的座位' : '請看對方手機上的座位'}</div>
+              {res.eraPaper && <div className="scan-sub">票上若寫「貴賓券」，下次請改用搜尋排號（揪團贈席）</div>}
             </>}
             {res.result === 'used' && res.isEra && <>
               <div className="scan-big">✗ 已入場過</div>
@@ -155,7 +162,13 @@ export default function ScanApp({ token }: { token: string }) {
               <div className="scan-holder">已於 <b>{hhmm(res.at)}</b> 從 <b>{res.gate}</b> 入場</div>
               <div className="scan-sub">可能是截圖或同一張票。請看對方手機上的座位，需要時請工作人員協助。</div>
             </>}
-            {res.result === 'ok' && !res.isEra && <>
+            {res.result === 'ok' && res.giftPaper && <>
+              <div className="scan-big">✓ 紙本贈席</div>
+              <div className="scan-seat">{res.label}</div>
+              <div className="scan-holder">{res.holderName}</div>
+              <div className="scan-sub">{res.orderNo ? `${res.orderNo}・` : ''}請核對貴賓券上的座位</div>
+            </>}
+            {res.result === 'ok' && !res.isEra && !res.giftPaper && <>
               <div className="scan-big">✓ 可入場</div>
               <div className="scan-seat">{res.label}</div>
               <div>{res.zoneName}・{res.code}{res.side ? `・${res.side}` : ''}</div>
@@ -187,19 +200,19 @@ export default function ScanApp({ token }: { token: string }) {
           const r = await call<{ results: Found[] }>(`${url}?q=${encodeURIComponent(q.trim())}`);
           setFound(r.ok ? r.data.results : []);
         }} className="scan-row">
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋姓名、手機或訂單編號（忘記帶票）" aria-label="搜尋票券" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋姓名、手機；貴賓券打排號，例 18-3" aria-label="搜尋票券" />
           <button className="scan-btn small ghost" disabled={q.trim().length < 2}>搜尋</button>
         </form>
         {found && (
           <div className="scan-found">
             {found.length ? found.map((f, i) => (
               <div key={`${f.serial}|${f.label}|${i}`} className="scan-item">
-                <span><b>{f.label}</b>　{f.holderName}{f.holderId4 ? `（${f.holderId4}）` : ''}<br /><span className="scan-sub">{f.serial}</span></span>
-                {!f.serial ? <span className="scan-sub">持紙本票，請看紙本</span>
-                  : f.entered ? <span className="scan-sub">已入場 {hhmm(f.entered)}</span>
+                <span><b>{f.label}</b>　{f.holderName}{f.holderId4 ? `（${f.holderId4}）` : ''}<br /><span className="scan-sub">{f.note ?? f.serial}</span></span>
+                {f.entered ? <span className="scan-sub">已入場 {hhmm(f.entered)}</span>
+                  : f.paper !== undefined ? <button className="scan-btn small" onClick={async () => { await submit({ paper: f.paper }); setFound(null); setQ(''); }}>紙本入場</button>
                   : <button className="scan-btn small" onClick={async () => { await submit({ serial: f.serial }); setFound(null); setQ(''); }}>入場</button>}
               </div>
-            )) : <div className="scan-sub">查無資料</div>}
+            )) : <div className="scan-sub">{/^\s*\d{1,2}\s*[-排\s]\s*\d{1,3}/.test(q) ? '這個座位不是紙本贈席：若是年代票，請直接掃 QR' : '查無資料'}</div>}
           </div>
         )}
         <p className="scan-sub">手動入場請先核對持票人姓名。結果畫面點一下即可繼續掃下一張。</p>

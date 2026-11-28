@@ -34,7 +34,7 @@ type EinvPublic = { enabled: boolean; mode: 'mock' | 'test' | 'prod'; timing: 'a
 type Inv = { id: number; orderNo: string; status: string; env: string; invoiceNo: string; invoiceDate: string; randomNumber: string; amount: number; buyer: string; checks: string[]; error: string | null;
   issuedBy: string | null; voidReason: string | null; lines: { name: string; qty: number; unit: string; price: number; amount: number }[]; name: string; phone: string; email: string; paidAmount: number | null; invType: string; invCode: string; invTitle: string; preorderId: number | null; confirmedAt: string | null };
 type Bank = { id: number; at: string; amount: number; last5: string; memo: string; ignored: boolean };
-type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>>; charity?: Awaited<ReturnType<typeof import('@/lib/charity').listCharity>> | null; vipCard?: ReturnType<typeof import('@/lib/vipCard').adminView>; charityCard?: ReturnType<typeof import('@/lib/vipCard').adminView> };
+type State = AdminState & { bank: Bank[]; user: { username: string; displayName: string; role: string }; users: Awaited<ReturnType<typeof import('@/lib/accounts').listUsers>>; setups: Record<number, string>; financeCombos: number[]; notify: NotifyPublic; einvoice: EinvPublic; invoices: Inv[]; pushLink: boolean; backups: { dir: string; count: number; list: { name: string; size: number; at: string }[] }; vips: Awaited<ReturnType<typeof import('@/lib/vip').listVips>>; notifications: Notice[]; preorders: Pre[]; flowImage: string | null; preorderSettings: { rateLimit: number; waitlistCap: number; intro: string; defaultIntro: string }; line: { groups: { name: string; url: string }[]; map: Record<string, number> }; preMenu: { kind: 'combo' | 'zone'; id: number; name: string; price: number; desc: string; unit: string }[]; form: { key: string; base: string }; audit: { id: number; at: string; actor: string; action: string; what: string; target: string }[]; gates: Gate[]; checkins: Checkins; floor3: Awaited<ReturnType<typeof import('@/lib/card').floor3State>>; cardLinks: Awaited<ReturnType<typeof import('@/lib/cardLink').listCardLinks>>; join: Awaited<ReturnType<typeof import('@/lib/joinQueue').joinAdminState>>; gift?: Awaited<ReturnType<typeof import('@/lib/joinGift').giftAdminState>>; sales: import('@/lib/sales').SalesOverview | null; buyerCheck: BuyerCheckData | null; board: Awaited<ReturnType<typeof import('@/lib/checkinBoard').boardAdminState>> | null; safeMode?: boolean; upgrades?: import('@/lib/upgrade').Upgrade[]; vipMails?: Awaited<ReturnType<typeof import('@/lib/vipImport').pendingImportMails>>; charity?: Awaited<ReturnType<typeof import('@/lib/charity').listCharity>> | null; vipCard?: ReturnType<typeof import('@/lib/vipCard').adminView>; charityCard?: ReturnType<typeof import('@/lib/vipCard').adminView>; crewLead?: Awaited<ReturnType<typeof import('@/lib/crew').leadAdminView>> | null; practice?: { liveAt: string } & Awaited<ReturnType<typeof import('@/lib/practice').practiceStats>> };
 type Delivery = { channel: string; status: string; error: string | null }[];
 const N_STATUS: Record<string, string> = { queued: '寄送中', sent: '已寄出', failed: '寄送失敗', simulated: '未寄出（尚未設定）' };
 const CH: Record<string, string> = { sms: '簡訊', email: 'Email', push: 'App 推播' };
@@ -2369,6 +2369,68 @@ function TestClear({ until, open }: { until: string; open: boolean }) {
   );
 }
 
+/** 驗票志工與練習（11-29）：負責人管理連結、志工報名連結、正式驗票時間、練習紀錄 */
+function CrewAdmin() {
+  const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
+  const l = st.crewLead; const p = st.practice;
+  const [f, setF] = useState({ name: l?.name ?? '', email: l?.email ?? '', lineId: l?.lineId ?? '' });
+  const [liveEdit, setLiveEdit] = useState(false);
+  const toLocal = (iso: string) => new Date(iso).toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }).slice(0, 16).replace(' ', 'T');
+  const [lv, setLv] = useState(() => (p ? toLocal(p.liveAt) : ''));
+  if (!p) return null;
+  const base = typeof window !== 'undefined' ? location.origin : '';
+  const fmt = (iso: string) => new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const practicing = Date.now() < new Date(p.liveAt).getTime();
+  const gateName = (id: number | null) => st.gates.find((g) => g.id === id)?.name ?? '（已刪除）';
+  const copy = (text: string, what: string) => navigator.clipboard?.writeText(text).then(() => setMsg({ kind: 'ok', text: `已複製${what}` }), () => undefined);
+  return (
+    <div className="card">
+      <h2>驗票志工與練習 <span className="small muted">負責人用管理連結招募、分配、寄驗票連結</span></h2>
+      <div className="note" style={{ marginBottom: 10 }}>
+        正式驗票：<b>{fmt(p.liveAt)}</b> 起。{practicing ? '現在掃描都只算練習（不會讓票變成已入場）。' : '現在是正式驗票。'}
+        <button className="btn small" style={{ marginLeft: 6 }} onClick={() => setLiveEdit(!liveEdit)}>改時間</button>
+        {liveEdit && <span className="row" style={{ gap: 6, marginTop: 6 }}>
+          <input type="datetime-local" value={lv} onChange={(e) => setLv(e.target.value)} />
+          <button className="btn small pri" disabled={busy || !lv} onClick={async () => { if (await act({ action: 'checkin.liveAt', at: `${lv}:00+08:00` }, '已更新正式驗票時間')) setLiveEdit(false); }}>儲存</button>
+        </span>}
+      </div>
+      {l && <>
+        <h3>驗票負責人</h3>
+        <div className="fields">
+          <label>姓名<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+          <label>Email<input value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+          <label>LINE ID<input value={f.lineId} placeholder="報名完成頁「加好友」用" onChange={(e) => setF({ ...f, lineId: e.target.value })} /></label>
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn pri small" disabled={busy} onClick={() => act({ action: 'crew.lead.save', ...f }, '已儲存驗票負責人')}>儲存</button>
+          {l.token && <>
+            <a className="btn small" href={`/crew/m/${l.token}`} target="_blank" rel="noreferrer">開啟管理頁</a>
+            <button className="btn small" onClick={() => copy(`${base}/crew/m/${l.token}`, '管理連結')}>複製管理連結</button>
+            <button className="btn small" disabled={busy || !l.email} onClick={() => confirm2('crew-mail', () => act({ action: 'crew.lead.mail' }, `已寄管理連結給 ${l.email}`))}>{sure === 'crew-mail' ? `寄給 ${l.email}？再按一次` : '寄管理連結給負責人'}</button>
+            <button className="btn small" onClick={() => copy(`${base}/crew/j/${l.joinToken}`, '志工報名連結')}>複製報名連結</button>
+          </>}
+        </div>
+        {l.token && <div className="row small" style={{ marginTop: 6 }}>
+          <span className="muted">報名 {l.crew} 人・{l.active ? '使用中' : '已停用'}</span>
+          <button className="btn small" disabled={busy} onClick={() => act({ action: 'crew.lead.active', active: !l.active }, l.active ? '已停用管理與報名連結' : '已啟用')}>{l.active ? '停用' : '啟用'}</button>
+          <button className="btn small" disabled={busy} onClick={() => confirm2('crew-rm', () => act({ action: 'crew.lead.renew', which: 'manage' }, '已換新管理連結，舊的立即失效'))}>{sure === 'crew-rm' ? '再按一次確認' : '換新管理連結'}</button>
+          <button className="btn small" disabled={busy} onClick={() => confirm2('crew-rj', () => act({ action: 'crew.lead.renew', which: 'join' }, '已換新報名連結，舊的立即失效'))}>{sure === 'crew-rj' ? '再按一次確認' : '換新報名連結'}</button>
+        </div>}
+        <p className="small muted">管理連結看得到志工姓名、Email、電話，只給負責人。驗票位置＝上面的「驗票門口」，負責人也可以在管理頁新增。</p>
+      </>}
+      <h3>練習紀錄 {p.total} 筆 <a className="small" href="/crew/practice" target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>練習單</a></h3>
+      {p.byGate.length ? <div className="small">{p.byGate.map((g) => `${gateName(g.gateId)} ${g.n}（${g.kinds.join('、')}）`).join('；')}</div> : <p className="small muted" style={{ margin: 0 }}>還沒有人練習。</p>}
+      {!!p.recent.length && <details style={{ marginTop: 6 }}><summary className="small">最近 30 筆（含 QR 原文，看年代紙本格式）</summary>
+        {p.recent.map((x) => <div key={x.id} className="small mono" style={{ wordBreak: 'break-all', padding: '2px 0' }}>{fmt(x.at)} {gateName(x.gateId)} {x.kind || '—'} {x.result}{x.reason ? `：${x.reason}` : ''}　{x.raw}</div>)}
+      </details>}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn small" disabled={busy || !p.total} onClick={() => confirm2('pr-clear', () => act({ action: 'checkin.clearPractice' }, '已清除練習資料（正式入場紀錄沒動）'))}>{sure === 'pr-clear' ? `確定清除 ${p.total} 筆練習紀錄？再按一次` : '清除練習資料'}</button>
+        <span className="small muted">只刪練習紀錄，正式入場紀錄一筆都不動。</span>
+      </div>
+    </div>
+  );
+}
+
 function Gates() {
   const { st, act, busy, setMsg, sure, confirm2 } = useAdmin();
   const [name, setName] = useState('');
@@ -2389,6 +2451,7 @@ function Gates() {
         <div className="stat"><b>{c.era}</b><span>年代票已入場</span></div>
       </div>
       {st.board && <BoardAdmin b={st.board} eventName={st.event.name} act={act} busy={busy} sure={sure} confirm2={confirm2} setMsg={setMsg} />}
+      <CrewAdmin />
       <div className="grid2">
         <div className="card">
           <h2>驗票門口 <span className="small muted">每個門一條連結，傳給該門工作人員，用手機打開就能掃描</span></h2>

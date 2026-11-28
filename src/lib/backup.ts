@@ -17,7 +17,7 @@ import type { Db } from '@/db/client';
 /** 依外鍵順序（還原時先刪後面的、先建前面的） */
 export const TABLES = [
   'venue_seat', 'event', 'gift_item', 'join_venue', 'join_reg', 'join_leader', 'join_era', 'join_era_ticket', 'join_report', 'join_slot', 'join_gift', 'price_zone', 'seat_usage', 'event_seat', 'combo', 'combo_item', 'invite_link', 'orders', 'order_seat',
-  'payment', 'notification', 'preorder', 'card_order', 'bank_tx', 'gate', 'checkin', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
+  'payment', 'notification', 'preorder', 'card_order', 'bank_tx', 'gate', 'checkin', 'checkin_practice', 'crew', 'push_sub', 'app_setting', 'audit_log', 'admin_user', 'invoice',
 ] as const;
 
 const FLOOR_TABLES = new Set<string>(['venue_seat', 'price_zone', 'combo', 'invite_link']);
